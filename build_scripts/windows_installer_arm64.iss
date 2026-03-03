@@ -52,8 +52,6 @@ Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environmen
 Filename: "{cmd}"; Parameters: "/k echo IDE Viewer installed! && echo. && echo Run: ideviewer register --customer-key KEY --portal-url URL && pause"; Flags: postinstall nowait skipifsilent
 
 [UninstallRun]
-; Send uninstall notification to the portal before removing
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""try {{ $cfg = Get-Content \"$env:USERPROFILE\.ideviewer\config.json\" | ConvertFrom-Json; $body = @{{ hostname = $env:COMPUTERNAME; alert_type = 'uninstall_attempt'; details = 'IDE Viewer is being uninstalled on Windows (ARM64).' }} | ConvertTo-Json; Invoke-RestMethod -Uri \"$($cfg.portal_url)/api/alert\" -Method POST -Body $body -ContentType 'application/json' -Headers @{{ 'X-Customer-Key' = $cfg.customer_key }} -TimeoutSec 10 }} catch {{}}"""; Flags: runhidden; RunOnceId: "NotifyPortal"
 ; Stop daemon if running
 Filename: "taskkill"; Parameters: "/F /IM ideviewer.exe"; Flags: runhidden; RunOnceId: "StopDaemon"
 
@@ -70,4 +68,30 @@ begin
     exit;
   end;
   Result := Pos(';' + Param + ';', ';' + OrigPath + ';') = 0;
+end;
+
+procedure NotifyPortalOfUninstall();
+var
+  ConfigPath: string;
+  ResultCode: Integer;
+begin
+  ConfigPath := ExpandConstant('{userprofile}') + '\.ideviewer\config.json';
+  if FileExists(ConfigPath) then
+  begin
+    Exec('powershell.exe',
+      '-NoProfile -ExecutionPolicy Bypass -File NUL -Command "' +
+      'try { $c = Get-Content ''' + ConfigPath + ''' | ConvertFrom-Json; ' +
+      '$h = @{''X-Customer-Key'' = $c.customer_key; ''Content-Type'' = ''application/json''}; ' +
+      '$b = ''{\"hostname\":\"'' + $env:COMPUTERNAME + ''\",\"alert_type\":\"uninstall_attempt\",\"details\":\"IDE Viewer uninstalled on Windows ARM64\"}''; ' +
+      'Invoke-RestMethod -Uri ($c.portal_url + ''/api/alert'') -Method POST -Body $b -Headers $h -TimeoutSec 10 } catch {}"',
+      '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  end;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usUninstall then
+  begin
+    NotifyPortalOfUninstall();
+  end;
 end;

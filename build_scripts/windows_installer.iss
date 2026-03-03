@@ -85,8 +85,6 @@ Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environmen
 Filename: "{cmd}"; Parameters: "/k echo. && echo ============================================ && echo   IDE Viewer installed successfully! && echo ============================================ && echo. && echo IMPORTANT: You need a Customer Key to use this daemon. && echo. && echo Step 1: Get your customer key from the IDE Viewer Portal && echo Step 2: Register this machine: && echo. && echo   ideviewer register --customer-key YOUR_KEY --portal-url https://portal.example.com && echo. && echo Step 3: Start the daemon: && echo   ideviewer daemon --foreground && echo. && echo Press any key to close... && pause >nul"; Description: "Show setup instructions"; Flags: postinstall nowait skipifsilent
 
 [UninstallRun]
-; Send uninstall notification to the portal before removing
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""try {{ $cfg = Get-Content \"$env:USERPROFILE\.ideviewer\config.json\" | ConvertFrom-Json; $body = @{{ hostname = $env:COMPUTERNAME; alert_type = 'uninstall_attempt'; details = 'IDE Viewer is being uninstalled on Windows.' }} | ConvertTo-Json; Invoke-RestMethod -Uri \"$($cfg.portal_url)/api/alert\" -Method POST -Body $body -ContentType 'application/json' -Headers @{{ 'X-Customer-Key' = $cfg.customer_key }} -TimeoutSec 10 }} catch {{}}"""; Flags: runhidden; RunOnceId: "NotifyPortal"
 ; Stop daemon if running
 Filename: "taskkill"; Parameters: "/F /IM ideviewer.exe"; Flags: runhidden; RunOnceId: "StopDaemon"
 
@@ -111,13 +109,37 @@ begin
   Result := Pos(';' + Param + ';', ';' + OrigPath + ';') = 0;
 end;
 
-// Remove from PATH on uninstall
+// Send uninstall notification to portal
+procedure NotifyPortalOfUninstall();
+var
+  ConfigPath: string;
+  ResultCode: Integer;
+begin
+  ConfigPath := ExpandConstant('{userprofile}') + '\.ideviewer\config.json';
+  if FileExists(ConfigPath) then
+  begin
+    Exec('powershell.exe',
+      '-NoProfile -ExecutionPolicy Bypass -File NUL -Command "' +
+      'try { $c = Get-Content ''' + ConfigPath + ''' | ConvertFrom-Json; ' +
+      '$h = @{''X-Customer-Key'' = $c.customer_key; ''Content-Type'' = ''application/json''}; ' +
+      '$b = ''{\"hostname\":\"'' + $env:COMPUTERNAME + ''\",\"alert_type\":\"uninstall_attempt\",\"details\":\"IDE Viewer uninstalled on Windows\"}''; ' +
+      'Invoke-RestMethod -Uri ($c.portal_url + ''/api/alert'') -Method POST -Body $b -Headers $h -TimeoutSec 10 } catch {}"',
+      '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  end;
+end;
+
+// Remove from PATH on uninstall and notify portal
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   Path: string;
   AppDir: string;
   P: Integer;
 begin
+  if CurUninstallStep = usUninstall then
+  begin
+    NotifyPortalOfUninstall();
+  end;
+  
   if CurUninstallStep = usPostUninstall then
   begin
     if RegQueryStringValue(HKEY_LOCAL_MACHINE,
