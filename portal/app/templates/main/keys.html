@@ -1,0 +1,208 @@
+{% extends "base.html" %}
+
+{% block title %}API Keys - IDE Viewer{% endblock %}
+
+{% block content %}
+<div class="fade-in">
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 2rem;">
+        <div>
+            <h1 style="font-size: 1.75rem; font-weight: 700; margin-bottom: 0.25rem;">API Keys</h1>
+            <p style="color: var(--text-secondary);">Manage customer keys for your daemon installations</p>
+        </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: 1fr 350px; gap: 2rem;">
+        <!-- Keys List -->
+        <div class="card">
+            <div class="card-header">
+                <h2 class="card-title">
+                    <i class="fas fa-key" style="color: var(--accent-primary);"></i>
+                    Your API Keys
+                </h2>
+            </div>
+
+            {% if customer_keys %}
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Key</th>
+                            <th>Hosts</th>
+                            <th>Status</th>
+                            <th>Created</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for key in customer_keys %}
+                        <tr>
+                            <td style="font-weight: 500;">{{ key.name }}</td>
+                            <td>
+                                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                    <code class="mono" id="key-{{ key.id }}" style="background: var(--bg-tertiary); padding: 0.25rem 0.5rem; border-radius: var(--radius-sm);">
+                                        {{ key.key[:8] }}...{{ key.key[-4:] }}
+                                    </code>
+                                    <button onclick="copyKey('{{ key.key }}')" class="btn btn-sm btn-secondary" title="Copy full key">
+                                        <i class="fas fa-copy"></i>
+                                    </button>
+                                </div>
+                            </td>
+                            <td>
+                                <span class="badge badge-low">{{ key.host_count }} / {{ key.max_hosts }}</span>
+                            </td>
+                            <td>
+                                {% if key.is_active %}
+                                <span class="badge badge-low"><i class="fas fa-check"></i> Active</span>
+                                {% else %}
+                                <span class="badge badge-high"><i class="fas fa-ban"></i> Disabled</span>
+                                {% endif %}
+                            </td>
+                            <td style="color: var(--text-secondary); font-size: 0.875rem;">
+                                {{ key.created_at.strftime('%Y-%m-%d') }}
+                            </td>
+                            <td>
+                                <div style="display: flex; gap: 0.5rem;">
+                                    <form method="POST" action="{{ url_for('main.toggle_key', key_id=key.id) }}" style="display: inline;">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                        <button type="submit" class="btn btn-sm btn-secondary" title="{{ 'Disable' if key.is_active else 'Enable' }}">
+                                            <i class="fas {{ 'fa-pause' if key.is_active else 'fa-play' }}"></i>
+                                        </button>
+                                    </form>
+                                    <form method="POST" action="{{ url_for('main.delete_key', key_id=key.id) }}" style="display: inline;" onsubmit="return confirm('Are you sure you want to delete this key? All associated hosts and data will be removed.');">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                        <button type="submit" class="btn btn-sm btn-danger" title="Delete">
+                                            <i class="fas fa-trash"></i>
+                                        </button>
+                                    </form>
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="empty-state">
+                <i class="fas fa-key"></i>
+                <h3 style="margin-bottom: 0.5rem;">No API keys yet</h3>
+                <p>Create your first API key to start monitoring your IDE extensions.</p>
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- Create Key Form -->
+        <div class="card" style="height: fit-content;">
+            <div class="card-header">
+                <h2 class="card-title">
+                    <i class="fas fa-plus-circle" style="color: var(--success);"></i>
+                    Create New Key
+                </h2>
+            </div>
+
+            <form method="POST" action="{{ url_for('main.create_key') }}">
+                {{ form.hidden_tag() }}
+                
+                <div class="form-group">
+                    <label class="form-label" for="name">Key Name</label>
+                    {{ form.name(class="form-input", placeholder="e.g., Production Machines") }}
+                    <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">
+                        A friendly name to identify this key
+                    </p>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="max_hosts">Max Hosts</label>
+                    {{ form.max_hosts(class="form-input", placeholder="10") }}
+                    <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">
+                        Maximum number of machines that can use this key
+                    </p>
+                </div>
+
+                {{ form.submit(class="btn btn-primary", style="width: 100%;") }}
+            </form>
+        </div>
+    </div>
+
+    <!-- Usage Instructions -->
+    <div class="card" style="margin-top: 2rem;">
+        <div class="card-header">
+            <h2 class="card-title">
+                <i class="fas fa-book" style="color: var(--accent-primary);"></i>
+                Installation Instructions
+            </h2>
+        </div>
+
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 2rem;">
+            <div>
+                <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem;">
+                    <i class="fab fa-apple"></i> macOS
+                </h3>
+                <div class="code-block">
+# Install the package
+sudo installer -pkg IDEViewer.pkg -target /
+
+# Run with your customer key
+ideviewer daemon \
+  --customer-key YOUR_KEY_HERE \
+  --portal-url {{ request.host_url.rstrip('/') }}
+                </div>
+            </div>
+
+            <div>
+                <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem;">
+                    <i class="fab fa-windows"></i> Windows
+                </h3>
+                <div class="code-block">
+# Run the installer
+IDEViewer-Setup.exe
+
+# Run with your customer key
+ideviewer daemon ^
+  --customer-key YOUR_KEY_HERE ^
+  --portal-url {{ request.host_url.rstrip('/') }}
+                </div>
+            </div>
+
+            <div>
+                <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem;">
+                    <i class="fab fa-linux"></i> Linux
+                </h3>
+                <div class="code-block">
+# Install from pip
+pip install ideviewer
+
+# Run with your customer key
+ideviewer daemon \
+  --customer-key YOUR_KEY_HERE \
+  --portal-url {{ request.host_url.rstrip('/') }}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function copyKey(key) {
+    navigator.clipboard.writeText(key).then(() => {
+        // Show a brief notification
+        const notification = document.createElement('div');
+        notification.textContent = 'Key copied to clipboard!';
+        notification.style.cssText = `
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            background: var(--success);
+            color: white;
+            padding: 0.75rem 1.5rem;
+            border-radius: var(--radius-sm);
+            font-weight: 500;
+            z-index: 1000;
+            animation: fadeIn 0.3s ease-out;
+        `;
+        document.body.appendChild(notification);
+        setTimeout(() => notification.remove(), 2000);
+    });
+}
+</script>
+{% endblock %}

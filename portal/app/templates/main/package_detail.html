@@ -1,0 +1,256 @@
+{% extends "base.html" %}
+
+{% block title %}{{ package.name }} - Package Detail{% endblock %}
+
+{% block extra_css %}
+<style>
+    .package-header {
+        display: flex;
+        gap: 1.5rem;
+        margin-bottom: 2rem;
+        align-items: flex-start;
+    }
+
+    .package-icon {
+        width: 72px;
+        height: 72px;
+        border-radius: var(--radius-lg);
+        background: var(--bg-tertiary);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 2rem;
+        color: var(--accent-primary);
+        flex-shrink: 0;
+    }
+
+    .package-info h1 {
+        font-size: 1.75rem;
+        font-weight: 700;
+        margin-bottom: 0.25rem;
+    }
+
+    .package-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1rem;
+        margin-top: 0.75rem;
+        font-size: 0.875rem;
+        color: var(--text-secondary);
+    }
+
+    .package-meta-item {
+        display: flex;
+        align-items: center;
+        gap: 0.375rem;
+    }
+
+    .hooks-warning {
+        background: rgba(239, 68, 68, 0.1);
+        border: 1px solid rgba(239, 68, 68, 0.3);
+        border-radius: var(--radius-md);
+        padding: 1.25rem;
+        margin-bottom: 1.5rem;
+    }
+
+    .hooks-warning h3 {
+        color: var(--danger);
+        margin-bottom: 0.75rem;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .hook-entry {
+        background: var(--bg-tertiary);
+        border-radius: var(--radius-sm);
+        padding: 0.75rem 1rem;
+        margin-bottom: 0.5rem;
+        font-family: var(--mono-font, 'SFMono-Regular', 'Consolas', monospace);
+        font-size: 0.8125rem;
+    }
+
+    .hook-name {
+        color: var(--danger);
+        font-weight: 600;
+    }
+
+    .hook-command {
+        color: var(--text-secondary);
+        word-break: break-all;
+    }
+
+    .hosts-table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+
+    .hosts-table th {
+        text-align: left;
+        padding: 0.75rem 1rem;
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--text-muted);
+        border-bottom: 1px solid var(--border-color);
+    }
+
+    .hosts-table td {
+        padding: 0.75rem 1rem;
+        border-bottom: 1px solid var(--border-color);
+        font-size: 0.875rem;
+    }
+
+    .hosts-table tr:hover {
+        background: var(--bg-tertiary);
+    }
+
+    .export-bar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1rem;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="fade-in">
+    <a href="{{ url_for('main.dashboard') }}" style="display: inline-flex; align-items: center; gap: 0.5rem; color: var(--text-secondary); margin-bottom: 1.5rem;">
+        <i class="fas fa-arrow-left"></i>
+        Back to Dashboard
+    </a>
+
+    <!-- Package Header -->
+    <div class="package-header">
+        <div class="package-icon">
+            <i class="fas fa-cube"></i>
+        </div>
+        <div class="package-info">
+            <h1>{{ package.name }}</h1>
+            <p style="color: var(--text-secondary);">{{ package.package_manager }} package</p>
+
+            <div class="package-meta">
+                <span class="package-meta-item">
+                    <i class="fas fa-tag"></i>
+                    {% if package.versions|length == 1 %}
+                    v{{ package.versions[0] }}
+                    {% else %}
+                    {{ package.versions|length }} version(s)
+                    {% endif %}
+                </span>
+                <span class="package-meta-item">
+                    <i class="fas fa-desktop"></i>
+                    Installed on {{ package.hosts_count }} host{% if package.hosts_count != 1 %}s{% endif %}
+                </span>
+                <span class="package-meta-item">
+                    <i class="fas fa-box"></i>
+                    {{ package.package_manager | capitalize }}
+                </span>
+                {% if package.has_lifecycle_hooks %}
+                <span class="package-meta-item" style="color: var(--danger);">
+                    <i class="fas fa-exclamation-triangle"></i>
+                    Has lifecycle hooks
+                </span>
+                {% endif %}
+            </div>
+
+            <div style="margin-top: 1rem; display: flex; gap: 0.75rem;">
+                {% if package.package_manager == 'npm' %}
+                <a href="https://www.npmjs.com/package/{{ package.name }}" target="_blank" class="btn btn-secondary">
+                    <i class="fab fa-npm"></i> View on npm
+                </a>
+                {% elif package.package_manager == 'pip' %}
+                <a href="https://pypi.org/project/{{ package.name }}" target="_blank" class="btn btn-secondary">
+                    <i class="fab fa-python"></i> View on PyPI
+                </a>
+                {% elif package.package_manager == 'cargo' %}
+                <a href="https://crates.io/crates/{{ package.name }}" target="_blank" class="btn btn-secondary">
+                    <i class="fas fa-cube"></i> View on crates.io
+                </a>
+                {% elif package.package_manager == 'gem' %}
+                <a href="https://rubygems.org/gems/{{ package.name }}" target="_blank" class="btn btn-secondary">
+                    <i class="fas fa-gem"></i> View on RubyGems
+                </a>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Lifecycle Hooks Warning -->
+    {% if package.has_lifecycle_hooks and package.lifecycle_hooks %}
+    <div class="hooks-warning">
+        <h3>
+            <i class="fas fa-exclamation-triangle"></i>
+            Lifecycle Hooks Detected
+        </h3>
+        <p style="margin-bottom: 1rem; color: var(--text-secondary); font-size: 0.875rem;">
+            This package has lifecycle hooks that execute commands during install/uninstall. 
+            These can run arbitrary code on developer machines. Review them carefully.
+        </p>
+        {% for hook_name, hook_cmd in package.lifecycle_hooks.items() %}
+        <div class="hook-entry">
+            <span class="hook-name">{{ hook_name }}:</span>
+            <span class="hook-command">{{ hook_cmd }}</span>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- Installed On Section -->
+    <div class="card">
+        <div class="export-bar">
+            <h3 style="font-size: 1rem; font-weight: 600;">
+                <i class="fas fa-desktop" style="color: var(--accent-primary);"></i>
+                Installed On ({{ package.hosts_count }} host{% if package.hosts_count != 1 %}s{% endif %})
+            </h3>
+            <a href="{{ url_for('main.export_package_csv', package_name=package.name, manager=package.package_manager) }}" 
+               class="btn btn-secondary" style="font-size: 0.8125rem; padding: 0.5rem 1rem;">
+                <i class="fas fa-download"></i>
+                Export CSV
+            </a>
+        </div>
+
+        {% if package.hosts %}
+        <table class="hosts-table">
+            <thead>
+                <tr>
+                    <th>Hostname</th>
+                    <th>IP Address</th>
+                    <th>Platform</th>
+                    <th>Version</th>
+                    <th>Install Type</th>
+                    <th>Last Seen</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for host in package.hosts %}
+                <tr style="cursor: pointer;" onclick="window.location.href='{{ url_for('main.host_detail', host_id=host.host_id) }}'">
+                    <td><strong>{{ host.hostname }}</strong></td>
+                    <td style="font-family: monospace; font-size: 0.8125rem;">{{ host.ip_address }}</td>
+                    <td>{{ host.platform }}</td>
+                    <td><span class="mono">{{ host.version }}</span></td>
+                    <td>
+                        {% if host.install_type == 'global' %}
+                        <span class="badge badge-medium">Global</span>
+                        {% else %}
+                        <span class="badge badge-low">Project</span>
+                        {% endif %}
+                    </td>
+                    <td style="color: var(--text-muted); font-size: 0.8125rem;">
+                        {% if host.last_seen %}
+                        {{ host.last_seen.strftime('%Y-%m-%d %H:%M') }}
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p style="text-align: center; color: var(--text-muted); padding: 2rem;">
+            Not installed on any monitored hosts.
+        </p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

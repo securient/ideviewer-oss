@@ -1,0 +1,1057 @@
+{% extends "base.html" %}
+
+{% block title %}{{ host.hostname }} - IDE Viewer{% endblock %}
+
+{% block extra_css %}
+<style>
+    /* Tab styles */
+    .tabs {
+        display: flex;
+        gap: 0;
+        border-bottom: 2px solid var(--border-color);
+        margin-bottom: 1.5rem;
+    }
+    
+    .tab-btn {
+        padding: 1rem 1.5rem;
+        background: transparent;
+        border: none;
+        color: var(--text-secondary);
+        font-size: 0.9375rem;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s;
+        border-bottom: 2px solid transparent;
+        margin-bottom: -2px;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+    
+    .tab-btn:hover {
+        color: var(--text-primary);
+        background: var(--bg-tertiary);
+    }
+    
+    .tab-btn.active {
+        color: var(--accent-primary);
+        border-bottom-color: var(--accent-primary);
+    }
+    
+    .tab-btn .count {
+        background: var(--bg-tertiary);
+        padding: 0.125rem 0.5rem;
+        border-radius: 10px;
+        font-size: 0.75rem;
+    }
+    
+    .tab-btn.active .count {
+        background: var(--accent-primary);
+        color: white;
+    }
+    
+    .tab-btn.alert .count {
+        background: var(--critical);
+        color: white;
+    }
+    
+    .tab-content {
+        display: none;
+    }
+    
+    .tab-content.active {
+        display: block;
+    }
+    
+    /* Tooltip styles */
+    .tooltip-container {
+        position: relative;
+        display: inline-block;
+        cursor: help;
+    }
+    
+    .tooltip-content {
+        visibility: hidden;
+        opacity: 0;
+        position: absolute;
+        z-index: 1000;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-md);
+        padding: 1rem;
+        width: 320px;
+        box-shadow: var(--shadow-lg);
+        transition: opacity 0.2s, visibility 0.2s;
+        left: 50%;
+        transform: translateX(-50%);
+        bottom: calc(100% + 8px);
+    }
+    
+    .tooltip-content::after {
+        content: '';
+        position: absolute;
+        top: 100%;
+        left: 50%;
+        margin-left: -6px;
+        border-width: 6px;
+        border-style: solid;
+        border-color: var(--border-color) transparent transparent transparent;
+    }
+    
+    .tooltip-container:hover .tooltip-content {
+        visibility: visible;
+        opacity: 1;
+    }
+    
+    .tooltip-title {
+        font-weight: 600;
+        font-size: 0.875rem;
+        margin-bottom: 0.5rem;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+    
+    .tooltip-description {
+        font-size: 0.8125rem;
+        color: var(--text-secondary);
+        margin-bottom: 0.75rem;
+        line-height: 1.5;
+    }
+    
+    .tooltip-concern {
+        font-size: 0.75rem;
+        padding: 0.5rem;
+        background: rgba(239, 68, 68, 0.1);
+        border-radius: var(--radius-sm);
+        color: var(--danger);
+        border-left: 3px solid var(--danger);
+    }
+    
+    .tooltip-concern.low {
+        background: rgba(16, 185, 129, 0.1);
+        color: var(--success);
+        border-left-color: var(--success);
+    }
+    
+    .tooltip-concern.medium {
+        background: rgba(245, 158, 11, 0.1);
+        color: var(--warning);
+        border-left-color: var(--warning);
+    }
+    
+    .tooltip-recommendation {
+        font-size: 0.75rem;
+        color: var(--text-muted);
+        margin-top: 0.75rem;
+        padding-top: 0.75rem;
+        border-top: 1px solid var(--border-color);
+    }
+    
+    /* Risk level tooltip positioning */
+    .risk-tooltip .tooltip-content {
+        width: 380px;
+        right: 0;
+        left: auto;
+        transform: none;
+    }
+    
+    .risk-tooltip .tooltip-content::after {
+        left: auto;
+        right: 20px;
+    }
+    
+    /* Permission badge with tooltip */
+    .perm-badge {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+        padding: 0.25rem 0.5rem;
+        font-size: 0.6875rem;
+        font-weight: 500;
+        border-radius: 4px;
+        cursor: help;
+        transition: transform 0.1s;
+    }
+    
+    .perm-badge:hover {
+        transform: scale(1.05);
+    }
+    
+    .perm-badge.critical {
+        background: rgba(220, 38, 38, 0.15);
+        color: var(--critical);
+        border: 1px solid rgba(220, 38, 38, 0.3);
+    }
+    
+    .perm-badge.high {
+        background: rgba(239, 68, 68, 0.15);
+        color: var(--danger);
+        border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+    
+    .perm-badge.medium {
+        background: rgba(245, 158, 11, 0.15);
+        color: var(--warning);
+        border: 1px solid rgba(245, 158, 11, 0.3);
+    }
+    
+    .perm-badge.low {
+        background: rgba(16, 185, 129, 0.1);
+        color: var(--success);
+        border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+    
+    /* Clickable row styles */
+    .clickable-row {
+        cursor: pointer;
+        transition: background 0.2s;
+    }
+    
+    .clickable-row:hover {
+        background: var(--bg-tertiary);
+    }
+    
+    /* Detail modal/card styles */
+    .detail-card {
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-md);
+        padding: 1.5rem;
+        margin-bottom: 1rem;
+    }
+    
+    .detail-card h3 {
+        font-size: 1.125rem;
+        margin-bottom: 1rem;
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+    }
+    
+    .detail-section {
+        margin-bottom: 1rem;
+        padding-bottom: 1rem;
+        border-bottom: 1px solid var(--border-color);
+    }
+    
+    .detail-section:last-child {
+        margin-bottom: 0;
+        padding-bottom: 0;
+        border-bottom: none;
+    }
+    
+    .detail-label {
+        font-size: 0.75rem;
+        color: var(--text-muted);
+        margin-bottom: 0.25rem;
+    }
+    
+    .detail-value {
+        font-weight: 500;
+    }
+    
+    /* Package manager icons */
+    .pm-icon {
+        width: 24px;
+        height: 24px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="fade-in">
+    <!-- Back button and header -->
+    <div style="margin-bottom: 2rem;">
+        <a href="{{ url_for('main.dashboard') }}" style="display: inline-flex; align-items: center; gap: 0.5rem; color: var(--text-secondary); margin-bottom: 1rem;">
+            <i class="fas fa-arrow-left"></i>
+            Back to Dashboard
+        </a>
+        
+        <div style="display: flex; align-items: center; gap: 1.5rem;">
+            <div class="host-icon" style="width: 64px; height: 64px; font-size: 1.75rem;">
+                {% if 'darwin' in (host.platform or '')|lower or 'mac' in (host.platform or '')|lower %}
+                <i class="fab fa-apple"></i>
+                {% elif 'windows' in (host.platform or '')|lower %}
+                <i class="fab fa-windows"></i>
+                {% else %}
+                <i class="fab fa-linux"></i>
+                {% endif %}
+            </div>
+            <div style="flex: 1;">
+                <h1 style="font-size: 1.75rem; font-weight: 700; margin-bottom: 0.25rem;">{{ host.hostname }}</h1>
+                <p style="color: var(--text-secondary);">
+                    {{ host.ip_address or 'Unknown IP' }} • {{ host.platform or 'Unknown Platform' }}
+                    • Last seen: {{ host.last_seen_at.strftime('%Y-%m-%d %H:%M') if host.last_seen_at else 'Never' }}
+                </p>
+            </div>
+            <button id="triggerScanBtn" onclick="triggerOnDemandScan()" class="btn btn-primary" style="white-space: nowrap;">
+                <i class="fas fa-sync-alt"></i> Trigger Scan
+            </button>
+        </div>
+    </div>
+
+    <!-- On-Demand Scan Log Panel (hidden by default) -->
+    <div id="scanLogPanel" class="card" style="display: none; margin-bottom: 1.5rem; border-left: 3px solid var(--accent-primary);">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+            <h3 style="font-size: 0.9375rem; font-weight: 600;">
+                <i class="fas fa-terminal" style="color: var(--accent-primary);"></i>
+                <span id="scanLogTitle">On-Demand Scan</span>
+            </h3>
+            <span id="scanStatusBadge" class="badge" style="font-size: 0.75rem;">pending</span>
+        </div>
+        <div id="scanLogEntries" style="background: var(--bg-primary); border-radius: var(--radius-sm); padding: 0.75rem 1rem; max-height: 350px; overflow-y: auto; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.8125rem; line-height: 1.6;">
+        </div>
+    </div>
+
+    <!-- Stats Row -->
+    <div class="stats-grid" style="grid-template-columns: repeat(5, 1fr);">
+        <div class="stat-card">
+            <div class="stat-icon purple">
+                <i class="fas fa-code"></i>
+            </div>
+            <div class="stat-content">
+                <h3>{{ latest_report.total_ides if latest_report else 0 }}</h3>
+                <p>IDEs</p>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon orange">
+                <i class="fas fa-puzzle-piece"></i>
+            </div>
+            <div class="stat-content">
+                <h3>{{ extensions|length }}</h3>
+                <p>Extensions</p>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon blue">
+                <i class="fas fa-cubes"></i>
+            </div>
+            <div class="stat-content">
+                <h3>{{ total_packages }}</h3>
+                <p>Packages</p>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon {% if secrets|length > 0 %}red{% else %}green{% endif %}">
+                <i class="fas fa-key"></i>
+            </div>
+            <div class="stat-content">
+                <h3>{{ secrets|length }}</h3>
+                <p>Secrets</p>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon red">
+                <i class="fas fa-exclamation-triangle"></i>
+            </div>
+            <div class="stat-content">
+                <h3>{{ latest_report.dangerous_extensions if latest_report else 0 }}</h3>
+                <p>Risky</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tabs Navigation -->
+    <div class="card">
+        <div class="tabs">
+            <button class="tab-btn active" onclick="showTab('extensions')">
+                <i class="fas fa-puzzle-piece"></i>
+                Extensions
+                <span class="count">{{ extensions|length }}</span>
+            </button>
+            <button class="tab-btn" onclick="showTab('packages')">
+                <i class="fas fa-cubes"></i>
+                Packages
+                <span class="count">{{ total_packages }}</span>
+            </button>
+            <button class="tab-btn {% if secrets|length > 0 %}alert{% endif %}" onclick="showTab('secrets')">
+                <i class="fas fa-key"></i>
+                Secrets
+                <span class="count">{{ secrets|length }}</span>
+            </button>
+        </div>
+
+        <!-- Extensions Tab -->
+        <div id="extensions-tab" class="tab-content active">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                <h3 style="font-weight: 600;">IDE Extensions</h3>
+                <input type="text" id="extensionSearch" class="form-input" placeholder="Search extensions..." 
+                       style="width: 250px;" onkeyup="filterTable('extensionSearch', 'extensionsTable')">
+            </div>
+            
+            {% if extensions %}
+            <div class="table-container">
+                <table id="extensionsTable">
+                    <thead>
+                        <tr>
+                            <th>Extension</th>
+                            <th>IDE</th>
+                            <th>Version</th>
+                            <th>Publisher</th>
+                            <th>Permissions</th>
+                            <th>Risk</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for ext in extensions %}
+                        <tr class="data-row clickable-row" onclick="showExtensionDetail({{ loop.index0 }})">
+                            <td>
+                                <div style="font-weight: 500;">{{ ext.name }}</div>
+                            </td>
+                            <td>
+                                <span style="color: var(--text-secondary);">{{ ext.ide_name }}</span>
+                            </td>
+                            <td class="mono" style="font-size: 0.875rem;">{{ ext.version }}</td>
+                            <td>{{ ext.publisher or 'Unknown' }}</td>
+                            <td>
+                                {% if ext.permissions %}
+                                <div style="display: flex; flex-wrap: wrap; gap: 0.25rem;">
+                                    {% for perm in ext.permissions[:3] %}
+                                    <span class="perm-badge {{ perm.risk }}">{{ perm.name }}</span>
+                                    {% endfor %}
+                                    {% if ext.permissions|length > 3 %}
+                                    <span class="perm-badge medium">+{{ ext.permissions|length - 3 }}</span>
+                                    {% endif %}
+                                </div>
+                                {% else %}
+                                <span style="color: var(--text-muted);">-</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if ext.risk_level == 'critical' %}
+                                <span class="badge badge-critical"><i class="fas fa-skull-crossbones"></i> Critical</span>
+                                {% elif ext.risk_level == 'high' %}
+                                <span class="badge badge-high"><i class="fas fa-exclamation-triangle"></i> High</span>
+                                {% elif ext.risk_level == 'medium' %}
+                                <span class="badge badge-medium"><i class="fas fa-exclamation-circle"></i> Medium</span>
+                                {% else %}
+                                <span class="badge badge-low"><i class="fas fa-check-circle"></i> Low</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="empty-state">
+                <i class="fas fa-puzzle-piece"></i>
+                <h3>No extensions found</h3>
+                <p>This host hasn't reported any IDE extensions yet.</p>
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- Packages Tab -->
+        <div id="packages-tab" class="tab-content">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                <h3 style="font-weight: 600;">Installed Packages</h3>
+                <input type="text" id="packageSearch" class="form-input" placeholder="Search packages..." 
+                       style="width: 250px;" onkeyup="filterPackageList()">
+            </div>
+            
+            {% if packages_by_manager %}
+            {% for manager, packages in packages_by_manager.items() %}
+            <div style="margin-bottom: 1.5rem;">
+                <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem;">
+                    <div class="pm-icon">
+                        {% if manager == 'pip' or manager == 'pipenv' or manager == 'poetry' %}
+                        <i class="fab fa-python" style="color: #3776ab; font-size: 1.25rem;"></i>
+                        {% elif manager == 'npm' or manager == 'yarn' %}
+                        <i class="fab fa-npm" style="color: #cb3837; font-size: 1.25rem;"></i>
+                        {% elif manager == 'go' %}
+                        <i class="fab fa-golang" style="color: #00ADD8; font-size: 1.25rem;"></i>
+                        {% elif manager == 'cargo' %}
+                        <i class="fab fa-rust" style="color: #DEA584; font-size: 1.25rem;"></i>
+                        {% elif manager == 'gem' %}
+                        <i class="fas fa-gem" style="color: #CC342D;"></i>
+                        {% elif manager == 'brew' or manager == 'brew-cask' %}
+                        <i class="fas fa-beer-mug-empty" style="color: #FBB040;"></i>
+                        {% else %}
+                        <i class="fas fa-box" style="color: var(--text-secondary);"></i>
+                        {% endif %}
+                    </div>
+                    <span style="font-weight: 600; text-transform: uppercase;">{{ manager }}</span>
+                    <span class="badge" style="background: var(--bg-tertiary);">{{ packages|length }}</span>
+                </div>
+                
+                <div class="table-container">
+                    <table class="package-table">
+                        <thead>
+                            <tr>
+                                <th>Package</th>
+                                <th>Version</th>
+                                <th>Type</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for pkg in packages[:50] %}
+                            <tr class="package-row clickable-row" onclick="showPackageDetail('{{ pkg.name }}', '{{ pkg.version }}', '{{ manager }}')">
+                                <td style="font-weight: 500;">{{ pkg.name }}</td>
+                                <td class="mono">{{ pkg.version }}</td>
+                                <td>
+                                    <span class="badge {% if pkg.install_type == 'global' %}badge-low{% else %}badge-medium{% endif %}" style="font-size: 0.6875rem;">
+                                        {{ pkg.install_type }}
+                                    </span>
+                                </td>
+                                <td>
+                                    <a href="https://www.google.com/search?q={{ manager }}+{{ pkg.name }}" target="_blank" 
+                                       onclick="event.stopPropagation();" style="color: var(--accent-primary);">
+                                        <i class="fas fa-external-link-alt"></i>
+                                    </a>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                            {% if packages|length > 50 %}
+                            <tr>
+                                <td colspan="4" style="text-align: center; color: var(--text-muted);">
+                                    ... and {{ packages|length - 50 }} more packages
+                                </td>
+                            </tr>
+                            {% endif %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            {% endfor %}
+            {% else %}
+            <div class="empty-state">
+                <i class="fas fa-cubes"></i>
+                <h3>No packages found</h3>
+                <p>This host hasn't reported any installed packages yet.</p>
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- Secrets Tab -->
+        <div id="secrets-tab" class="tab-content">
+            <div style="margin-bottom: 1rem;">
+                <h3 style="font-weight: 600; display: flex; align-items: center; gap: 0.5rem;">
+                    {% if secrets|length > 0 %}
+                    <i class="fas fa-exclamation-triangle" style="color: var(--critical);"></i>
+                    Exposed Secrets ({{ secrets|length }})
+                    {% else %}
+                    <i class="fas fa-check-circle" style="color: var(--success);"></i>
+                    No Exposed Secrets
+                    {% endif %}
+                </h3>
+            </div>
+            
+            {% if secrets %}
+            <div style="background: rgba(220, 38, 38, 0.1); border: 1px solid rgba(220, 38, 38, 0.3); border-radius: var(--radius-md); padding: 1rem; margin-bottom: 1.5rem;">
+                <p style="color: var(--critical); font-size: 0.875rem;">
+                    <strong>Warning:</strong> The following secrets were found in plaintext configuration files. 
+                    This is a critical security risk. Click on each item for remediation steps.
+                </p>
+            </div>
+            
+            <div class="table-container">
+                <table id="secretsTable">
+                    <thead>
+                        <tr>
+                            <th>Type</th>
+                            <th>Variable Name</th>
+                            <th>File Path</th>
+                            <th>Line</th>
+                            <th>Severity</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for secret in secrets %}
+                        <tr class="data-row clickable-row" onclick="showSecretDetail({{ loop.index0 }})">
+                            <td>
+                                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                    {% if 'ethereum' in secret.secret_type or 'wallet' in secret.secret_type %}
+                                    <i class="fab fa-ethereum" style="color: #627EEA;"></i>
+                                    {% elif 'mnemonic' in secret.secret_type or 'seed' in secret.secret_type %}
+                                    <i class="fas fa-key" style="color: var(--warning);"></i>
+                                    {% elif 'aws' in secret.secret_type %}
+                                    <i class="fab fa-aws" style="color: #FF9900;"></i>
+                                    {% else %}
+                                    <i class="fas fa-lock-open" style="color: var(--danger);"></i>
+                                    {% endif %}
+                                    <span style="text-transform: capitalize;">{{ secret.secret_type.replace('_', ' ') }}</span>
+                                </div>
+                            </td>
+                            <td class="mono" style="color: var(--danger);">{{ secret.variable_name or 'N/A' }}</td>
+                            <td>
+                                <div class="mono" style="font-size: 0.75rem; max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" 
+                                     title="{{ secret.file_path }}">
+                                    {{ secret.file_path }}
+                                </div>
+                            </td>
+                            <td class="mono">{{ secret.line_number or '-' }}</td>
+                            <td>
+                                {% if secret.severity == 'critical' %}
+                                <span class="badge badge-critical"><i class="fas fa-skull-crossbones"></i> Critical</span>
+                                {% elif secret.severity == 'high' %}
+                                <span class="badge badge-high"><i class="fas fa-exclamation-triangle"></i> High</span>
+                                {% else %}
+                                <span class="badge badge-medium"><i class="fas fa-exclamation-circle"></i> Medium</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <button class="btn btn-sm" onclick="event.stopPropagation(); showSecretDetail({{ loop.index0 }})">
+                                    <i class="fas fa-info-circle"></i> Details
+                                </button>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="empty-state" style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3);">
+                <i class="fas fa-shield-alt" style="color: var(--success);"></i>
+                <h3 style="color: var(--success);">No Exposed Secrets</h3>
+                <p>No plaintext secrets were detected on this host.</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<!-- Detail Modal -->
+<div id="detailModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 1000; padding: 2rem;">
+    <div style="max-width: 600px; margin: 2rem auto; max-height: calc(100vh - 4rem); overflow-y: auto;">
+        <div class="card" style="position: relative;">
+            <button onclick="closeModal()" style="position: absolute; top: 1rem; right: 1rem; background: none; border: none; color: var(--text-secondary); cursor: pointer; font-size: 1.25rem;">
+                <i class="fas fa-times"></i>
+            </button>
+            <div id="modalContent"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Store data for detail views
+const extensionsData = {{ extensions | tojson | safe }};
+const secretsData = {{ secrets_json | tojson | safe }};
+
+function showTab(tabName) {
+    // Hide all tabs
+    document.querySelectorAll('.tab-content').forEach(tab => {
+        tab.classList.remove('active');
+    });
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.remove('active');
+    });
+    
+    // Show selected tab
+    document.getElementById(tabName + '-tab').classList.add('active');
+    event.target.closest('.tab-btn').classList.add('active');
+}
+
+function filterTable(inputId, tableId) {
+    const filter = document.getElementById(inputId).value.toLowerCase();
+    const rows = document.querySelectorAll('#' + tableId + ' tbody .data-row');
+    
+    rows.forEach(row => {
+        const text = row.textContent.toLowerCase();
+        row.style.display = text.includes(filter) ? '' : 'none';
+    });
+}
+
+function filterPackageList() {
+    const filter = document.getElementById('packageSearch').value.toLowerCase();
+    const rows = document.querySelectorAll('.package-row');
+    
+    rows.forEach(row => {
+        const text = row.textContent.toLowerCase();
+        row.style.display = text.includes(filter) ? '' : 'none';
+    });
+}
+
+function showExtensionDetail(index) {
+    const ext = extensionsData[index];
+    const modal = document.getElementById('detailModal');
+    const content = document.getElementById('modalContent');
+    
+    let permissionsHtml = '';
+    if (ext.permissions && ext.permissions.length > 0) {
+        permissionsHtml = ext.permissions.map(p => `
+            <div class="detail-card" style="margin-bottom: 0.5rem; padding: 0.75rem;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span class="perm-badge ${p.risk}">${p.name}</span>
+                    <span style="font-size: 0.75rem; color: var(--text-muted);">${p.risk}</span>
+                </div>
+                <p style="font-size: 0.8125rem; color: var(--text-secondary); margin-top: 0.5rem;">${p.description || 'No description available'}</p>
+                ${p.concern ? `<p style="font-size: 0.75rem; color: var(--danger); margin-top: 0.5rem;"><strong>Concern:</strong> ${p.concern}</p>` : ''}
+            </div>
+        `).join('');
+    } else {
+        permissionsHtml = '<p style="color: var(--text-muted);">No special permissions required</p>';
+    }
+    
+    content.innerHTML = `
+        <h2 style="margin-bottom: 1.5rem; display: flex; align-items: center; gap: 0.75rem;">
+            <i class="fas fa-puzzle-piece" style="color: var(--accent-primary);"></i>
+            ${ext.name}
+        </h2>
+        
+        <div class="detail-section">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                <div>
+                    <div class="detail-label">Version</div>
+                    <div class="detail-value mono">${ext.version}</div>
+                </div>
+                <div>
+                    <div class="detail-label">IDE</div>
+                    <div class="detail-value">${ext.ide_name}</div>
+                </div>
+                <div>
+                    <div class="detail-label">Publisher</div>
+                    <div class="detail-value">${ext.publisher || 'Unknown'}</div>
+                </div>
+                <div>
+                    <div class="detail-label">Risk Level</div>
+                    <div class="detail-value">
+                        <span class="badge badge-${ext.risk_level}">${ext.risk_level.toUpperCase()}</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="detail-section">
+            <div class="detail-label">Risk Assessment</div>
+            <p style="font-size: 0.875rem; margin-top: 0.5rem;">${ext.risk_description || 'No risk description available'}</p>
+            ${ext.risk_recommendation ? `<p style="font-size: 0.8125rem; color: var(--accent-primary); margin-top: 0.5rem;"><strong>Recommendation:</strong> ${ext.risk_recommendation}</p>` : ''}
+        </div>
+        
+        <div class="detail-section">
+            <div class="detail-label">Permissions (${ext.permissions ? ext.permissions.length : 0})</div>
+            <div style="margin-top: 0.5rem;">
+                ${permissionsHtml}
+            </div>
+        </div>
+    `;
+    
+    modal.style.display = 'block';
+}
+
+function showPackageDetail(name, version, manager) {
+    const modal = document.getElementById('detailModal');
+    const content = document.getElementById('modalContent');
+    
+    // Build search URLs based on package manager
+    let searchUrls = {};
+    if (manager === 'pip' || manager === 'pipenv' || manager === 'poetry') {
+        searchUrls = {
+            'PyPI': `https://pypi.org/project/${name}/`,
+            'Snyk': `https://snyk.io/advisor/python/${name}`,
+            'GitHub': `https://github.com/search?q=${name}+language%3APython`
+        };
+    } else if (manager === 'npm' || manager === 'yarn') {
+        searchUrls = {
+            'npm': `https://www.npmjs.com/package/${name}`,
+            'Snyk': `https://snyk.io/advisor/npm-package/${name}`,
+            'Bundlephobia': `https://bundlephobia.com/package/${name}`
+        };
+    } else if (manager === 'cargo') {
+        searchUrls = {
+            'crates.io': `https://crates.io/crates/${name}`,
+            'Docs.rs': `https://docs.rs/${name}`
+        };
+    } else if (manager === 'gem') {
+        searchUrls = {
+            'RubyGems': `https://rubygems.org/gems/${name}`,
+            'Snyk': `https://snyk.io/advisor/ruby/${name}`
+        };
+    } else if (manager === 'go') {
+        searchUrls = {
+            'pkg.go.dev': `https://pkg.go.dev/${name}`
+        };
+    }
+    
+    let linksHtml = Object.entries(searchUrls).map(([label, url]) => 
+        `<a href="${url}" target="_blank" class="btn btn-sm" style="margin-right: 0.5rem; margin-bottom: 0.5rem;">
+            <i class="fas fa-external-link-alt"></i> ${label}
+        </a>`
+    ).join('');
+    
+    content.innerHTML = `
+        <h2 style="margin-bottom: 1.5rem; display: flex; align-items: center; gap: 0.75rem;">
+            <i class="fas fa-cube" style="color: var(--info);"></i>
+            ${name}
+        </h2>
+        
+        <div class="detail-section">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                <div>
+                    <div class="detail-label">Version</div>
+                    <div class="detail-value mono">${version}</div>
+                </div>
+                <div>
+                    <div class="detail-label">Package Manager</div>
+                    <div class="detail-value" style="text-transform: uppercase;">${manager}</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="detail-section">
+            <div class="detail-label">External Links</div>
+            <div style="margin-top: 0.75rem;">
+                ${linksHtml || '<p style="color: var(--text-muted);">No external links available</p>'}
+            </div>
+        </div>
+        
+        <div class="detail-section">
+            <div class="detail-label">Security Recommendations</div>
+            <ul style="margin-top: 0.5rem; padding-left: 1.5rem; font-size: 0.875rem; color: var(--text-secondary);">
+                <li>Check for known vulnerabilities on Snyk or similar services</li>
+                <li>Verify the package is actively maintained</li>
+                <li>Review the package's dependencies for security issues</li>
+                <li>Keep packages updated to their latest secure versions</li>
+            </ul>
+        </div>
+    `;
+    
+    modal.style.display = 'block';
+}
+
+function showSecretDetail(index) {
+    const secret = secretsData[index];
+    const modal = document.getElementById('detailModal');
+    const content = document.getElementById('modalContent');
+    
+    content.innerHTML = `
+        <h2 style="margin-bottom: 1.5rem; display: flex; align-items: center; gap: 0.75rem; color: var(--critical);">
+            <i class="fas fa-skull-crossbones"></i>
+            Exposed Secret
+        </h2>
+        
+        <div style="background: rgba(220, 38, 38, 0.1); border: 1px solid rgba(220, 38, 38, 0.3); border-radius: var(--radius-sm); padding: 1rem; margin-bottom: 1.5rem;">
+            <p style="color: var(--critical); font-size: 0.875rem;">
+                <strong>Critical Security Issue:</strong> This secret is stored in plaintext and could be exposed to attackers.
+            </p>
+        </div>
+        
+        <div class="detail-section">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                <div>
+                    <div class="detail-label">Secret Type</div>
+                    <div class="detail-value" style="text-transform: capitalize;">${(secret.secret_type || '').replace(/_/g, ' ')}</div>
+                </div>
+                <div>
+                    <div class="detail-label">Severity</div>
+                    <div class="detail-value">
+                        <span class="badge badge-${secret.severity}">${(secret.severity || '').toUpperCase()}</span>
+                    </div>
+                </div>
+                <div>
+                    <div class="detail-label">Variable Name</div>
+                    <div class="detail-value mono" style="color: var(--danger);">${secret.variable_name || 'N/A'}</div>
+                </div>
+                <div>
+                    <div class="detail-label">Line Number</div>
+                    <div class="detail-value mono">${secret.line_number || 'N/A'}</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="detail-section">
+            <div class="detail-label">File Location</div>
+            <div class="mono" style="background: var(--bg-tertiary); padding: 0.75rem; border-radius: var(--radius-sm); margin-top: 0.5rem; word-break: break-all;">
+                ${secret.file_path}
+            </div>
+        </div>
+        
+        <div class="detail-section">
+            <div class="detail-label">Description</div>
+            <p style="margin-top: 0.5rem; font-size: 0.875rem;">${secret.description || 'No description available'}</p>
+        </div>
+        
+        <div class="detail-section" style="background: rgba(99, 102, 241, 0.1); border-radius: var(--radius-sm); padding: 1rem;">
+            <div class="detail-label" style="color: var(--accent-primary);"><i class="fas fa-lightbulb"></i> Remediation</div>
+            <p style="margin-top: 0.5rem; font-size: 0.875rem;">${secret.recommendation || 'Remove the secret from the file and use a secure secrets management solution.'}</p>
+        </div>
+    `;
+    
+    modal.style.display = 'block';
+}
+
+function closeModal() {
+    document.getElementById('detailModal').style.display = 'none';
+}
+
+// Close modal on escape key
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        closeModal();
+    }
+});
+
+// Close modal on click outside
+document.getElementById('detailModal').addEventListener('click', function(e) {
+    if (e.target === this) {
+        closeModal();
+    }
+});
+
+// ==========================================
+// On-Demand Scan
+// ==========================================
+function escapeLogHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+let scanPollInterval = null;
+const hostPublicId = '{{ host.public_id }}';
+
+function triggerOnDemandScan() {
+    const btn = document.getElementById('triggerScanBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Starting...';
+
+    fetch(`/host/${hostPublicId}/trigger-scan`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': document.querySelector('meta[name="csrf-token"]')?.content || ''
+        }
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            showScanLog(data.scan_request);
+            startPolling();
+        } else {
+            if (data.scan_request) {
+                // Already running
+                showScanLog(data.scan_request);
+                startPolling();
+            } else {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fas fa-sync-alt"></i> Trigger Scan';
+                alert(data.error || 'Failed to trigger scan');
+            }
+        }
+    })
+    .catch(err => {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-sync-alt"></i> Trigger Scan';
+        alert('Error: ' + err.message);
+    });
+}
+
+function showScanLog(scanRequest) {
+    const panel = document.getElementById('scanLogPanel');
+    panel.style.display = 'block';
+    updateScanLogUI(scanRequest);
+}
+
+function updateScanLogUI(req) {
+    const entries = document.getElementById('scanLogEntries');
+    const badge = document.getElementById('scanStatusBadge');
+    const btn = document.getElementById('triggerScanBtn');
+
+    // Update status badge
+    const statusColors = {
+        'pending': 'var(--text-muted)',
+        'connecting': 'var(--info)',
+        'scanning_ides': 'var(--accent-primary)',
+        'scanning_secrets': 'var(--warning)',
+        'scanning_packages': 'var(--info)',
+        'completed': 'var(--success)',
+        'failed': 'var(--danger)',
+        'timeout': 'var(--danger)'
+    };
+    const statusLabels = {
+        'pending': 'Pending',
+        'connecting': 'Connecting',
+        'scanning_ides': 'Scanning IDEs',
+        'scanning_secrets': 'Scanning Secrets',
+        'scanning_packages': 'Scanning Packages',
+        'completed': 'Completed',
+        'failed': 'Failed',
+        'timeout': 'Timed Out'
+    };
+    badge.textContent = statusLabels[req.status] || req.status;
+    badge.style.background = statusColors[req.status] || 'var(--text-muted)';
+    badge.style.color = 'white';
+
+    // Update log entries
+    let html = '';
+    for (const entry of (req.log_entries || [])) {
+        const time = new Date(entry.timestamp).toLocaleTimeString();
+        const colors = {
+            'info': 'var(--text-secondary)',
+            'success': 'var(--success)',
+            'warning': 'var(--warning)',
+            'error': 'var(--danger)'
+        };
+        const icons = {
+            'info': 'fa-info-circle',
+            'success': 'fa-check-circle',
+            'warning': 'fa-exclamation-triangle',
+            'error': 'fa-times-circle'
+        };
+        const color = colors[entry.level] || 'var(--text-secondary)';
+        const icon = icons[entry.level] || 'fa-info-circle';
+        html += `<div style="color: ${color}; padding: 0.125rem 0;">` +
+                `<span style="color: var(--text-muted); margin-right: 0.5rem;">${time}</span>` +
+                `<i class="fas ${icon}" style="margin-right: 0.375rem;"></i>` +
+                `${escapeLogHtml(entry.message)}</div>`;
+    }
+    entries.innerHTML = html;
+    entries.scrollTop = entries.scrollHeight;
+
+    // Update button state
+    if (['completed', 'failed', 'timeout'].includes(req.status)) {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-sync-alt"></i> Trigger Scan';
+        stopPolling();
+    } else {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Scanning...';
+    }
+}
+
+function startPolling() {
+    if (scanPollInterval) clearInterval(scanPollInterval);
+    scanPollInterval = setInterval(pollScanStatus, 2000);
+}
+
+function stopPolling() {
+    if (scanPollInterval) {
+        clearInterval(scanPollInterval);
+        scanPollInterval = null;
+    }
+}
+
+function pollScanStatus() {
+    fetch(`/host/${hostPublicId}/scan-status`)
+    .then(r => r.json())
+    .then(data => {
+        if (data.scan_request) {
+            updateScanLogUI(data.scan_request);
+        }
+    })
+    .catch(() => {});
+}
+
+// Check for active scan on page load
+(function() {
+    fetch(`/host/${hostPublicId}/scan-status`)
+    .then(r => r.json())
+    .then(data => {
+        if (data.scan_request && !['completed', 'failed', 'timeout'].includes(data.scan_request.status)) {
+            showScanLog(data.scan_request);
+            startPolling();
+        }
+    })
+    .catch(() => {});
+})();
+</script>
+{% endblock %}

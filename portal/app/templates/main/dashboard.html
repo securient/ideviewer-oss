@@ -1,0 +1,293 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - IDE Viewer{% endblock %}
+
+{% block content %}
+<div class="fade-in">
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 2rem;">
+        <div>
+            <h1 style="font-size: 1.75rem; font-weight: 700; margin-bottom: 0.25rem;">Dashboard</h1>
+            <p style="color: var(--text-secondary);">Monitor your IDE extensions across all machines</p>
+        </div>
+        {% if not customer_keys %}
+        <a href="{{ url_for('main.keys') }}" class="btn btn-primary">
+            <i class="fas fa-key"></i>
+            Create API Key
+        </a>
+        {% endif %}
+    </div>
+
+    <!-- Stats -->
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="stat-icon purple">
+                <i class="fas fa-desktop"></i>
+            </div>
+            <div class="stat-content">
+                <h3>{{ stats.total_hosts }}</h3>
+                <p>Total Hosts</p>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon green">
+                <i class="fas fa-check-circle"></i>
+            </div>
+            <div class="stat-content">
+                <h3>{{ stats.active_hosts }}</h3>
+                <p>Active (24h)</p>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon orange">
+                <i class="fas fa-puzzle-piece"></i>
+            </div>
+            <div class="stat-content">
+                <h3>{{ stats.total_extensions }}</h3>
+                <p>Total Extensions</p>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon red">
+                <i class="fas fa-exclamation-triangle"></i>
+            </div>
+            <div class="stat-content">
+                <h3>{{ stats.dangerous_extensions }}</h3>
+                <p>Risky Extensions</p>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon {% if stats.total_secrets > 0 %}red{% else %}green{% endif %}">
+                <i class="fas fa-key"></i>
+            </div>
+            <div class="stat-content">
+                <h3>{{ stats.total_secrets }}</h3>
+                <p>Exposed Secrets</p>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon blue">
+                <i class="fas fa-cubes"></i>
+            </div>
+            <div class="stat-content">
+                <h3>{{ stats.total_packages }}</h3>
+                <p>Packages</p>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Tamper Alerts -->
+    {% if tamper_alerts %}
+    <div class="card" style="margin-bottom: 2rem; border-left: 4px solid #dc2626; background: rgba(220, 38, 38, 0.05);">
+        <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
+            <h2 class="card-title" style="color: #dc2626;">
+                <i class="fas fa-shield-alt"></i>
+                Tamper Alerts ({{ tamper_alerts|length }})
+            </h2>
+        </div>
+        <p style="margin-bottom: 1rem; color: var(--text-secondary); font-size: 0.875rem;">
+            The following hosts have reported integrity violations. The daemon may have been tampered with or removed.
+        </p>
+        <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+            {% for item in tamper_alerts %}
+            <div style="display: flex; align-items: center; justify-content: space-between; padding: 0.75rem 1rem; background: rgba(220, 38, 38, 0.08); border: 1px solid rgba(220, 38, 38, 0.2); border-radius: var(--radius-sm);">
+                <div style="display: flex; align-items: center; gap: 0.75rem; flex: 1;">
+                    {% if item.alert.alert_type == 'daemon_stopping' %}
+                    <i class="fas fa-power-off" style="color: #f59e0b; font-size: 1.125rem;"></i>
+                    {% elif item.alert.alert_type == 'file_deleted' %}
+                    <i class="fas fa-trash-alt" style="color: #dc2626; font-size: 1.125rem;"></i>
+                    {% elif item.alert.alert_type == 'file_modified' %}
+                    <i class="fas fa-file-signature" style="color: #dc2626; font-size: 1.125rem;"></i>
+                    {% else %}
+                    <i class="fas fa-exclamation-triangle" style="color: #dc2626; font-size: 1.125rem;"></i>
+                    {% endif %}
+                    <div>
+                        <div style="font-weight: 600; font-size: 0.875rem;">
+                            {% if item.host %}
+                            <a href="{{ url_for('main.host_detail', host_id=item.host.public_id) }}">{{ item.host.hostname }}</a> —
+                            {% endif %}
+                            {{ item.alert.alert_type | replace('_', ' ') | title }}
+                        </div>
+                        <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.125rem;">
+                            {{ item.alert.details[:150] }}{% if item.alert.details|length > 150 %}...{% endif %}
+                            <span style="color: var(--text-muted); margin-left: 0.5rem;">{{ item.alert.created_at.strftime('%Y-%m-%d %H:%M') }}</span>
+                        </div>
+                    </div>
+                </div>
+                <form method="POST" action="{{ url_for('main.acknowledge_alert', alert_id=item.alert.id) }}" style="margin-left: 0.75rem;">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit" class="btn btn-secondary" style="font-size: 0.75rem; padding: 0.375rem 0.75rem; white-space: nowrap;">
+                        <i class="fas fa-check"></i> Acknowledge
+                    </button>
+                </form>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Missing Hosts Alert -->
+    {% if missing_hosts %}
+    <div class="card" style="margin-bottom: 2rem; border-left: 4px solid #f59e0b; background: rgba(245, 158, 11, 0.05);">
+        <div class="card-header">
+            <h2 class="card-title" style="color: #f59e0b;">
+                <i class="fas fa-satellite-dish"></i>
+                Missing Hosts ({{ missing_hosts|length }})
+            </h2>
+        </div>
+        <p style="margin-bottom: 1rem; color: var(--text-secondary); font-size: 0.875rem;">
+            The following hosts have not sent a heartbeat in over 30 minutes. The daemon may be offline, uninstalled, or disconnected.
+        </p>
+        <div style="display: flex; flex-wrap: wrap; gap: 0.75rem;">
+            {% for item in missing_hosts %}
+            <a href="{{ url_for('main.host_detail', host_id=item.host.public_id) }}" style="text-decoration: none;">
+                <div style="display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 1rem; background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: var(--radius-sm);">
+                    <i class="fas fa-exclamation-circle" style="color: #f59e0b;"></i>
+                    <div>
+                        <span style="font-weight: 500; color: var(--text-primary);">{{ item.host.hostname }}</span>
+                        <div style="font-size: 0.75rem; color: var(--text-muted);">
+                            Last contact: {{ item.minutes_ago }} min ago
+                        </div>
+                    </div>
+                </div>
+            </a>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Secrets Alert -->
+    {% if hosts_with_secrets %}
+    <div class="card" style="margin-bottom: 2rem; border-left: 4px solid var(--critical);">
+        <div class="card-header">
+            <h2 class="card-title" style="color: var(--critical);">
+                <i class="fas fa-skull-crossbones"></i>
+                Critical: Exposed Secrets Detected
+            </h2>
+        </div>
+        <p style="margin-bottom: 1rem; color: var(--text-secondary);">
+            The following hosts have plaintext secrets (e.g., wallet private keys, API keys) stored in configuration files.
+            This is a critical security risk.
+        </p>
+        <div style="display: flex; flex-wrap: wrap; gap: 0.75rem;">
+            {% for item in hosts_with_secrets %}
+            <a href="{{ url_for('main.host_detail', host_id=item.host.public_id) }}" style="text-decoration: none;">
+                <div style="display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 1rem; background: rgba(220, 38, 38, 0.1); border: 1px solid rgba(220, 38, 38, 0.3); border-radius: var(--radius-sm);">
+                    <i class="fas fa-server" style="color: var(--critical);"></i>
+                    <span style="font-weight: 500; color: var(--text-primary);">{{ item.host.hostname }}</span>
+                    <span class="badge badge-critical">{{ item.count }} secrets</span>
+                </div>
+            </a>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- IDE Distribution -->
+    {% if stats.ide_counts %}
+    <div class="card" style="margin-bottom: 2rem;">
+        <div class="card-header">
+            <h2 class="card-title">
+                <i class="fas fa-chart-pie" style="color: var(--accent-primary);"></i>
+                IDE Distribution
+            </h2>
+        </div>
+        <div style="display: flex; flex-wrap: wrap; gap: 1rem;">
+            {% for ide_name, count in stats.ide_counts.items() %}
+            <div style="display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 1rem; background: var(--bg-tertiary); border-radius: var(--radius-sm);">
+                <i class="fas fa-code" style="color: var(--accent-secondary);"></i>
+                <span style="font-weight: 500;">{{ ide_name }}</span>
+                <span class="badge badge-low">{{ count }}</span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Hosts -->
+    <div class="card">
+        <div class="card-header">
+            <h2 class="card-title">
+                <i class="fas fa-server" style="color: var(--accent-primary);"></i>
+                Registered Hosts
+            </h2>
+        </div>
+
+        {% if hosts %}
+        <div class="host-grid">
+            {% for host in hosts %}
+            <a href="{{ url_for('main.host_detail', host_id=host.public_id) }}" class="host-card" style="text-decoration: none; color: inherit;">
+                <div class="host-header">
+                    <div class="host-icon">
+                        {% if 'darwin' in (host.platform or '')|lower or 'mac' in (host.platform or '')|lower %}
+                        <i class="fab fa-apple"></i>
+                        {% elif 'windows' in (host.platform or '')|lower %}
+                        <i class="fab fa-windows"></i>
+                        {% else %}
+                        <i class="fab fa-linux"></i>
+                        {% endif %}
+                    </div>
+                    <div class="host-info">
+                        <h3>{{ host.hostname }}</h3>
+                        <p>{{ host.ip_address or 'Unknown IP' }}</p>
+                    </div>
+                </div>
+                <p style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 0.5rem;">
+                    <i class="fas fa-microchip" style="margin-right: 0.5rem;"></i>
+                    {{ host.platform or 'Unknown Platform' }}
+                </p>
+                <p style="font-size: 0.75rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.5rem;">
+                    {% set hb_time = host.last_heartbeat_at or host.last_seen_at %}
+                    {% if hb_time and (now - hb_time).total_seconds() < 300 %}
+                    <span style="width: 8px; height: 8px; border-radius: 50%; background: var(--success); display: inline-block;" title="Online"></span>
+                    {% elif hb_time and (now - hb_time).total_seconds() < 1800 %}
+                    <span style="width: 8px; height: 8px; border-radius: 50%; background: var(--warning); display: inline-block;" title="Idle"></span>
+                    {% else %}
+                    <span style="width: 8px; height: 8px; border-radius: 50%; background: var(--danger); display: inline-block;" title="Offline"></span>
+                    {% endif %}
+                    <i class="fas fa-clock"></i>
+                    Last seen: {{ host.last_seen_at.strftime('%Y-%m-%d %H:%M') if host.last_seen_at else 'Never' }}
+                </p>
+                
+                {% set latest = host.latest_report %}
+                <div class="host-stats">
+                    <div class="host-stat">
+                        <div class="host-stat-value">{{ latest.total_ides if latest else 0 }}</div>
+                        <div class="host-stat-label">IDEs</div>
+                    </div>
+                    <div class="host-stat">
+                        <div class="host-stat-value">{{ latest.total_extensions if latest else 0 }}</div>
+                        <div class="host-stat-label">Extensions</div>
+                    </div>
+                    <div class="host-stat">
+                        <div class="host-stat-value" style="color: {% if latest and latest.dangerous_extensions > 0 %}var(--danger){% else %}var(--success){% endif %};">
+                            {{ latest.dangerous_extensions if latest else 0 }}
+                        </div>
+                        <div class="host-stat-label">Dangerous</div>
+                    </div>
+                </div>
+            </a>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <i class="fas fa-server"></i>
+            <h3 style="margin-bottom: 0.5rem;">No hosts registered yet</h3>
+            <p>Install the IDE Viewer daemon on your machines to start monitoring.</p>
+            {% if customer_keys %}
+            <div style="margin-top: 1.5rem;">
+                <p style="font-size: 0.875rem; margin-bottom: 1rem;">Use this command to install:</p>
+                <div class="code-block" style="text-align: left; display: inline-block;">
+                    ideviewer daemon --customer-key {{ customer_keys[0].key }}
+                </div>
+            </div>
+            {% else %}
+            <a href="{{ url_for('main.keys') }}" class="btn btn-primary" style="margin-top: 1rem;">
+                <i class="fas fa-key"></i>
+                Generate API Key First
+            </a>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

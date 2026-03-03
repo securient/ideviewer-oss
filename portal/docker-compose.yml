@@ -1,0 +1,71 @@
+# Docker Compose for LOCAL DEVELOPMENT/TESTING ONLY
+#
+# WARNING: This file uses default credentials. Do NOT use in production.
+# For production, set proper SECRET_KEY, DATABASE_URL, etc. via environment.
+#
+# Usage:
+#   docker-compose up -d          # Start services
+#   docker-compose logs -f        # View logs
+#   docker-compose down           # Stop services
+#   docker-compose down -v        # Stop and remove volumes (reset DB)
+#
+# The portal will be available at http://localhost:8080
+# PostgreSQL will be available at localhost:5432
+
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  db:
+    image: postgres:15-alpine
+    container_name: ideviewer-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ideviewer
+      POSTGRES_PASSWORD: ideviewer_dev_password
+      POSTGRES_DB: ideviewer
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ideviewer"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # IDE Viewer Portal
+  portal:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ideviewer-portal
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # Flask config
+      FLASK_CONFIG: production
+      SECRET_KEY: dev-secret-key-change-in-production
+      
+      # Database connection
+      DATABASE_URL: postgresql://ideviewer:ideviewer_dev_password@db:5432/ideviewer
+      
+      # Portal settings
+      PORTAL_URL: http://localhost:8080
+      
+      # Google OAuth (optional - uncomment and fill in)
+      # GOOGLE_CLIENT_ID: your-client-id.apps.googleusercontent.com
+      # GOOGLE_CLIENT_SECRET: your-client-secret
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  postgres_data:

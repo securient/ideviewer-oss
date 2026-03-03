@@ -1,0 +1,587 @@
+{% extends "base.html" %}
+
+{% block title %}{{ extension.marketplace_data.name if extension.marketplace_data else extension.id }} - IDE Viewer{% endblock %}
+
+{% block extra_css %}
+<style>
+    .extension-header {
+        display: flex;
+        gap: 1.5rem;
+        margin-bottom: 2rem;
+    }
+    
+    .extension-icon {
+        width: 96px;
+        height: 96px;
+        border-radius: var(--radius-lg);
+        background: var(--bg-tertiary);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 2.5rem;
+        color: var(--accent-primary);
+        overflow: hidden;
+    }
+    
+    .extension-icon img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+    }
+    
+    .extension-info h1 {
+        font-size: 1.75rem;
+        font-weight: 700;
+        margin-bottom: 0.25rem;
+    }
+    
+    .extension-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1rem;
+        margin-top: 0.75rem;
+        font-size: 0.875rem;
+        color: var(--text-secondary);
+    }
+    
+    .extension-meta-item {
+        display: flex;
+        align-items: center;
+        gap: 0.375rem;
+    }
+    
+    .extension-actions {
+        display: flex;
+        gap: 0.75rem;
+        margin-top: 1rem;
+    }
+    
+    .marketplace-stats {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 1rem;
+        margin-bottom: 2rem;
+    }
+    
+    .marketplace-stat {
+        background: var(--bg-card);
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-md);
+        padding: 1rem;
+        text-align: center;
+    }
+    
+    .marketplace-stat-value {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: var(--text-primary);
+    }
+    
+    .marketplace-stat-label {
+        font-size: 0.75rem;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+    
+    .rating-stars {
+        display: flex;
+        align-items: center;
+        gap: 0.25rem;
+        justify-content: center;
+    }
+    
+    .rating-stars i {
+        color: #f59e0b;
+    }
+    
+    .rating-stars i.empty {
+        color: var(--text-muted);
+    }
+    
+    .content-grid {
+        display: grid;
+        grid-template-columns: 2fr 1fr;
+        gap: 2rem;
+    }
+    
+    @media (max-width: 1024px) {
+        .content-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+    
+    .section-title {
+        font-size: 1rem;
+        font-weight: 600;
+        margin-bottom: 1rem;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+    
+    .threat-assessment {
+        background: var(--bg-card);
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-lg);
+        padding: 1.5rem;
+        margin-bottom: 1.5rem;
+    }
+    
+    .threat-header {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        margin-bottom: 1rem;
+    }
+    
+    .threat-level {
+        font-size: 1.25rem;
+        font-weight: 700;
+    }
+    
+    .threat-level.critical { color: var(--critical); }
+    .threat-level.high { color: var(--danger); }
+    .threat-level.medium { color: var(--warning); }
+    .threat-level.low { color: var(--success); }
+    
+    .permission-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+    }
+    
+    .permission-item {
+        background: var(--bg-tertiary);
+        border-radius: var(--radius-sm);
+        padding: 0.75rem 1rem;
+        border-left: 3px solid var(--border-color);
+    }
+    
+    .permission-item.critical { border-left-color: var(--critical); }
+    .permission-item.high { border-left-color: var(--danger); }
+    .permission-item.medium { border-left-color: var(--warning); }
+    .permission-item.low { border-left-color: var(--success); }
+    
+    .permission-name {
+        font-weight: 600;
+        font-size: 0.875rem;
+        margin-bottom: 0.25rem;
+    }
+    
+    .permission-concern {
+        font-size: 0.75rem;
+        color: var(--text-secondary);
+    }
+    
+    .hosts-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+    
+    .host-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0.75rem 1rem;
+        background: var(--bg-tertiary);
+        border-radius: var(--radius-sm);
+        text-decoration: none;
+        color: inherit;
+        transition: background 0.2s;
+    }
+    
+    .host-item:hover {
+        background: var(--border-color);
+    }
+    
+    .version-history {
+        max-height: 300px;
+        overflow-y: auto;
+    }
+    
+    .version-item {
+        display: flex;
+        justify-content: space-between;
+        padding: 0.5rem 0;
+        border-bottom: 1px solid var(--border-color);
+        font-size: 0.875rem;
+    }
+    
+    .version-item:last-child {
+        border-bottom: none;
+    }
+    
+    .no-data {
+        color: var(--text-muted);
+        font-style: italic;
+        padding: 1rem;
+        text-align: center;
+    }
+    
+    .tag-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+    }
+    
+    .tag {
+        background: var(--bg-tertiary);
+        padding: 0.25rem 0.5rem;
+        border-radius: var(--radius-sm);
+        font-size: 0.75rem;
+        color: var(--text-secondary);
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="fade-in">
+    <!-- Back button -->
+    <a href="{{ url_for('main.dashboard') }}" style="display: inline-flex; align-items: center; gap: 0.5rem; color: var(--text-secondary); margin-bottom: 1.5rem;">
+        <i class="fas fa-arrow-left"></i>
+        Back to Dashboard
+    </a>
+    
+    <!-- Extension Header -->
+    <div class="extension-header">
+        <div class="extension-icon">
+            {% if extension.marketplace_data and extension.marketplace_data.icon_url %}
+            <img src="{{ extension.marketplace_data.icon_url }}" alt="Icon" onerror="this.parentElement.innerHTML='<i class=\'fas fa-puzzle-piece\'></i>'">
+            {% else %}
+            <i class="fas fa-puzzle-piece"></i>
+            {% endif %}
+        </div>
+        <div class="extension-info">
+            <h1>{{ extension.marketplace_data.name if extension.marketplace_data else extension.local_data.name if extension.local_data else extension.id }}</h1>
+            <p style="color: var(--text-secondary);">
+                {{ extension.marketplace_data.publisher if extension.marketplace_data else extension.local_data.publisher if extension.local_data else 'Unknown Publisher' }}
+            </p>
+            
+            <div class="extension-meta">
+                <span class="extension-meta-item">
+                    <i class="fas fa-tag"></i>
+                    v{{ extension.marketplace_data.version if extension.marketplace_data else extension.local_data.version if extension.local_data else 'unknown' }}
+                </span>
+                <span class="extension-meta-item">
+                    <i class="fas fa-desktop"></i>
+                    Installed on {{ extension.hosts_count }} host{% if extension.hosts_count != 1 %}s{% endif %}
+                </span>
+                <span class="extension-meta-item">
+                    <i class="fas fa-store"></i>
+                    {{ extension.marketplace | capitalize }} Marketplace
+                </span>
+            </div>
+            
+            <div class="extension-actions">
+                {% if extension.marketplace_data and extension.marketplace_data.marketplace_url %}
+                <a href="{{ extension.marketplace_data.marketplace_url }}" target="_blank" class="btn btn-primary">
+                    <i class="fas fa-external-link-alt"></i>
+                    View on Marketplace
+                </a>
+                {% endif %}
+                
+                {% if extension.marketplace_data and extension.marketplace_data.github_url %}
+                <a href="{{ extension.marketplace_data.github_url }}" target="_blank" class="btn btn-secondary">
+                    <i class="fab fa-github"></i>
+                    View Source
+                </a>
+                {% elif extension.marketplace_data and extension.marketplace_data.repository_url %}
+                <a href="{{ extension.marketplace_data.repository_url }}" target="_blank" class="btn btn-secondary">
+                    <i class="fas fa-code-branch"></i>
+                    Repository
+                </a>
+                {% endif %}
+                
+                {% if extension.marketplace_data and extension.marketplace_data.documentation_url %}
+                <a href="{{ extension.marketplace_data.documentation_url }}" target="_blank" class="btn btn-secondary">
+                    <i class="fas fa-book"></i>
+                    Docs
+                </a>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    
+    <!-- Marketplace Statistics -->
+    {% if extension.marketplace_data %}
+    <div class="marketplace-stats">
+        <div class="marketplace-stat">
+            <div class="marketplace-stat-value">
+                {% if extension.marketplace_data.installs %}
+                {{ "{:,}".format(extension.marketplace_data.installs) }}
+                {% else %}
+                N/A
+                {% endif %}
+            </div>
+            <div class="marketplace-stat-label">Installs</div>
+        </div>
+        <div class="marketplace-stat">
+            <div class="marketplace-stat-value">
+                {% if extension.marketplace_data.downloads %}
+                {{ "{:,}".format(extension.marketplace_data.downloads) }}
+                {% else %}
+                N/A
+                {% endif %}
+            </div>
+            <div class="marketplace-stat-label">Downloads</div>
+        </div>
+        <div class="marketplace-stat">
+            {% if extension.marketplace_data.rating %}
+            <div class="rating-stars">
+                {% for i in range(5) %}
+                    {% if i < extension.marketplace_data.rating | round | int %}
+                    <i class="fas fa-star"></i>
+                    {% else %}
+                    <i class="fas fa-star empty"></i>
+                    {% endif %}
+                {% endfor %}
+            </div>
+            <div class="marketplace-stat-label">{{ extension.marketplace_data.rating }}/5 ({{ extension.marketplace_data.rating_count }} reviews)</div>
+            {% else %}
+            <div class="marketplace-stat-value">N/A</div>
+            <div class="marketplace-stat-label">Rating</div>
+            {% endif %}
+        </div>
+        <div class="marketplace-stat">
+            <div class="marketplace-stat-value" style="font-size: 1rem;">
+                {% if extension.marketplace_data.last_updated %}
+                {{ extension.marketplace_data.last_updated[:10] if extension.marketplace_data.last_updated else 'N/A' }}
+                {% else %}
+                N/A
+                {% endif %}
+            </div>
+            <div class="marketplace-stat-label">Last Updated</div>
+        </div>
+    </div>
+    {% endif %}
+    
+    <div class="content-grid">
+        <!-- Left Column: Main Content -->
+        <div>
+            <!-- Threat Assessment -->
+            <div class="threat-assessment">
+                <div class="threat-header">
+                    <div>
+                        {% if extension.risk_level == 'critical' %}
+                        <span class="badge badge-critical" style="font-size: 1rem; padding: 0.5rem 1rem;">
+                            <i class="fas fa-skull-crossbones"></i>
+                            Critical Risk
+                        </span>
+                        {% elif extension.risk_level == 'high' %}
+                        <span class="badge badge-high" style="font-size: 1rem; padding: 0.5rem 1rem;">
+                            <i class="fas fa-exclamation-triangle"></i>
+                            High Risk
+                        </span>
+                        {% elif extension.risk_level == 'medium' %}
+                        <span class="badge badge-medium" style="font-size: 1rem; padding: 0.5rem 1rem;">
+                            <i class="fas fa-exclamation-circle"></i>
+                            Medium Risk
+                        </span>
+                        {% else %}
+                        <span class="badge badge-low" style="font-size: 1rem; padding: 0.5rem 1rem;">
+                            <i class="fas fa-check-circle"></i>
+                            Low Risk
+                        </span>
+                        {% endif %}
+                    </div>
+                </div>
+                
+                <p style="color: var(--text-secondary); margin-bottom: 1rem;">
+                    {{ extension.risk_info.description }}
+                </p>
+                
+                <div style="background: var(--bg-tertiary); padding: 1rem; border-radius: var(--radius-sm); margin-bottom: 1rem;">
+                    <p style="font-size: 0.875rem;">{{ extension.risk_info.details }}</p>
+                </div>
+                
+                <p style="font-size: 0.875rem; color: var(--text-muted);">
+                    <strong>Recommendation:</strong> {{ extension.risk_info.recommendation }}
+                </p>
+            </div>
+            
+            <!-- Permissions -->
+            <div class="card" style="margin-bottom: 1.5rem;">
+                <h3 class="section-title">
+                    <i class="fas fa-shield-alt" style="color: var(--accent-primary);"></i>
+                    Permission Analysis
+                </h3>
+                
+                {% if extension.permissions %}
+                <div class="permission-list">
+                    {% for perm in extension.permissions %}
+                    <div class="permission-item {{ perm.risk }}">
+                        <div class="permission-name">
+                            {% if perm.risk == 'critical' %}
+                            <i class="fas fa-skull-crossbones" style="color: var(--critical);"></i>
+                            {% elif perm.risk == 'high' %}
+                            <i class="fas fa-exclamation-triangle" style="color: var(--danger);"></i>
+                            {% elif perm.risk == 'medium' %}
+                            <i class="fas fa-exclamation-circle" style="color: var(--warning);"></i>
+                            {% else %}
+                            <i class="fas fa-info-circle" style="color: var(--success);"></i>
+                            {% endif %}
+                            {{ perm.display_name }}
+                            <span style="font-weight: normal; color: var(--text-muted);">({{ perm.name }})</span>
+                        </div>
+                        <div class="permission-concern">
+                            <strong>What it does:</strong> {{ perm.description }}
+                        </div>
+                        <div class="permission-concern" style="margin-top: 0.25rem; color: {% if perm.risk in ['critical', 'high'] %}var(--danger){% else %}var(--text-muted){% endif %};">
+                            <strong>Security concern:</strong> {{ perm.concern }}
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="no-data">No special permissions detected</div>
+                {% endif %}
+            </div>
+            
+            <!-- Description -->
+            {% if extension.marketplace_data and extension.marketplace_data.description %}
+            <div class="card">
+                <h3 class="section-title">
+                    <i class="fas fa-info-circle" style="color: var(--accent-primary);"></i>
+                    Description
+                </h3>
+                <p style="color: var(--text-secondary); line-height: 1.7;">
+                    {{ extension.marketplace_data.description }}
+                </p>
+                
+                {% if extension.marketplace_data.categories %}
+                <div style="margin-top: 1rem;">
+                    <strong style="font-size: 0.875rem; color: var(--text-muted);">Categories:</strong>
+                    <div class="tag-list" style="margin-top: 0.5rem;">
+                        {% for cat in extension.marketplace_data.categories %}
+                        <span class="tag">{{ cat }}</span>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endif %}
+                
+                {% if extension.marketplace_data.tags %}
+                <div style="margin-top: 1rem;">
+                    <strong style="font-size: 0.875rem; color: var(--text-muted);">Tags:</strong>
+                    <div class="tag-list" style="margin-top: 0.5rem;">
+                        {% for tag in extension.marketplace_data.tags[:10] %}
+                        <span class="tag">{{ tag }}</span>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+            {% endif %}
+        </div>
+        
+        <!-- Right Column: Sidebar -->
+        <div>
+            <!-- Installed On -->
+            <div class="card" style="margin-bottom: 1.5rem;">
+                <h3 class="section-title">
+                    <i class="fas fa-desktop" style="color: var(--accent-primary);"></i>
+                    Installed On ({{ extension.hosts_count }})
+                </h3>
+                
+                {% if extension.hosts %}
+                <div class="hosts-list">
+                    {% for host in extension.hosts %}
+                    <a href="{{ url_for('main.host_detail', host_id=host.host_id) }}" class="host-item">
+                        <div>
+                            <div style="font-weight: 500;">{{ host.hostname }}</div>
+                            <div style="font-size: 0.75rem; color: var(--text-muted);">
+                                {{ host.ide_name }} v{{ host.ide_version }}
+                            </div>
+                        </div>
+                        <div style="text-align: right; font-size: 0.75rem; color: var(--text-muted);">
+                            v{{ host.ext_version }}
+                        </div>
+                    </a>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="no-data">Not installed on any monitored hosts</div>
+                {% endif %}
+            </div>
+            
+            <!-- Version History -->
+            {% if extension.marketplace_data and extension.marketplace_data.versions %}
+            <div class="card" style="margin-bottom: 1.5rem;">
+                <h3 class="section-title">
+                    <i class="fas fa-history" style="color: var(--accent-primary);"></i>
+                    Version History
+                </h3>
+                
+                <div class="version-history">
+                    {% for ver in extension.marketplace_data.versions %}
+                    <div class="version-item">
+                        <span class="mono">{{ ver.version }}</span>
+                        <span style="color: var(--text-muted);">
+                            {% if ver.last_updated %}
+                            {{ ver.last_updated[:10] }}
+                            {% endif %}
+                        </span>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+            
+            <!-- Links -->
+            <div class="card">
+                <h3 class="section-title">
+                    <i class="fas fa-link" style="color: var(--accent-primary);"></i>
+                    Links
+                </h3>
+                
+                <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                    {% if extension.marketplace_data and extension.marketplace_data.marketplace_url %}
+                    <a href="{{ extension.marketplace_data.marketplace_url }}" target="_blank" style="display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem; border-radius: var(--radius-sm); transition: background 0.2s;">
+                        <i class="fas fa-store" style="width: 20px;"></i>
+                        Marketplace Page
+                        <i class="fas fa-external-link-alt" style="margin-left: auto; font-size: 0.75rem; color: var(--text-muted);"></i>
+                    </a>
+                    {% endif %}
+                    
+                    {% if extension.marketplace_data and extension.marketplace_data.github_url %}
+                    <a href="{{ extension.marketplace_data.github_url }}" target="_blank" style="display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem; border-radius: var(--radius-sm); transition: background 0.2s;">
+                        <i class="fab fa-github" style="width: 20px;"></i>
+                        GitHub Repository
+                        <i class="fas fa-external-link-alt" style="margin-left: auto; font-size: 0.75rem; color: var(--text-muted);"></i>
+                    </a>
+                    {% endif %}
+                    
+                    {% if extension.marketplace_data and extension.marketplace_data.repository_url and extension.marketplace_data.repository_url != extension.marketplace_data.github_url %}
+                    <a href="{{ extension.marketplace_data.repository_url }}" target="_blank" style="display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem; border-radius: var(--radius-sm); transition: background 0.2s;">
+                        <i class="fas fa-code-branch" style="width: 20px;"></i>
+                        Source Repository
+                        <i class="fas fa-external-link-alt" style="margin-left: auto; font-size: 0.75rem; color: var(--text-muted);"></i>
+                    </a>
+                    {% endif %}
+                    
+                    {% if extension.marketplace_data and extension.marketplace_data.homepage_url %}
+                    <a href="{{ extension.marketplace_data.homepage_url }}" target="_blank" style="display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem; border-radius: var(--radius-sm); transition: background 0.2s;">
+                        <i class="fas fa-home" style="width: 20px;"></i>
+                        Homepage
+                        <i class="fas fa-external-link-alt" style="margin-left: auto; font-size: 0.75rem; color: var(--text-muted);"></i>
+                    </a>
+                    {% endif %}
+                    
+                    {% if extension.marketplace_data and extension.marketplace_data.documentation_url %}
+                    <a href="{{ extension.marketplace_data.documentation_url }}" target="_blank" style="display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem; border-radius: var(--radius-sm); transition: background 0.2s;">
+                        <i class="fas fa-book" style="width: 20px;"></i>
+                        Documentation
+                        <i class="fas fa-external-link-alt" style="margin-left: auto; font-size: 0.75rem; color: var(--text-muted);"></i>
+                    </a>
+                    {% endif %}
+                    
+                    {% if not extension.marketplace_data %}
+                    <div class="no-data">No external links available</div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
