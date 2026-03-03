@@ -33,7 +33,6 @@ DisableProgramGroupPage=yes
 ; Output settings
 OutputDir=..\dist
 OutputBaseFilename=IDEViewer-Setup-{#MyAppVersion}
-SetupIconFile=..\assets\icon.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 
 ; Compression
