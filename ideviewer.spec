@@ -86,7 +86,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='assets/icon.ico' if is_windows else None,
+    icon='assets/icon.ico' if is_windows and Path('assets/icon.ico').exists() else None,
 )
 
 # macOS: Create .app bundle (optional, for GUI version in future)
