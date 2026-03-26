@@ -201,7 +201,7 @@ jobs:
   # ===========================================
   macos-x64:
     needs: [version]
-    runs-on: macos-13  # Intel runner (x64)
+    runs-on: macos-13-large  # Intel runner (x64)
     name: macOS x64
 
     steps:
