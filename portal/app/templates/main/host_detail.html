@@ -492,7 +492,7 @@
                             </tr>
                         </thead>
                         <tbody>
-                            {% for pkg in packages[:50] %}
+                            {% for pkg in packages %}
                             <tr class="package-row clickable-row" onclick="showPackageDetail('{{ pkg.name }}', '{{ pkg.version }}', '{{ manager }}')">
                                 <td style="font-weight: 500;">{{ pkg.name }}</td>
                                 <td class="mono">{{ pkg.version }}</td>
@@ -502,20 +502,13 @@
                                     </span>
                                 </td>
                                 <td>
-                                    <a href="https://www.google.com/search?q={{ manager }}+{{ pkg.name }}" target="_blank" 
+                                    <a href="https://www.google.com/search?q={{ manager }}+{{ pkg.name }}" target="_blank"
                                        onclick="event.stopPropagation();" style="color: var(--accent-primary);">
                                         <i class="fas fa-external-link-alt"></i>
                                     </a>
                                 </td>
                             </tr>
                             {% endfor %}
-                            {% if packages|length > 50 %}
-                            <tr>
-                                <td colspan="4" style="text-align: center; color: var(--text-muted);">
-                                    ... and {{ packages|length - 50 }} more packages
-                                </td>
-                            </tr>
-                            {% endif %}
                         </tbody>
                     </table>
                 </div>

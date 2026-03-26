@@ -36,7 +36,14 @@ def create_app(config_name=None):
                 static_folder='static')
     
     app.config.from_object(config[config_name])
-    
+
+    # Validate production config
+    if config_name == 'production':
+        if not app.config.get('SECRET_KEY'):
+            raise ValueError("SECRET_KEY environment variable is required in production")
+        if not app.config.get('SQLALCHEMY_DATABASE_URI'):
+            raise ValueError("DATABASE_URL environment variable is required in production")
+
     # Ensure instance folder exists
     instance_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'instance')
     os.makedirs(instance_path, exist_ok=True)
