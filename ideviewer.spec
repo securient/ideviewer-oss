@@ -8,6 +8,7 @@ Build commands:
 """
 
 import sys
+import re
 from pathlib import Path
 
 # Determine platform-specific settings
@@ -15,9 +16,16 @@ is_windows = sys.platform == 'win32'
 is_macos = sys.platform == 'darwin'
 
 # Read version from pyproject.toml (single source of truth)
+<<<<<<< Updated upstream
 import tomllib
 with open('pyproject.toml', 'rb') as f:
     APP_VERSION = tomllib.load(f)['project']['version']
+=======
+# Use regex instead of tomllib to support Python 3.10
+_pyproject = Path('pyproject.toml').read_text()
+_match = re.search(r'^version\s*=\s*"([^"]+)"', _pyproject, re.MULTILINE)
+APP_VERSION = _match.group(1) if _match else '0.0.0'
+>>>>>>> Stashed changes
 
 # Application metadata
 APP_NAME = 'IDEViewer'
