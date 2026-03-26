@@ -122,6 +122,18 @@ pip install -e .
 pip install pywin32
 ```
 
+### Updating
+
+Update to the latest release directly from the CLI:
+
+```bash
+ideviewer update --check    # Check if an update is available
+ideviewer update            # Download and install the latest release
+ideviewer update --yes      # Skip confirmation prompt
+```
+
+This auto-detects your platform and installs the correct package (.pkg, .deb, or .exe).
+
 ## Using the Scanner (Standalone)
 
 No portal or account required. Just run:
@@ -167,6 +179,7 @@ ideviewer packages --json
 ```bash
 ideviewer stats         # Summary statistics
 ideviewer dangerous     # List extensions with dangerous permissions
+ideviewer update        # Update to latest version
 ideviewer --version     # Show version
 ```
 
@@ -181,7 +194,7 @@ cd portal
 python -m venv venv
 source venv/bin/activate    # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
-flask run
+FLASK_CONFIG=development flask run
 ```
 
 Open http://localhost:5000 in your browser.
@@ -204,6 +217,21 @@ Open http://localhost:8080 in your browser.
 
 You'll use this key to connect scanners to the portal.
 
+### Configuring the Host Limit
+
+By default, each customer key supports up to **5 hosts**. You can change this by setting `FREE_TIER_HOST_LIMIT` in your portal configuration:
+
+```bash
+# In portal/config.py, modify the Config class:
+FREE_TIER_HOST_LIMIT = 20  # or any number you need
+```
+
+Or set it via environment variable before starting the portal:
+
+```bash
+FREE_TIER_HOST_LIMIT=20 FLASK_CONFIG=development flask run
+```
+
 ## Connecting the Scanner to the Portal
 
 Once you have a portal running and a customer key:
@@ -219,10 +247,20 @@ ideviewer daemon --foreground
 ```
 
 The daemon will:
-- Run scans at a regular interval (default: 60 minutes, configurable with `--interval`)
-- Send results to the portal automatically
-- Send heartbeats so the portal knows the machine is online
-- Monitor its own files for tampering
+- Run full scans at a regular interval (default: 60 minutes, configurable with `--interval`)
+- Check for on-demand scan requests every 5 seconds
+- Send heartbeats every 2 minutes so the portal knows the machine is online
+- Monitor its own files for tampering and alert the portal
+
+### Custom Scan Interval
+
+```bash
+# Register with a 15-minute scan interval
+ideviewer register \
+  --customer-key YOUR-UUID-KEY \
+  --portal-url http://localhost:5000 \
+  --interval 15
+```
 
 ### Running One-Off Portal Reports
 
@@ -240,14 +278,18 @@ ideviewer packages --portal    # Scan packages and send to portal
 ideviewer stop
 ```
 
-## What the Portal Shows
+## Portal Features
 
 - **Dashboard** — all registered machines and their security posture at a glance
 - **Host Detail** — tabbed view with Extensions, Packages, and Secrets for each machine
-- **Package Search** — search for any package across all machines (with CSV export)
-- **Marketplace Info** — extension details from VS Code, JetBrains, and Open VSX marketplaces
-- **Alerts** — warnings when machines go offline or daemon files are tampered with
-- **On-Demand Scans** — trigger a scan on any machine from the portal UI
+- **Extension Detail** — marketplace data, risk assessment, install counts, and which hosts have it
+- **Package Search** — search for any package across all machines
+- **Marketplace Integration** — extension details from VS Code, JetBrains, and Open VSX marketplaces
+- **On-Demand Scans** — trigger a scan on any machine from the portal UI (picked up within ~5 seconds)
+- **Tamper Alerts** — warnings when daemon files are modified, deleted, or the daemon is stopped
+- **Missing Host Alerts** — visual warnings when hosts go offline
+- **CSV Export** — export extensions, packages, or secrets per host, or export hosts-with-extension/package lists
+- **Google OAuth** — optional Google login alongside email/password authentication
 
 ## Supported IDEs
 
@@ -263,7 +305,15 @@ ideviewer stop
 
 ## Supported Package Managers
 
-pip, npm, Go, Cargo, Gem, Composer, Homebrew
+| Language | Manager | Detection |
+|----------|---------|-----------|
+| Python | pip | `pip list --format=json` |
+| Node.js | npm | `npm list -g --json` + project `package.json` / `package-lock.json` |
+| Go | go | `~/go/bin` directory scan |
+| Rust | cargo | `cargo install --list` |
+| Ruby | gem | `gem list --local` |
+| PHP | composer | `composer.lock` parsing |
+| macOS | Homebrew | `brew list --formula/--cask --versions` |
 
 ## Security Features
 
@@ -283,13 +333,15 @@ Detects but **never transmits** actual secret values:
 - Mnemonic/seed phrases (12/24-word BIP-39)
 - AWS access keys and secret keys
 
+Secrets are automatically marked as resolved in the portal when they are no longer detected in subsequent scans.
+
 ### npm Lifecycle Hook Detection
 
 Flags npm packages with `preinstall`, `postinstall`, `prepare`, and other lifecycle hooks. Shows the exact commands they execute to help identify supply chain risks.
 
 ### Tamper Detection
 
-The daemon monitors its own files (binary, config, service files) and alerts the portal if anything is modified or deleted.
+The daemon monitors its own files (binary, config, service files) using SHA256 checksums. If any file is modified or deleted, the portal is alerted immediately. The daemon also notifies the portal when it receives a shutdown signal.
 
 ### Heartbeat Monitoring
 
@@ -376,8 +428,8 @@ pip install pyinstaller
 Push a version tag to trigger builds for all platforms:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
 ## Portal Deployment (Production)
@@ -417,21 +469,6 @@ Uninstall via **Settings > Apps > IDE Viewer > Uninstall**. This stops the daemo
 sudo dpkg -r ideviewer          # remove, keep config
 sudo dpkg -P ideviewer          # purge config + logs too
 ```
-
-## Free vs Enterprise
-
-| Feature | Free (OSS) | Enterprise |
-|---------|-----------|------------|
-| IDE & extension scanning | Yes | Yes |
-| Secrets detection | Yes | Yes |
-| Dependency inventory | Yes | Yes |
-| SARIF output | Yes | Yes |
-| Self-hosted portal | Yes | Yes |
-| Max hosts per key | 5 | Unlimited |
-| SSO / SAML | — | Yes |
-| Priority support | — | Yes |
-
-For teams needing more, see [IDEViewer Enterprise](https://securient.io).
 
 ## Contributing
 

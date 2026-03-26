@@ -2,7 +2,7 @@
 Main application routes - Dashboard and Key Management.
 """
 
-from flask import Blueprint, render_template, redirect, url_for, flash, request, jsonify
+from flask import Blueprint, render_template, redirect, url_for, flash, request, jsonify, current_app
 from flask_login import login_required, current_user
 from datetime import datetime, timedelta
 from sqlalchemy import or_
@@ -249,9 +249,9 @@ def create_key():
     
     if form.validate_on_submit():
         try:
-            max_hosts = int(form.max_hosts.data)
+            max_hosts = min(int(form.max_hosts.data), current_app.config.get('FREE_TIER_HOST_LIMIT', 5))
         except (ValueError, TypeError):
-            max_hosts = 10
+            max_hosts = current_app.config.get('FREE_TIER_HOST_LIMIT', 5)
         
         key = CustomerKey(
             key=CustomerKey.generate_key(),
@@ -997,5 +997,213 @@ def export_package_csv(package_name):
         mimetype='text/csv',
         headers={
             'Content-Disposition': f'attachment; filename=hosts_with_{safe_name}.csv'
+        }
+    )
+
+
+@main_bp.route('/extension/<extension_id>/export-csv')
+@login_required
+def export_extension_csv(extension_id):
+    """Export hosts with a specific extension as CSV."""
+    import csv
+    import io
+    from flask import Response
+
+    customer_keys = current_user.customer_keys.filter_by(is_active=True).all()
+    key_ids = [k.id for k in customer_keys]
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        'Hostname', 'IP Address', 'Platform', 'IDE', 'IDE Version',
+        'Extension', 'Extension Version', 'Publisher', 'Risk Level', 'Last Seen'
+    ])
+
+    seen_host_ids = set()
+    for host in Host.query.filter(Host.customer_key_id.in_(key_ids)).all():
+        latest_report = host.latest_report
+        if not latest_report or not latest_report.scan_data:
+            continue
+
+        for ide in latest_report.scan_data.get('ides', []):
+            for ext in ide.get('extensions', []):
+                if ext.get('id') == extension_id and host.id not in seen_host_ids:
+                    seen_host_ids.add(host.id)
+                    permissions = ext.get('permissions', [])
+                    risk_level = calculate_risk_level(permissions)
+
+                    writer.writerow([
+                        host.hostname,
+                        host.ip_address or '',
+                        host.platform or '',
+                        ide.get('name', ''),
+                        ide.get('version', ''),
+                        ext.get('name', ''),
+                        ext.get('version', ''),
+                        ext.get('publisher', ''),
+                        risk_level,
+                        host.last_seen_at.isoformat() if host.last_seen_at else '',
+                    ])
+
+    output.seek(0)
+    safe_name = extension_id.replace('/', '_').replace('@', '')
+
+    return Response(
+        output.getvalue(),
+        mimetype='text/csv',
+        headers={
+            'Content-Disposition': f'attachment; filename=hosts_with_{safe_name}.csv'
+        }
+    )
+
+
+@main_bp.route('/host/<host_id>/export-extensions-csv')
+@login_required
+def export_host_extensions_csv(host_id):
+    """Export all extensions for a specific host as CSV."""
+    import csv
+    import io
+    from flask import Response
+
+    host = Host.query.filter_by(public_id=host_id).first_or_404()
+    if host.customer_key.user_id != current_user.id:
+        return "Access denied", 403
+
+    latest_report = host.latest_report
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        'Extension', 'Version', 'Publisher', 'IDE', 'IDE Version',
+        'Risk Level', 'Permissions'
+    ])
+
+    if latest_report and latest_report.scan_data:
+        for ide in latest_report.scan_data.get('ides', []):
+            for ext in ide.get('extensions', []):
+                permissions = ext.get('permissions', [])
+                risk_level = calculate_risk_level(permissions)
+                perm_names = ', '.join(
+                    p.get('name', str(p)) if isinstance(p, dict) else str(p)
+                    for p in permissions
+                )
+
+                writer.writerow([
+                    ext.get('name', ''),
+                    ext.get('version', ''),
+                    ext.get('publisher', ''),
+                    ide.get('name', ''),
+                    ide.get('version', ''),
+                    risk_level,
+                    perm_names,
+                ])
+
+    output.seek(0)
+    safe_hostname = host.hostname.replace(' ', '_')
+
+    return Response(
+        output.getvalue(),
+        mimetype='text/csv',
+        headers={
+            'Content-Disposition': f'attachment; filename={safe_hostname}_extensions.csv'
+        }
+    )
+
+
+@main_bp.route('/host/<host_id>/export-packages-csv')
+@login_required
+def export_host_packages_csv(host_id):
+    """Export all packages for a specific host as CSV."""
+    import csv
+    import io
+    from flask import Response
+
+    host = Host.query.filter_by(public_id=host_id).first_or_404()
+    if host.customer_key.user_id != current_user.id:
+        return "Access denied", 403
+
+    packages = PackageInfo.query.filter_by(host_id=host.id).order_by(
+        PackageInfo.package_manager, PackageInfo.name
+    ).all()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        'Package', 'Version', 'Package Manager', 'Install Type',
+        'Project Path', 'Lifecycle Hooks'
+    ])
+
+    for pkg in packages:
+        hooks_str = ''
+        if pkg.lifecycle_hooks:
+            hooks_str = '; '.join(f'{k}: {v}' for k, v in pkg.lifecycle_hooks.items())
+
+        writer.writerow([
+            pkg.name,
+            pkg.version or '',
+            pkg.package_manager,
+            pkg.install_type or '',
+            pkg.project_path or '',
+            hooks_str,
+        ])
+
+    output.seek(0)
+    safe_hostname = host.hostname.replace(' ', '_')
+
+    return Response(
+        output.getvalue(),
+        mimetype='text/csv',
+        headers={
+            'Content-Disposition': f'attachment; filename={safe_hostname}_packages.csv'
+        }
+    )
+
+
+@main_bp.route('/host/<host_id>/export-secrets-csv')
+@login_required
+def export_host_secrets_csv(host_id):
+    """Export all unresolved secrets for a specific host as CSV."""
+    import csv
+    import io
+    from flask import Response
+
+    host = Host.query.filter_by(public_id=host_id).first_or_404()
+    if host.customer_key.user_id != current_user.id:
+        return "Access denied", 403
+
+    secrets = SecretFinding.query.filter_by(
+        host_id=host.id,
+        is_resolved=False
+    ).order_by(SecretFinding.severity.asc()).all()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        'Secret Type', 'Severity', 'Variable Name', 'File Path',
+        'Line Number', 'Description', 'Recommendation',
+        'First Detected', 'Last Seen'
+    ])
+
+    for s in secrets:
+        writer.writerow([
+            s.secret_type,
+            s.severity,
+            s.variable_name or '',
+            s.file_path,
+            s.line_number or '',
+            s.description or '',
+            s.recommendation or '',
+            s.first_detected_at.isoformat() if s.first_detected_at else '',
+            s.last_seen_at.isoformat() if s.last_seen_at else '',
+        ])
+
+    output.seek(0)
+    safe_hostname = host.hostname.replace(' ', '_')
+
+    return Response(
+        output.getvalue(),
+        mimetype='text/csv',
+        headers={
+            'Content-Disposition': f'attachment; filename={safe_hostname}_secrets.csv'
         }
     )

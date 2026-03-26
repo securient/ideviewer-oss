@@ -338,17 +338,24 @@ def submit_report():
     secrets_data = scan_data.get('secrets', {})
     secrets_count = 0
     critical_secrets = 0
-    
+
+    # Track which secrets are still present in this scan
+    reported_secret_keys = set()
+
     if secrets_data and secrets_data.get('findings'):
         for finding in secrets_data['findings']:
+            file_path = finding.get('file_path', '')
+            variable_name = finding.get('variable_name')
+            reported_secret_keys.add((file_path, variable_name))
+
             # Check if this finding already exists (by file_path and variable_name)
             existing = SecretFinding.query.filter_by(
                 host_id=host.id,
-                file_path=finding.get('file_path', ''),
-                variable_name=finding.get('variable_name'),
+                file_path=file_path,
+                variable_name=variable_name,
                 is_resolved=False
             ).first()
-            
+
             if existing:
                 # Update last seen time
                 existing.last_seen_at = datetime.utcnow()
@@ -358,19 +365,30 @@ def submit_report():
                 secret = SecretFinding(
                     host_id=host.id,
                     scan_report_id=report.id,
-                    file_path=finding.get('file_path', ''),
+                    file_path=file_path,
                     secret_type=finding.get('secret_type', 'unknown'),
-                    variable_name=finding.get('variable_name'),
+                    variable_name=variable_name,
                     line_number=finding.get('line_number'),
                     severity=finding.get('severity', 'critical'),
                     description=finding.get('description', ''),
                     recommendation=finding.get('recommendation', ''),
                 )
                 db.session.add(secret)
-            
+
             secrets_count += 1
             if finding.get('severity') == 'critical':
                 critical_secrets += 1
+
+    # Mark secrets that were NOT in this scan as resolved
+    unresolved_secrets = SecretFinding.query.filter_by(
+        host_id=host.id,
+        is_resolved=False
+    ).all()
+
+    for secret in unresolved_secrets:
+        if (secret.file_path, secret.variable_name) not in reported_secret_keys:
+            secret.is_resolved = True
+            secret.resolved_at = datetime.utcnow()
     
     # Process dependency data
     deps_data = scan_data.get('dependencies', {})

@@ -479,10 +479,18 @@
         <div>
             <!-- Installed On -->
             <div class="card" style="margin-bottom: 1.5rem;">
-                <h3 class="section-title">
-                    <i class="fas fa-desktop" style="color: var(--accent-primary);"></i>
-                    Installed On ({{ extension.hosts_count }})
-                </h3>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <h3 class="section-title" style="margin-bottom: 0;">
+                        <i class="fas fa-desktop" style="color: var(--accent-primary);"></i>
+                        Installed On ({{ extension.hosts_count }})
+                    </h3>
+                    {% if extension.hosts %}
+                    <a href="{{ url_for('main.export_extension_csv', extension_id=extension.id) }}"
+                       class="btn btn-secondary" style="font-size: 0.75rem; padding: 0.375rem 0.75rem;">
+                        <i class="fas fa-download"></i> Export CSV
+                    </a>
+                    {% endif %}
+                </div>
                 
                 {% if extension.hosts %}
                 <div class="hosts-list">

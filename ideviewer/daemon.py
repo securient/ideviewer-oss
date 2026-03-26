@@ -152,7 +152,6 @@ class IDEViewerDaemon:
         logger.info(f"Next scan scheduled at: {next_scan.strftime('%Y-%m-%d %H:%M:%S')}")
         
         # Run the scheduler loop
-        poll_counter = 0
         last_heartbeat = datetime.now()
         last_tamper_check = datetime.now()
         
@@ -167,25 +166,22 @@ class IDEViewerDaemon:
                 next_scan = last_scan_time + timedelta(seconds=scan_interval_seconds)
                 logger.info(f"Next scan scheduled at: {next_scan.strftime('%Y-%m-%d %H:%M:%S')}")
             
-            # Check for on-demand scan requests every 30 seconds
-            poll_counter += 1
-            if poll_counter >= 3 and self.api_client:
-                poll_counter = 0
+            # Check for on-demand scan requests every poll cycle (~5 seconds)
+            if self.api_client:
                 self._check_on_demand_scans()
-            
+
             # Send heartbeat every heartbeat_interval seconds
             if self.api_client and (now - last_heartbeat).total_seconds() >= self.heartbeat_interval:
                 self._send_heartbeat()
                 last_heartbeat = datetime.now()
-            
+
             # Run tamper detection every 60 seconds
             if (now - last_tamper_check).total_seconds() >= 60:
                 self._check_tamper()
                 last_tamper_check = datetime.now()
-            
+
             # Sleep for a short interval, checking shutdown event
-            # Check more frequently (every 10 seconds) to be responsive
-            self._shutdown_event.wait(timeout=10)
+            self._shutdown_event.wait(timeout=5)
         
         logger.info("Daemon stopped.")
     
@@ -414,8 +410,8 @@ class IDEViewerDaemon:
             
             for ide in result.ides:
                 ext_count = len(ide.extensions)
-                dangerous = sum(1 for e in ide.extensions 
-                              for p in e.permissions if p.get('is_dangerous', False))
+                dangerous = sum(1 for e in ide.extensions
+                              for p in e.permissions if getattr(p, 'is_dangerous', False))
                 update(request_id,
                        log_message=f'Found {ide.name} v{ide.version} — {ext_count} extensions ({dangerous} flagged)')
             

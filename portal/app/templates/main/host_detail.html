@@ -381,8 +381,16 @@
         <div id="extensions-tab" class="tab-content active">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
                 <h3 style="font-weight: 600;">IDE Extensions</h3>
-                <input type="text" id="extensionSearch" class="form-input" placeholder="Search extensions..." 
-                       style="width: 250px;" onkeyup="filterTable('extensionSearch', 'extensionsTable')">
+                <div style="display: flex; gap: 0.5rem; align-items: center;">
+                    <input type="text" id="extensionSearch" class="form-input" placeholder="Search extensions..."
+                           style="width: 250px;" onkeyup="filterTable('extensionSearch', 'extensionsTable')">
+                    {% if extensions %}
+                    <a href="{{ url_for('main.export_host_extensions_csv', host_id=host.public_id) }}"
+                       class="btn btn-secondary" style="font-size: 0.75rem; padding: 0.5rem 0.75rem; white-space: nowrap;">
+                        <i class="fas fa-download"></i> CSV
+                    </a>
+                    {% endif %}
+                </div>
             </div>
             
             {% if extensions %}
@@ -452,8 +460,16 @@
         <div id="packages-tab" class="tab-content">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
                 <h3 style="font-weight: 600;">Installed Packages</h3>
-                <input type="text" id="packageSearch" class="form-input" placeholder="Search packages..." 
-                       style="width: 250px;" onkeyup="filterPackageList()">
+                <div style="display: flex; gap: 0.5rem; align-items: center;">
+                    <input type="text" id="packageSearch" class="form-input" placeholder="Search packages..."
+                           style="width: 250px;" onkeyup="filterPackageList()">
+                    {% if packages_by_manager %}
+                    <a href="{{ url_for('main.export_host_packages_csv', host_id=host.public_id) }}"
+                       class="btn btn-secondary" style="font-size: 0.75rem; padding: 0.5rem 0.75rem; white-space: nowrap;">
+                        <i class="fas fa-download"></i> CSV
+                    </a>
+                    {% endif %}
+                </div>
             </div>
             
             {% if packages_by_manager %}
@@ -525,7 +541,7 @@
 
         <!-- Secrets Tab -->
         <div id="secrets-tab" class="tab-content">
-            <div style="margin-bottom: 1rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
                 <h3 style="font-weight: 600; display: flex; align-items: center; gap: 0.5rem;">
                     {% if secrets|length > 0 %}
                     <i class="fas fa-exclamation-triangle" style="color: var(--critical);"></i>
@@ -535,6 +551,12 @@
                     No Exposed Secrets
                     {% endif %}
                 </h3>
+                {% if secrets %}
+                <a href="{{ url_for('main.export_host_secrets_csv', host_id=host.public_id) }}"
+                   class="btn btn-secondary" style="font-size: 0.75rem; padding: 0.5rem 0.75rem; white-space: nowrap;">
+                    <i class="fas fa-download"></i> CSV
+                </a>
+                {% endif %}
             </div>
             
             {% if secrets %}

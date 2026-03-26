@@ -760,6 +760,77 @@ def display_stats(stats: dict):
         console.print(perm_table)
 
 
+@cli.command()
+@click.option("--check", is_flag=True, help="Only check for updates, don't install")
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt")
+def update(check: bool, yes: bool):
+    """Check for and install updates from GitHub releases."""
+    import tempfile
+    from .updater import check_for_update, find_asset, download_asset, install_update
+
+    console.print("[cyan]Checking for updates...[/]")
+
+    try:
+        has_update, current, latest, release = check_for_update()
+    except Exception as e:
+        console.print(f"[red]Failed to check for updates: {e}[/]")
+        sys.exit(1)
+
+    if not has_update:
+        console.print(f"[green]You're up to date![/] (v{current})")
+        return
+
+    console.print(f"[yellow]Update available:[/] v{current} -> [bold]v{latest}[/]")
+
+    # Show release notes
+    body = release.get("body", "").strip()
+    if body:
+        console.print(f"\n[dim]Release notes:[/]")
+        # Show first 10 lines
+        for line in body.split("\n")[:10]:
+            console.print(f"  [dim]{line}[/]")
+        if len(body.split("\n")) > 10:
+            console.print(f"  [dim]...[/]")
+        console.print()
+
+    if check:
+        console.print(f"[dim]Run 'ideviewer update' to install.[/]")
+        return
+
+    # Find the right asset for this platform
+    try:
+        asset = find_asset(release)
+    except RuntimeError as e:
+        console.print(f"[red]{e}[/]")
+        sys.exit(1)
+
+    console.print(f"[dim]Package: {asset['name']} ({asset.get('size', 0) / 1024 / 1024:.1f} MB)[/]")
+
+    if not yes:
+        if not click.confirm("Install this update?"):
+            console.print("[yellow]Update cancelled.[/]")
+            return
+
+    # Download and install
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        try:
+            with console.status("[bold cyan]Downloading update...[/]"):
+                file_path = download_asset(asset, tmp_dir)
+            console.print(f"[green]Downloaded {asset['name']}[/]")
+
+            console.print("[cyan]Installing update (may require sudo)...[/]")
+            install_update(file_path)
+            console.print(f"[bold green]Updated to v{latest}![/]")
+            console.print("[dim]Restart the daemon to use the new version: ideviewer daemon --foreground[/]")
+
+        except RuntimeError as e:
+            console.print(f"[red]Update failed: {e}[/]")
+            sys.exit(1)
+        except Exception as e:
+            console.print(f"[red]Unexpected error: {e}[/]")
+            sys.exit(1)
+
+
 def main():
     """Main entry point."""
     cli()

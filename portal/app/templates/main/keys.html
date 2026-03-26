@@ -1,12 +1,12 @@
 {% extends "base.html" %}
 
-{% block title %}API Keys - IDE Viewer{% endblock %}
+{% block title %}Customer Keys - IDE Viewer{% endblock %}
 
 {% block content %}
 <div class="fade-in">
     <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 2rem;">
         <div>
-            <h1 style="font-size: 1.75rem; font-weight: 700; margin-bottom: 0.25rem;">API Keys</h1>
+            <h1 style="font-size: 1.75rem; font-weight: 700; margin-bottom: 0.25rem;">Customer Keys</h1>
             <p style="color: var(--text-secondary);">Manage customer keys for your daemon installations</p>
         </div>
     </div>
@@ -17,7 +17,7 @@
             <div class="card-header">
                 <h2 class="card-title">
                     <i class="fas fa-key" style="color: var(--accent-primary);"></i>
-                    Your API Keys
+                    Your Customer Keys
                 </h2>
             </div>
 
@@ -85,8 +85,8 @@
             {% else %}
             <div class="empty-state">
                 <i class="fas fa-key"></i>
-                <h3 style="margin-bottom: 0.5rem;">No API keys yet</h3>
-                <p>Create your first API key to start monitoring your IDE extensions.</p>
+                <h3 style="margin-bottom: 0.5rem;">No customer keys yet</h3>
+                <p>Create your first customer key to start monitoring your IDE extensions.</p>
             </div>
             {% endif %}
         </div>
@@ -113,9 +113,10 @@
 
                 <div class="form-group">
                     <label class="form-label" for="max_hosts">Max Hosts</label>
-                    {{ form.max_hosts(class="form-input", placeholder="10") }}
+                    {{ form.max_hosts(class="form-input", value="5", readonly=true, style="opacity: 0.6; cursor: not-allowed;") }}
                     <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">
-                        Maximum number of machines that can use this key
+                        Free tier is limited to 5 hosts per key.
+                        <a href="https://securient.io" target="_blank" style="color: var(--accent-primary);">Upgrade to Enterprise</a> for unlimited hosts.
                     </p>
                 </div>
 
@@ -142,10 +143,13 @@
 # Install the package
 sudo installer -pkg IDEViewer.pkg -target /
 
-# Run with your customer key
-ideviewer daemon \
+# Register with the portal
+ideviewer register \
   --customer-key YOUR_KEY_HERE \
   --portal-url {{ request.host_url.rstrip('/') }}
+
+# Start the daemon
+ideviewer daemon --foreground
                 </div>
             </div>
 
@@ -157,10 +161,13 @@ ideviewer daemon \
 # Run the installer
 IDEViewer-Setup.exe
 
-# Run with your customer key
-ideviewer daemon ^
+# Register with the portal
+ideviewer register ^
   --customer-key YOUR_KEY_HERE ^
   --portal-url {{ request.host_url.rstrip('/') }}
+
+# Start the daemon
+ideviewer daemon --foreground
                 </div>
             </div>
 
@@ -169,13 +176,16 @@ ideviewer daemon ^
                     <i class="fab fa-linux"></i> Linux
                 </h3>
                 <div class="code-block">
-# Install from pip
-pip install ideviewer
+# Install the .deb package
+sudo dpkg -i ideviewer_*.deb
 
-# Run with your customer key
-ideviewer daemon \
+# Register with the portal
+ideviewer register \
   --customer-key YOUR_KEY_HERE \
   --portal-url {{ request.host_url.rstrip('/') }}
+
+# Start the daemon
+ideviewer daemon --foreground
                 </div>
             </div>
         </div>
