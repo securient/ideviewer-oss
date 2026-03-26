@@ -2,6 +2,34 @@
 
 A cross-platform security scanner that discovers installed IDEs, analyzes their extensions for security risks, detects plaintext secrets, and inventories software dependencies. Results can be viewed locally or reported to a centralized portal for team-wide visibility.
 
+## Screenshots
+
+### Dashboard
+Monitor all registered hosts, IDE distribution, exposed secrets alerts, and security posture at a glance.
+
+![Dashboard](images/Dashboard.png)
+![Dashboard - Registered Hosts](images/Dashboard%20Bottom.png)
+
+### Host Detail
+Drill into any host to see extensions, packages, and secrets across all detected IDEs.
+
+![Host Status](images/Host%20Status.png)
+
+### Extension Details
+View marketplace info, install counts, risk assessment, and which hosts have an extension installed.
+
+![Extension Details](images/Extension%20Details%20and%20Installed%20on.png)
+
+### Search
+Search across all extensions and packages with risk-level indicators.
+
+![Search](images/Search%20Extension.png)
+
+### Secrets Detection
+Identify exposed secrets with severity, file location, and remediation guidance. Actual secret values are never transmitted.
+
+![Exposed Secrets](images/Exposed%20Secrets.png)
+
 ## Getting Started
 
 There are two components:
