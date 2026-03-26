@@ -12,7 +12,7 @@ import os
 import shutil
 from pathlib import Path
 
-APP_VERSION = '0.1.0'
+APP_VERSION = os.environ.get('APP_VERSION', '0.1.0')
 
 def main():
     parser = argparse.ArgumentParser(description='Build .deb package')
@@ -59,7 +59,7 @@ Maintainer: IDE Viewer Team <support@ideviewer.com>
 Description: Cross-platform IDE and Extension Scanner daemon
  IDE Viewer scans installed IDEs and extensions for security analysis.
  It detects VS Code, Cursor, JetBrains IDEs, Sublime Text, Vim/Neovim.
-Homepage: https://github.com/ideviewer/ideviewer
+Homepage: https://github.com/securient/ideviewer-oss
 """
     (package_dir / 'DEBIAN' / 'control').write_text(control)
     
@@ -81,7 +81,7 @@ Homepage: https://github.com/ideviewer/ideviewer
     # Create systemd service
     service = """[Unit]
 Description=IDE Viewer Daemon
-Documentation=https://github.com/ideviewer/ideviewer
+Documentation=https://github.com/securient/ideviewer-oss
 After=network-online.target
 Wants=network-online.target
 
