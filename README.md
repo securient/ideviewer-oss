@@ -18,7 +18,6 @@ Download the latest release for your platform from the [Releases](https://github
 | Platform | File |
 |----------|------|
 | macOS (Apple Silicon) | `IDEViewer-*-arm64.pkg` |
-| macOS (Intel) | `IDEViewer-*-x64.pkg` |
 | Windows (64-bit) | `IDEViewer-Setup-*.exe` |
 | Linux (amd64) | `ideviewer_*_amd64.deb` |
 | Linux (arm64) | `ideviewer_*_arm64.deb` |

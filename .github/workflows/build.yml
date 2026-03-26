@@ -197,43 +197,9 @@ jobs:
           path: dist/IDEViewer-*.pkg
 
   # ===========================================
-  # macOS x64 (Intel)
+  # NOTE: macOS x64 (Intel) builds are not included because GitHub has
+  # deprecated free Intel macOS runners. Intel Mac users can build from source.
   # ===========================================
-  macos-x64:
-    needs: [version]
-    runs-on: macos-13-large  # Intel runner (x64)
-    name: macOS x64
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Set up Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: 'pip'
-
-      - name: Build .pkg installer
-        run: |
-          chmod +x build_scripts/build_macos.sh
-          APP_VERSION=${{ needs.version.outputs.app_version }} ./build_scripts/build_macos.sh
-
-      - name: Rename with architecture
-        run: |
-          PKG_FILE=$(ls dist/IDEViewer-*.pkg 2>/dev/null | head -1)
-          if [ -n "$PKG_FILE" ]; then
-            mv "$PKG_FILE" "dist/IDEViewer-${{ needs.version.outputs.app_version }}-x64.pkg"
-          else
-            echo "ERROR: No .pkg file found in dist/"
-            exit 1
-          fi
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: macos-x64-installer
-          path: dist/IDEViewer-*.pkg
 
   # ===========================================
   # Portal Docker Image (Multi-arch)
@@ -293,9 +259,9 @@ jobs:
   # Create Release (on tags)
   # ===========================================
   release:
-    needs: [windows-amd64, linux-amd64, linux-arm64, macos-arm64, macos-x64, portal-container]
+    needs: [windows-amd64, linux-amd64, linux-arm64, macos-arm64, portal-container]
     # Portal container is best-effort — don't block release if it fails
-    if: ${{ always() && startsWith(github.ref, 'refs/tags/v') && !contains(needs.windows-amd64.result, 'failure') && !contains(needs.linux-amd64.result, 'failure') && !contains(needs.linux-arm64.result, 'failure') && !contains(needs.macos-arm64.result, 'failure') && !contains(needs.macos-x64.result, 'failure') }}
+    if: ${{ always() && startsWith(github.ref, 'refs/tags/v') && !contains(needs.windows-amd64.result, 'failure') && !contains(needs.linux-amd64.result, 'failure') && !contains(needs.linux-arm64.result, 'failure') && !contains(needs.macos-arm64.result, 'failure') }}
     runs-on: ubuntu-latest
 
     permissions:
