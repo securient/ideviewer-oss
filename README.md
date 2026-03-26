@@ -24,14 +24,74 @@ Download the latest release for your platform from the [Releases](https://github
 
 After installing, `ideviewer` is available in your terminal.
 
+#### macOS: Bypass Gatekeeper
+
+The `.pkg` installer is not yet signed with an Apple Developer certificate, so macOS will show "Apple could not verify" when you try to open it. To install:
+
+**Option 1 — Right-click method:**
+1. Right-click (or Control-click) the `.pkg` file
+2. Select **Open**
+3. Click **Open** in the dialog that appears
+
+**Option 2 — Terminal:**
+```bash
+# Remove the quarantine attribute, then install normally
+sudo xattr -rd com.apple.quarantine IDEViewer-*-arm64.pkg
+```
+
+**Option 3 — System Settings:**
+1. Double-click the `.pkg` (it will be blocked)
+2. Go to **System Settings > Privacy & Security**
+3. Scroll down — you'll see a message about the blocked installer
+4. Click **Open Anyway**
+
+#### Windows
+
+Run `IDEViewer-Setup-*.exe` and follow the installer wizard. The installer will optionally add `ideviewer` to your system PATH.
+
+#### Linux (Debian/Ubuntu)
+
+```bash
+sudo dpkg -i ideviewer_*_amd64.deb    # or _arm64.deb
+```
+
 ### Option B: Install from Source
+
+Requires Python 3.8+ on all platforms.
+
+#### macOS / Linux
 
 ```bash
 git clone https://github.com/securient/ideviewer-oss.git
 cd ideviewer-oss
-python -m venv venv
-source venv/bin/activate    # On Windows: venv\Scripts\activate
+python3 -m venv venv
+source venv/bin/activate
 pip install -e .
+
+# Verify
+ideviewer --version
+ideviewer scan
+```
+
+#### Windows
+
+```powershell
+git clone https://github.com/securient/ideviewer-oss.git
+cd ideviewer-oss
+python -m venv venv
+venv\Scripts\activate
+pip install -e .
+
+# Verify
+ideviewer --version
+ideviewer scan
+```
+
+#### Windows (with pywin32 for full registry detection)
+
+```powershell
+pip install -e .
+pip install pywin32
 ```
 
 ## Using the Scanner (Standalone)
@@ -221,19 +281,66 @@ ideviewer secrets --output-sarif > secrets.sarif
 
 ## Building Installers from Source
 
+### macOS (.pkg)
+
+Requires Xcode Command Line Tools (`xcode-select --install`).
+
 ```bash
-# macOS (.pkg)
 pip install pyinstaller
 ./build_scripts/build_macos.sh
+# Output: dist/IDEViewer-0.1.0.pkg
 
-# Linux (.deb) via Docker
-./build_scripts/build_linux_docker.sh          # amd64
-./build_scripts/build_linux_docker.sh arm64    # arm64
+# Install
+sudo installer -pkg dist/IDEViewer-0.1.0.pkg -target /
 
-# Windows (.exe) — requires Inno Setup
+# Uninstall
+sudo ideviewer-uninstall
+```
+
+### Windows (.exe installer)
+
+Requires [Inno Setup 6](https://jrsoftware.org/isinfo.php) and Python 3.8+.
+
+```powershell
 pip install pyinstaller pywin32
 pyinstaller --clean --noconfirm ideviewer.spec
-# Then compile build_scripts/windows_installer.iss with Inno Setup
+
+# Then open build_scripts\windows_installer.iss in Inno Setup and compile,
+# or from the command line:
+& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" build_scripts\windows_installer.iss
+# Output: dist\IDEViewer-Setup-0.1.0.exe
+```
+
+Uninstall via **Settings > Apps > IDE Viewer > Uninstall**.
+
+### Linux (.deb via Docker)
+
+Requires Docker. Works from any host OS (macOS, Windows, Linux).
+
+```bash
+./build_scripts/build_linux_docker.sh          # amd64
+./build_scripts/build_linux_docker.sh arm64    # arm64 (uses QEMU if on x64 host)
+# Output: dist/ideviewer_0.1.0_amd64.deb (or _arm64.deb)
+
+# Install
+sudo dpkg -i dist/ideviewer_0.1.0_amd64.deb
+
+# Enable as a systemd service (optional)
+sudo systemctl enable ideviewer
+sudo systemctl start ideviewer
+
+# Uninstall
+sudo dpkg -r ideviewer          # keep config
+sudo dpkg -P ideviewer          # remove config + logs too
+```
+
+### Linux (.deb without Docker)
+
+Requires `dpkg-deb` (standard on Debian/Ubuntu).
+
+```bash
+pip install pyinstaller
+./build_scripts/build_debian.sh
 ```
 
 ### Automated Builds via GitHub Actions
@@ -261,6 +368,27 @@ docker build -t ideviewer-portal ./portal
 ```
 
 See [portal/README.md](portal/README.md) for detailed deployment instructions (Google Cloud Run, AWS ECS, etc).
+
+## Uninstalling
+
+### macOS
+
+```bash
+sudo ideviewer-uninstall
+```
+
+This stops the daemon, removes the binary, LaunchDaemon, logs, and the package receipt.
+
+### Windows
+
+Uninstall via **Settings > Apps > IDE Viewer > Uninstall**. This stops the daemon, removes the binary, and cleans up PATH.
+
+### Linux
+
+```bash
+sudo dpkg -r ideviewer          # remove, keep config
+sudo dpkg -P ideviewer          # purge config + logs too
+```
 
 ## Free vs Enterprise
 
