@@ -11,9 +11,11 @@
 
 FROM python:3.10-slim-bookworm
 
-# Detect architecture
+# Detect architecture and version
 ARG TARGETARCH
+ARG APP_VERSION=0.1.0
 ENV TARGETARCH=${TARGETARCH:-amd64}
+ENV APP_VERSION=${APP_VERSION}
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -37,12 +39,12 @@ RUN python -m venv /venv && \
 RUN /venv/bin/pyinstaller --clean --noconfirm ideviewer.spec
 
 # Create package structure using the build script (pass architecture)
-RUN python build_scripts/build_deb_package.py --arch ${TARGETARCH}
+RUN APP_VERSION=${APP_VERSION} python build_scripts/build_deb_package.py --arch ${TARGETARCH}
 
 # Build the .deb package
 RUN dpkg-deb --build --root-owner-group \
-    /build/build/deb/ideviewer_0.1.0_${TARGETARCH} \
-    /build/dist/ideviewer_0.1.0_${TARGETARCH}.deb
+    /build/build/deb/ideviewer_${APP_VERSION}_${TARGETARCH} \
+    /build/dist/ideviewer_${APP_VERSION}_${TARGETARCH}.deb
 
 # Verify the build
 RUN ls -la /build/dist/

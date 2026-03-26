@@ -5,9 +5,13 @@
 ;
 
 #define MyAppName "IDE Viewer"
-#define MyAppVersion "0.1.0"
-#define MyAppPublisher "IDE Viewer Team"
-#define MyAppURL "https://github.com/ideviewer/ideviewer"
+#ifndef APP_VERSION
+  #define MyAppVersion "0.1.0"
+#else
+  #define MyAppVersion APP_VERSION
+#endif
+#define MyAppPublisher "Securient"
+#define MyAppURL "https://github.com/securient/ideviewer-oss"
 #define MyAppExeName "ideviewer.exe"
 
 [Setup]
@@ -89,9 +93,31 @@ begin
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  Path: string;
+  AppDir: string;
+  P: Integer;
 begin
   if CurUninstallStep = usUninstall then
   begin
     NotifyPortalOfUninstall();
+  end;
+
+  if CurUninstallStep = usPostUninstall then
+  begin
+    if RegQueryStringValue(HKEY_LOCAL_MACHINE,
+      'SYSTEM\CurrentControlSet\Control\Session Manager\Environment',
+      'Path', Path) then
+    begin
+      AppDir := ExpandConstant('{app}');
+      P := Pos(';' + AppDir, Path);
+      if P > 0 then
+      begin
+        Delete(Path, P, Length(';' + AppDir));
+        RegWriteStringValue(HKEY_LOCAL_MACHINE,
+          'SYSTEM\CurrentControlSet\Control\Session Manager\Environment',
+          'Path', Path);
+      end;
+    end;
   end;
 end;

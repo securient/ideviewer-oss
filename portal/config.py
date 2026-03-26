@@ -26,6 +26,9 @@ class Config:
     
     # API settings
     API_RATE_LIMIT = 100  # requests per minute
+
+    # Free tier limits
+    FREE_TIER_HOST_LIMIT = 5
     
     # Google OAuth settings
     # Get these from: https://console.cloud.google.com/apis/credentials

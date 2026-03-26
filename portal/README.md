@@ -91,4 +91,4 @@ docker push ACCOUNT.dkr.ecr.REGION.amazonaws.com/ideviewer-portal:latest
 
 ## License
 
-PolyForm Noncommercial License 1.0.0
+Apache License 2.0 — Copyright 2024-2026 Securient

@@ -10,15 +10,17 @@ Build commands:
 import sys
 from pathlib import Path
 
-block_cipher = None
-
 # Determine platform-specific settings
 is_windows = sys.platform == 'win32'
 is_macos = sys.platform == 'darwin'
 
+# Read version from pyproject.toml (single source of truth)
+import tomllib
+with open('pyproject.toml', 'rb') as f:
+    APP_VERSION = tomllib.load(f)['project']['version']
+
 # Application metadata
 APP_NAME = 'IDEViewer'
-APP_VERSION = '0.1.0'
 APP_BUNDLE_ID = 'com.ideviewer.daemon'
 
 # Collect all detector modules
@@ -60,11 +62,10 @@ a = Analysis(
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
-    cipher=block_cipher,
     noarchive=False,
 )
 
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+pyz = PYZ(a.pure, a.zipped_data)
 
 exe = EXE(
     pyz,

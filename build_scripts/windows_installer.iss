@@ -8,9 +8,13 @@
 ;
 
 #define MyAppName "IDE Viewer"
-#define MyAppVersion "0.1.0"
-#define MyAppPublisher "IDE Viewer Team"
-#define MyAppURL "https://github.com/ideviewer/ideviewer"
+#ifndef APP_VERSION
+  #define MyAppVersion "0.1.0"
+#else
+  #define MyAppVersion APP_VERSION
+#endif
+#define MyAppPublisher "Securient"
+#define MyAppURL "https://github.com/securient/ideviewer-oss"
 #define MyAppExeName "ideviewer.exe"
 
 [Setup]

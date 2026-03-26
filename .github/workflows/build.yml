@@ -2,12 +2,15 @@
 #
 # Builds:
 #   - Windows AMD64 (.exe installer)
-#   - Windows ARM64 (.exe installer)
 #   - Linux AMD64 (.deb package)
 #   - Linux ARM64 (.deb package)
 #   - macOS ARM64 (.pkg installer)
+#   - macOS x64 (.pkg installer)
 #   - Portal Docker image (multi-arch)
 #
+# Note: Windows ARM64 is not built because GitHub-hosted runners are x64-only,
+# and PyInstaller cannot cross-compile to ARM64. This target will be added
+# when GitHub provides ARM64 Windows runners.
 
 name: Build & Release
 
@@ -19,153 +22,137 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Restrict default permissions — grant per-job as needed
+permissions: read-all
+
 env:
-  APP_VERSION: '0.1.0'
   PYTHON_VERSION: '3.10'
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}-portal
 
 jobs:
   # ===========================================
+  # Read version from pyproject.toml
+  # ===========================================
+  version:
+    runs-on: ubuntu-latest
+    name: Read Version
+    outputs:
+      app_version: ${{ steps.get_version.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Extract version from pyproject.toml
+        id: get_version
+        run: |
+          VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Detected version: $VERSION"
+
+  # ===========================================
   # Windows AMD64
   # ===========================================
   windows-amd64:
+    needs: [version]
     runs-on: windows-latest
     name: Windows AMD64
-    
+
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
-      
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           architecture: x64
-      
+          cache: 'pip'
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -e .
           pip install pyinstaller pywin32
-      
+
       - name: Build executable
         run: pyinstaller --clean --noconfirm ideviewer.spec
-      
+
       - name: Install Inno Setup
         run: choco install innosetup -y
-      
+
       - name: Build installer
         run: |
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" build_scripts\windows_installer.iss
-      
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAPP_VERSION=${{ needs.version.outputs.app_version }}" build_scripts\windows_installer.iss
+
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-amd64-installer
           path: dist/IDEViewer-Setup-*.exe
 
   # ===========================================
-  # Windows ARM64
-  # ===========================================
-  windows-arm64:
-    runs-on: windows-latest
-    name: Windows ARM64
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-      
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e .
-          pip install pyinstaller pywin32
-      
-      - name: Build executable
-        run: pyinstaller --clean --noconfirm ideviewer.spec
-      
-      - name: Install Inno Setup
-        run: choco install innosetup -y
-      
-      - name: Build ARM64 installer
-        run: |
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" build_scripts\windows_installer_arm64.iss
-      
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-arm64-installer
-          path: dist/IDEViewer-Setup-*-arm64.exe
-
-  # ===========================================
   # Linux AMD64
   # ===========================================
   linux-amd64:
+    needs: [version]
     runs-on: ubuntu-latest
     name: Linux AMD64
-    
+
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
-      
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
       - name: Build .deb package
         run: |
           mkdir -p dist
           docker buildx build \
             --platform linux/amd64 \
+            --build-arg APP_VERSION=${{ needs.version.outputs.app_version }} \
             -f build_scripts/Dockerfile.linux \
             -t ideviewer-builder-amd64 \
             --load \
             .
           docker run --rm -v $(pwd)/dist:/output ideviewer-builder-amd64
-      
+
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: linux-amd64-installer
           path: dist/ideviewer_*_amd64.deb
 
   # ===========================================
-  # Linux ARM64
+  # Linux ARM64 (native runner — no QEMU)
   # ===========================================
   linux-arm64:
-    runs-on: ubuntu-latest
+    needs: [version]
+    runs-on: ubuntu-24.04-arm
     name: Linux ARM64
-    
+
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
-      
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-      
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
       - name: Build .deb package
         run: |
           mkdir -p dist
           docker buildx build \
             --platform linux/arm64 \
+            --build-arg APP_VERSION=${{ needs.version.outputs.app_version }} \
             -f build_scripts/Dockerfile.linux \
             -t ideviewer-builder-arm64 \
             --load \
             .
           docker run --rm -v $(pwd)/dist:/output ideviewer-builder-arm64
-      
+
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: linux-arm64-installer
           path: dist/ideviewer_*_arm64.deb
@@ -174,40 +161,78 @@ jobs:
   # macOS ARM64
   # ===========================================
   macos-arm64:
+    needs: [version]
     runs-on: macos-14  # M1 runner (ARM64)
     name: macOS ARM64
-    
+
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
-      
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e .
-          pip install pyinstaller
-      
-      - name: Build executable
-        run: pyinstaller --clean --noconfirm ideviewer.spec
-      
+          cache: 'pip'
+
       - name: Build .pkg installer
         run: |
           chmod +x build_scripts/build_macos.sh
-          ./build_scripts/build_macos.sh
-      
+          APP_VERSION=${{ needs.version.outputs.app_version }} ./build_scripts/build_macos.sh
+
       - name: Rename with architecture
         run: |
-          mv dist/IDEViewer-*.pkg dist/IDEViewer-${{ env.APP_VERSION }}-arm64.pkg || true
-      
+          PKG_FILE=$(ls dist/IDEViewer-*.pkg 2>/dev/null | head -1)
+          if [ -n "$PKG_FILE" ]; then
+            mv "$PKG_FILE" "dist/IDEViewer-${{ needs.version.outputs.app_version }}-arm64.pkg"
+          else
+            echo "ERROR: No .pkg file found in dist/"
+            exit 1
+          fi
+
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: macos-arm64-installer
+          path: dist/IDEViewer-*.pkg
+
+  # ===========================================
+  # macOS x64 (Intel)
+  # ===========================================
+  macos-x64:
+    needs: [version]
+    runs-on: macos-13  # Intel runner (x64)
+    name: macOS x64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Build .pkg installer
+        run: |
+          chmod +x build_scripts/build_macos.sh
+          APP_VERSION=${{ needs.version.outputs.app_version }} ./build_scripts/build_macos.sh
+
+      - name: Rename with architecture
+        run: |
+          PKG_FILE=$(ls dist/IDEViewer-*.pkg 2>/dev/null | head -1)
+          if [ -n "$PKG_FILE" ]; then
+            mv "$PKG_FILE" "dist/IDEViewer-${{ needs.version.outputs.app_version }}-x64.pkg"
+          else
+            echo "ERROR: No .pkg file found in dist/"
+            exit 1
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: macos-x64-installer
           path: dist/IDEViewer-*.pkg
 
   # ===========================================
@@ -216,32 +241,32 @@ jobs:
   portal-container:
     runs-on: ubuntu-latest
     name: Portal Container
-    
+
     permissions:
       contents: read
       packages: write
-    
+
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
-      
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-      
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
       - name: Log in to Container Registry
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      
+
       - name: Extract metadata for Docker
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
@@ -251,9 +276,9 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix=
             type=raw,value=latest,enable={{is_default_branch}}
-      
+
       - name: Build and push Docker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
         with:
           context: ./portal
           file: ./portal/Dockerfile
@@ -268,24 +293,25 @@ jobs:
   # Create Release (on tags)
   # ===========================================
   release:
-    needs: [windows-amd64, windows-arm64, linux-amd64, linux-arm64, macos-arm64, portal-container]
+    needs: [windows-amd64, linux-amd64, linux-arm64, macos-arm64, macos-x64, portal-container]
+    # Portal container is best-effort — don't block release if it fails
+    if: ${{ always() && startsWith(github.ref, 'refs/tags/v') && !contains(needs.windows-amd64.result, 'failure') && !contains(needs.linux-amd64.result, 'failure') && !contains(needs.linux-arm64.result, 'failure') && !contains(needs.macos-arm64.result, 'failure') && !contains(needs.macos-x64.result, 'failure') }}
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
-    
+
     permissions:
       contents: write
-    
+
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: artifacts
-      
+
       - name: List artifacts
         run: find artifacts -type f -ls
-      
+
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2
         with:
           files: |
             artifacts/**/*.exe
@@ -295,7 +321,7 @@ jobs:
           generate_release_notes: true
           body: |
             ## Portal Container
-            
+
             Pull the portal container:
             ```bash
             docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}

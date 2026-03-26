@@ -24,6 +24,7 @@ try:
     from .api_client import APIClient, APIError
     from .secrets_scanner import SecretsScanner
     from .dependency_scanner import DependencyScanner
+    from .sarif_formatter import scan_result_to_sarif, secrets_result_to_sarif, to_sarif_json
 except ImportError:
     # Direct execution - add parent to path
     sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -34,6 +35,7 @@ except ImportError:
     from ideviewer.api_client import APIClient, APIError
     from ideviewer.secrets_scanner import SecretsScanner
     from ideviewer.dependency_scanner import DependencyScanner
+    from ideviewer.sarif_formatter import scan_result_to_sarif, secrets_result_to_sarif, to_sarif_json
 
 
 console = Console()
@@ -102,18 +104,19 @@ def send_to_portal(scan_data: dict, secrets_data: dict = None, deps_data: dict =
 
 @cli.command()
 @click.option("--json", "output_json", is_flag=True, help="Output as JSON")
+@click.option("--output-sarif", is_flag=True, help="Output in SARIF v2.1.0 format")
 @click.option("--output", "-o", type=click.Path(), help="Output file path")
 @click.option("--ide", "-i", multiple=True, help="Filter by IDE type (can be used multiple times)")
 @click.option("--portal", is_flag=True, help="Send results to the portal")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
-def scan(output_json: bool, output: Optional[str], ide: tuple, portal: bool, verbose: bool):
+def scan(output_json: bool, output_sarif: bool, output: Optional[str], ide: tuple, portal: bool, verbose: bool):
     """Scan for installed IDEs and their extensions."""
     setup_logging(verbose)
-    
+
     with console.status("[bold cyan]Scanning for IDEs...[/]"):
         scanner = IDEScanner()
         result = scanner.scan(list(ide) if ide else None)
-    
+
     # Also run secrets and dependency scans if sending to portal
     secrets_result = None
     deps_result = None
@@ -121,14 +124,22 @@ def scan(output_json: bool, output: Optional[str], ide: tuple, portal: bool, ver
         with console.status("[bold cyan]Scanning for secrets...[/]"):
             secrets_scanner = SecretsScanner()
             secrets_result = secrets_scanner.scan()
-        
+
         with console.status("[bold cyan]Scanning for packages...[/]"):
             dep_scanner = DependencyScanner()
             deps_result = dep_scanner.scan()
-    
-    if output_json or output:
+
+    if output_sarif:
+        sarif_data = scan_result_to_sarif(result.to_dict(), version=__version__)
+        sarif_output = to_sarif_json(sarif_data)
+        if output:
+            Path(output).write_text(sarif_output)
+            console.print(f"[green]SARIF results written to {output}[/]")
+        else:
+            print(sarif_output)
+    elif output_json or output:
         output_data = json.dumps(result.to_dict(), indent=2, default=str)
-        
+
         if output:
             Path(output).write_text(output_data)
             console.print(f"[green]Results written to {output}[/]")
@@ -136,7 +147,7 @@ def scan(output_json: bool, output: Optional[str], ide: tuple, portal: bool, ver
             print(output_data)
     else:
         display_scan_result(result)
-    
+
     # Send to portal if requested
     if portal:
         console.print()
@@ -209,9 +220,10 @@ def dangerous(verbose: bool):
 
 @cli.command()
 @click.option("--json", "output_json", is_flag=True, help="Output as JSON")
+@click.option("--output-sarif", is_flag=True, help="Output in SARIF v2.1.0 format")
 @click.option("--portal", is_flag=True, help="Send results to the portal")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
-def secrets(output_json: bool, portal: bool, verbose: bool):
+def secrets(output_json: bool, output_sarif: bool, portal: bool, verbose: bool):
     """Scan for plaintext secrets (wallet keys, API keys) in configuration files.
     
     This command scans .env files and similar configuration files for
@@ -238,7 +250,10 @@ def secrets(output_json: bool, portal: bool, verbose: bool):
             dep_scanner = DependencyScanner()
             deps_result = dep_scanner.scan()
     
-    if output_json:
+    if output_sarif:
+        sarif_data = secrets_result_to_sarif(result.to_dict(), version=__version__)
+        print(to_sarif_json(sarif_data))
+    elif output_json:
         print(json.dumps(result.to_dict(), indent=2))
     else:
         if result.findings:

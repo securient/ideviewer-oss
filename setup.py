@@ -28,7 +28,7 @@ setup(
     description="Cross-platform IDE and Extension Scanner Daemon",
     long_description=readme,
     long_description_content_type="text/markdown",
-    license="PolyForm Noncommercial 1.0.0",
+    license="Apache-2.0",
     packages=find_packages(),
     python_requires=">=3.8",
     install_requires=[
@@ -53,7 +53,7 @@ setup(
         "Environment :: Console",
         "Intended Audience :: Developers",
         "Intended Audience :: System Administrators",
-        "License :: Other/Proprietary License",
+        "License :: OSI Approved :: Apache Software License",
         "Operating System :: OS Independent",
         "Programming Language :: Python :: 3",
         "Programming Language :: Python :: 3.8",

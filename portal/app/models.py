@@ -95,7 +95,7 @@ class CustomerKey(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     last_used_at = db.Column(db.DateTime)
     is_active = db.Column(db.Boolean, default=True)
-    max_hosts = db.Column(db.Integer, default=10)  # Max hosts allowed for this key
+    max_hosts = db.Column(db.Integer, default=5)  # Max hosts allowed for this key (free tier: 5)
     
     # Relationships
     hosts = db.relationship('Host', backref='customer_key', lazy='dynamic')

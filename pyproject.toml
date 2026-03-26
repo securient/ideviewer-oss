@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Cross-platform IDE and Extension Scanner Daemon"
 readme = "README.md"
 requires-python = ">=3.8"
-license = {text = "PolyForm Noncommercial 1.0.0"}
+license = {text = "Apache-2.0"}
 authors = [
     {name = "Securient"}
 ]
@@ -18,7 +18,7 @@ classifiers = [
     "Environment :: Console",
     "Intended Audience :: Developers",
     "Intended Audience :: System Administrators",
-    "License :: Other/Proprietary License",
+    "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.8",

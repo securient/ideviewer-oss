@@ -1,0 +1,34 @@
+# Version control
+.git
+.github
+
+# Python virtual environments
+venv/
+.venv/
+portal/venv/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Portal (not needed for daemon builds)
+portal/venv/
+portal/__pycache__/
+
+# Tests
+tests/
+
+# Byte-compiled files
+__pycache__/
+*.py[cod]

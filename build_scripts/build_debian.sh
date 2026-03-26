@@ -18,8 +18,8 @@ set -e
 
 # Configuration
 APP_NAME="ideviewer"
-APP_VERSION="0.1.0"
-ARCHITECTURE="amd64"
+APP_VERSION="${APP_VERSION:-0.1.0}"
+ARCHITECTURE="${1:-$(dpkg --print-architecture 2>/dev/null || uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/')}"
 MAINTAINER="IDE Viewer Team <support@ideviewer.com>"
 DESCRIPTION="Cross-platform IDE and Extension Scanner daemon"
 
@@ -96,7 +96,7 @@ Description: $DESCRIPTION
   - Scans extensions for permissions and capabilities
   - Identifies potentially dangerous extensions
   - Reports to centralized portal for monitoring
-Homepage: https://github.com/ideviewer/ideviewer
+Homepage: https://github.com/securient/ideviewer-oss
 EOF
 
 # Create conffiles (config files that should be preserved during upgrade)
@@ -119,7 +119,7 @@ chmod 644 "$PACKAGE_DIR/etc/ideviewer/config.json"
 cat > "$PACKAGE_DIR/lib/systemd/system/ideviewer.service" << EOF
 [Unit]
 Description=IDE Viewer Daemon
-Documentation=https://github.com/ideviewer/ideviewer
+Documentation=https://github.com/securient/ideviewer-oss
 After=network-online.target
 Wants=network-online.target
 

@@ -1,125 +1,170 @@
 # IDEViewer
 
-A cross-platform security tool that discovers installed IDEs, analyzes their extensions for security risks, detects plaintext secrets, inventories software dependencies, and reports findings to a centralized portal.
+A cross-platform security scanner that discovers installed IDEs, analyzes their extensions for security risks, detects plaintext secrets, and inventories software dependencies. Results can be viewed locally or reported to a centralized portal for team-wide visibility.
 
-## Features
+## Getting Started
 
-### Daemon (Agent)
-- **IDE Detection** — Discovers VS Code, Cursor, VSCodium, JetBrains IDEs, Sublime Text, Vim/Neovim, and Xcode
-- **Extension Analysis** — Extracts metadata, permissions, and assigns risk levels (critical, high, medium, low)
-- **Secrets Detection** — Scans `.env` files for plaintext Ethereum private keys, mnemonic phrases, and AWS credentials (never transmits actual secret values)
-- **Dependency Inventory** — Catalogs installed packages across pip, npm, Go, Cargo, Gem, Homebrew, and Composer
-- **npm Lifecycle Hooks** — Flags npm packages with `preinstall`/`postinstall` hooks and shows the exact commands they execute
-- **Heartbeat Monitoring** — Sends periodic heartbeats to the portal so admins know the agent is alive
-- **Tamper Detection** — Monitors its own critical files for modification/deletion and alerts the portal
-- **On-Demand Scanning** — Responds to admin-triggered scans from the portal with live progress reporting
+There are two components:
 
-### Portal (Dashboard)
-- **Centralized Dashboard** — View all registered hosts and their security posture at a glance
-- **Host Detail** — Tabbed view with Extensions, Packages, and Secrets for each host
-- **Extension Marketplace Integration** — Pull details from VS Code, JetBrains, and Open VSX marketplaces
-- **Package Search** — Search for any package and see which hosts have it installed, with CSV export
-- **Missing Host Alerts** — Warns when hosts stop reporting (offline/uninstalled)
-- **Tamper Alerts** — Alerts when daemon files are modified, deleted, or the daemon is stopped
-- **On-Demand Scans** — Trigger scans from the portal with live log output
-- **Google OAuth** — Optional Google login alongside email/password authentication
-- **Customer Keys** — UUID-based API keys for daemon authentication with configurable host limits
+- **Scanner (CLI)** — runs on each developer machine, scans locally
+- **Portal (Web Dashboard)** — optional centralized server that collects reports from scanners
 
-## Quick Start
+You can use the scanner standalone (no portal needed) or connect it to a portal for team monitoring.
 
-### Portal
+### Option A: Download a Pre-built Binary
+
+Download the latest release for your platform from the [Releases](https://github.com/securient/ideviewer-oss/releases) page:
+
+| Platform | File |
+|----------|------|
+| macOS (Apple Silicon) | `IDEViewer-*-arm64.pkg` |
+| macOS (Intel) | `IDEViewer-*-x64.pkg` |
+| Windows (64-bit) | `IDEViewer-Setup-*.exe` |
+| Linux (amd64) | `ideviewer_*_amd64.deb` |
+| Linux (arm64) | `ideviewer_*_arm64.deb` |
+
+After installing, `ideviewer` is available in your terminal.
+
+### Option B: Install from Source
+
+```bash
+git clone https://github.com/securient/ideviewer-oss.git
+cd ideviewer-oss
+python -m venv venv
+source venv/bin/activate    # On Windows: venv\Scripts\activate
+pip install -e .
+```
+
+## Using the Scanner (Standalone)
+
+No portal or account required. Just run:
+
+```bash
+# Scan for IDEs and their extensions
+ideviewer scan
+
+# Scan a specific IDE
+ideviewer scan --ide vscode
+
+# Output as JSON
+ideviewer scan --json
+
+# Output in SARIF format (for GitHub Code Scanning / CI integration)
+ideviewer scan --output-sarif
+
+# Save SARIF to a file
+ideviewer scan --output-sarif -o results.sarif
+```
+
+### Scan for Secrets
+
+Detects plaintext secrets in `.env` files (Ethereum keys, mnemonic phrases, AWS credentials). **Never transmits actual secret values** — only reports type and location.
+
+```bash
+ideviewer secrets
+ideviewer secrets --json
+ideviewer secrets --output-sarif
+```
+
+### Scan for Packages
+
+Inventories installed packages across pip, npm, Go, Cargo, Gem, Homebrew, and Composer.
+
+```bash
+ideviewer packages
+ideviewer packages --json
+```
+
+### Other Commands
+
+```bash
+ideviewer stats         # Summary statistics
+ideviewer dangerous     # List extensions with dangerous permissions
+ideviewer --version     # Show version
+```
+
+## Setting Up the Portal
+
+The portal gives you a web dashboard to monitor multiple machines. It's optional — the scanner works fine without it.
+
+### Quick Start (SQLite — good for trying it out)
 
 ```bash
 cd portal
 python -m venv venv
-source venv/bin/activate
+source venv/bin/activate    # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 flask run
 ```
 
-Access at http://localhost:5000. Create an account, then generate a customer key.
+Open http://localhost:5000 in your browser.
 
-### Daemon
+### Docker Compose (PostgreSQL — recommended for ongoing use)
 
 ```bash
-python -m venv venv
-source venv/bin/activate
-pip install -e .
-
-# Register with the portal
-ideviewer register \
-  --customer-key YOUR-KEY \
-  --portal-url http://localhost:5000 \
-  --interval 15
-
-# Run in foreground
-ideviewer daemon --foreground --verbose
+cd portal
+docker-compose up -d
 ```
 
-## CLI Commands
+Open http://localhost:8080 in your browser.
 
-### `ideviewer scan`
+### First-Time Portal Setup
 
-Scan for installed IDEs and their extensions.
+1. Open the portal in your browser
+2. Click **Register** to create an account
+3. Log in and go to **Customer Keys**
+4. Click **Create Key** — copy the UUID key that's generated
 
-```bash
-ideviewer scan                     # Pretty-printed output
-ideviewer scan --output-json       # JSON output
-ideviewer scan --ide vscode        # Scan specific IDE
-ideviewer scan --portal            # Send results to portal
-```
+You'll use this key to connect scanners to the portal.
 
-### `ideviewer secrets`
+## Connecting the Scanner to the Portal
 
-Scan for plaintext secrets in `.env` files.
+Once you have a portal running and a customer key:
 
 ```bash
-ideviewer secrets                  # Local scan
-ideviewer secrets --portal         # Send results to portal
-```
-
-### `ideviewer packages`
-
-Inventory installed packages across all package managers.
-
-```bash
-ideviewer packages                 # Local scan
-ideviewer packages --portal        # Send results to portal
-```
-
-### `ideviewer daemon`
-
-Start the daemon for continuous monitoring.
-
-```bash
-ideviewer daemon --foreground                  # Run in foreground
-ideviewer daemon --foreground --interval 15    # Custom interval (minutes)
-ideviewer daemon --foreground --verbose        # Verbose logging
-ideviewer daemon --log-file ~/ideviewer.log    # Log to file
-```
-
-### `ideviewer register`
-
-Register this machine with the portal.
-
-```bash
+# Step 1: Register this machine with the portal
 ideviewer register \
   --customer-key YOUR-UUID-KEY \
-  --portal-url https://portal.example.com \
-  --interval 15
+  --portal-url http://localhost:5000
+
+# Step 2: Start the daemon for continuous monitoring
+ideviewer daemon --foreground
 ```
 
-### `ideviewer stop`
+The daemon will:
+- Run scans at a regular interval (default: 60 minutes, configurable with `--interval`)
+- Send results to the portal automatically
+- Send heartbeats so the portal knows the machine is online
+- Monitor its own files for tampering
 
-Stop a running daemon.
+### Running One-Off Portal Reports
+
+If you don't want continuous monitoring, you can send a single report:
+
+```bash
+ideviewer scan --portal        # Scan IDEs + extensions and send to portal
+ideviewer secrets --portal     # Scan secrets and send to portal
+ideviewer packages --portal    # Scan packages and send to portal
+```
+
+### Stopping the Daemon
 
 ```bash
 ideviewer stop
 ```
 
+## What the Portal Shows
+
+- **Dashboard** — all registered machines and their security posture at a glance
+- **Host Detail** — tabbed view with Extensions, Packages, and Secrets for each machine
+- **Package Search** — search for any package across all machines (with CSV export)
+- **Marketplace Info** — extension details from VS Code, JetBrains, and Open VSX marketplaces
+- **Alerts** — warnings when machines go offline or daemon files are tampered with
+- **On-Demand Scans** — trigger a scan on any machine from the portal UI
+
 ## Supported IDEs
 
-| IDE | Extensions Location |
+| IDE | Detected Extensions |
 |-----|---------------------|
 | VS Code | `~/.vscode/extensions` |
 | Cursor | `~/.cursor/extensions` |
@@ -131,19 +176,11 @@ ideviewer stop
 
 ## Supported Package Managers
 
-| Language | Manager | Detection |
-|----------|---------|-----------|
-| Python | pip | `pip list --format=json` |
-| Node.js | npm | `npm list -g --json` + project `package.json` / `package-lock.json` |
-| Go | go | `~/go/bin` directory scan |
-| Rust | cargo | `cargo install --list` |
-| Ruby | gem | `gem list --local` |
-| PHP | composer | `composer.lock` parsing |
-| macOS | Homebrew | `brew list --formula/--cask --versions` |
+pip, npm, Go, Cargo, Gem, Composer, Homebrew
 
 ## Security Features
 
-### Risk Levels
+### Extension Risk Levels
 
 | Level | Meaning | Examples |
 |-------|---------|----------|
@@ -161,119 +198,92 @@ Detects but **never transmits** actual secret values:
 
 ### npm Lifecycle Hook Detection
 
-Flags npm packages with `preinstall`, `postinstall`, `install`, `preuninstall`, `postuninstall`, `prepare`, or `prepublish` hooks. Shows the exact commands these hooks execute to help identify supply chain risks.
+Flags npm packages with `preinstall`, `postinstall`, `prepare`, and other lifecycle hooks. Shows the exact commands they execute to help identify supply chain risks.
 
 ### Tamper Detection
 
-The daemon monitors its own critical files (binary, config, service files) and sends alerts to the portal if:
-- A file is deleted (possible uninstall attempt)
-- A file is modified (possible tampering)
-- The daemon receives a shutdown signal
+The daemon monitors its own files (binary, config, service files) and alerts the portal if anything is modified or deleted.
 
 ### Heartbeat Monitoring
 
 The daemon sends a heartbeat every 2 minutes. The portal shows:
-- **Green dot** — online (heartbeat within 5 minutes)
-- **Yellow dot** — idle (heartbeat within 30 minutes)
-- **Red dot** — offline (no heartbeat in 30+ minutes)
+- **Green** — online (heartbeat within 5 minutes)
+- **Yellow** — idle (heartbeat within 30 minutes)
+- **Red** — offline (no heartbeat in 30+ minutes)
 
-Missing hosts are highlighted in a warning banner on the dashboard.
+## SARIF Output
 
-## Portal Deployment
-
-### Docker Compose (Development)
+IDEViewer outputs [SARIF v2.1.0](https://sarifweb.azurewebsites.net/) for integration with GitHub Code Scanning, CodeQL, and other security tools.
 
 ```bash
-cd portal
-docker-compose up -d
+ideviewer scan --output-sarif > extensions.sarif
+ideviewer secrets --output-sarif > secrets.sarif
 ```
 
-### Production (Cloud Run / ECS)
+## Building Installers from Source
 
 ```bash
-# Build container
-docker build -t ideviewer-portal ./portal
-
-# Required environment variables
-SECRET_KEY=<random-secret>           # Required
-DATABASE_URL=postgresql://...        # Required
-PORTAL_URL=https://your-domain.com   # Recommended
-GOOGLE_CLIENT_ID=...                 # Optional (enables Google OAuth)
-GOOGLE_CLIENT_SECRET=...             # Optional
-```
-
-See `portal/README.md` for detailed deployment instructions.
-
-## Building Installers
-
-### macOS (.pkg)
-
-```bash
+# macOS (.pkg)
 pip install pyinstaller
-pyinstaller --clean --noconfirm ideviewer.spec
 ./build_scripts/build_macos.sh
+
+# Linux (.deb) via Docker
+./build_scripts/build_linux_docker.sh          # amd64
+./build_scripts/build_linux_docker.sh arm64    # arm64
+
+# Windows (.exe) — requires Inno Setup
+pip install pyinstaller pywin32
+pyinstaller --clean --noconfirm ideviewer.spec
+# Then compile build_scripts/windows_installer.iss with Inno Setup
 ```
 
-Requires `sudo` to install and uninstall.
+### Automated Builds via GitHub Actions
 
-### Windows (.exe)
-
-Requires Inno Setup. See `build_scripts/windows_installer.iss`.
-
-### Linux (.deb)
-
-```bash
-./build_scripts/build_linux_docker.sh
-```
-
-### GitHub Actions
-
-Push a tag to trigger automated builds for all platforms:
+Push a version tag to trigger builds for all platforms:
 
 ```bash
 git tag v0.1.0
 git push origin v0.1.0
 ```
 
-## Project Structure
+## Portal Deployment (Production)
 
+```bash
+docker build -t ideviewer-portal ./portal
+
+# Required environment variables:
+# SECRET_KEY=<random-secret>
+# DATABASE_URL=postgresql://user:pass@host:5432/ideviewer
+
+# Optional:
+# PORTAL_URL=https://your-domain.com
+# GOOGLE_CLIENT_ID=...          (enables Google OAuth)
+# GOOGLE_CLIENT_SECRET=...
 ```
-ideviewer/
-├── ideviewer/                  # Daemon package
-│   ├── cli.py                  # CLI interface (click + rich)
-│   ├── daemon.py               # Daemon process with heartbeat and tamper detection
-│   ├── scanner.py              # IDE scanner orchestrator
-│   ├── api_client.py           # Portal API client
-│   ├── secrets_scanner.py      # Plaintext secrets detector
-│   ├── dependency_scanner.py   # Package inventory scanner
-│   ├── models.py               # Data models (IDE, Extension, ScanResult)
-│   └── detectors/              # IDE-specific detectors
-│       ├── vscode.py           # VS Code, Cursor, VSCodium
-│       ├── jetbrains.py        # IntelliJ, PyCharm, WebStorm, etc.
-│       ├── sublime.py          # Sublime Text
-│       ├── vim.py              # Vim / Neovim
-│       └── xcode.py            # Xcode
-├── portal/                     # Web portal (Flask)
-│   ├── app/
-│   │   ├── api/routes.py       # API endpoints for daemon communication
-│   │   ├── auth/routes.py      # Authentication (email + Google OAuth)
-│   │   ├── main/routes.py      # Dashboard, host detail, search, package detail
-│   │   ├── models.py           # Database models
-│   │   ├── marketplace.py      # Extension marketplace integration
-│   │   └── templates/          # Jinja2 templates
-│   ├── config.py               # Flask configuration
-│   ├── Dockerfile              # Production container
-│   └── docker-compose.yml      # Local dev with PostgreSQL
-├── build_scripts/              # Platform-specific build scripts
-├── tests/                      # Test suite
-├── .github/workflows/build.yml # CI/CD for all platforms
-└── LICENSE                     # PolyForm Noncommercial 1.0.0
-```
+
+See [portal/README.md](portal/README.md) for detailed deployment instructions (Google Cloud Run, AWS ECS, etc).
+
+## Free vs Enterprise
+
+| Feature | Free (OSS) | Enterprise |
+|---------|-----------|------------|
+| IDE & extension scanning | Yes | Yes |
+| Secrets detection | Yes | Yes |
+| Dependency inventory | Yes | Yes |
+| SARIF output | Yes | Yes |
+| Self-hosted portal | Yes | Yes |
+| Max hosts per key | 5 | Unlimited |
+| SSO / SAML | — | Yes |
+| Priority support | — | Yes |
+
+For teams needing more, see [IDEViewer Enterprise](https://securient.io).
+
+## Contributing
+
+We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## License
 
-PolyForm Noncommercial License 1.0.0
-
-This software may not be used for commercial purposes without explicit authorization from Securient.
+Apache License 2.0 — Copyright 2024-2026 Securient
 
 See [LICENSE](LICENSE) for the full text.

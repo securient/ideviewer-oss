@@ -15,7 +15,7 @@ set -e
 
 # Configuration
 APP_NAME="IDEViewer"
-APP_VERSION="0.1.0"
+APP_VERSION="${APP_VERSION:-0.1.0}"
 BUNDLE_ID="com.ideviewer.daemon"
 INSTALL_LOCATION="/usr/local/bin"
 
@@ -31,38 +31,43 @@ echo "=== Building IDE Viewer for macOS ==="
 echo "Version: $APP_VERSION"
 echo ""
 
-# Clean previous builds
-echo "Cleaning previous builds..."
-rm -rf "$BUILD_DIR" "$DIST_DIR"
+# Clean previous build artifacts (but preserve dist/ if executable already exists)
+echo "Cleaning previous build artifacts..."
+rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR" "$DIST_DIR" "$PKG_DIR" "$SCRIPTS_DIR"
 
-# Create virtual environment if it doesn't exist
-if [ ! -d "$PROJECT_DIR/venv" ]; then
-    echo "Creating virtual environment..."
-    python3 -m venv "$PROJECT_DIR/venv"
+# Build executable if it doesn't already exist (CI may have built it already)
+if [ -f "$DIST_DIR/ideviewer" ]; then
+    echo "Executable already exists at $DIST_DIR/ideviewer, skipping build..."
+else
+    # Create virtual environment if it doesn't exist
+    if [ ! -d "$PROJECT_DIR/venv" ]; then
+        echo "Creating virtual environment..."
+        python3 -m venv "$PROJECT_DIR/venv"
+    fi
+
+    # Activate virtual environment
+    source "$PROJECT_DIR/venv/bin/activate"
+
+    # Install dependencies
+    echo "Installing dependencies..."
+    pip install --upgrade pip
+    pip install -e "$PROJECT_DIR"
+    pip install pyinstaller
+
+    # Build executable with PyInstaller
+    echo "Building executable with PyInstaller..."
+    cd "$PROJECT_DIR"
+    pyinstaller --clean --noconfirm ideviewer.spec
+
+    # Verify the executable was created
+    if [ ! -f "$DIST_DIR/ideviewer" ]; then
+        echo "ERROR: Executable not found at $DIST_DIR/ideviewer"
+        exit 1
+    fi
+
+    echo "Executable built successfully!"
 fi
-
-# Activate virtual environment
-source "$PROJECT_DIR/venv/bin/activate"
-
-# Install dependencies
-echo "Installing dependencies..."
-pip install --upgrade pip
-pip install -e "$PROJECT_DIR"
-pip install pyinstaller
-
-# Build executable with PyInstaller
-echo "Building executable with PyInstaller..."
-cd "$PROJECT_DIR"
-pyinstaller --clean --noconfirm ideviewer.spec
-
-# Verify the executable was created
-if [ ! -f "$DIST_DIR/ideviewer" ]; then
-    echo "ERROR: Executable not found at $DIST_DIR/ideviewer"
-    exit 1
-fi
-
-echo "Executable built successfully!"
 
 # Create package structure
 echo "Creating package structure..."
@@ -232,27 +237,21 @@ EOF
 
 # Create license text
 cat > "$PKG_DIR/license.txt" << EOF
-MIT License
+Apache License 2.0
 
-Copyright (c) 2024 IDE Viewer Team
+Copyright 2024-2026 Securient
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+    http://www.apache.org/licenses/LICENSE-2.0
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 EOF
 
 # Create conclusion text

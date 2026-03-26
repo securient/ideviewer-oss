@@ -184,8 +184,14 @@ def register_host():
         ).first()
         
         if not existing:
+            from flask import current_app
+            limit = current_app.config.get('FREE_TIER_HOST_LIMIT', 5)
+            if key.max_hosts <= limit:
+                return jsonify({
+                    'error': f'Free tier limited to {limit} hosts. Upgrade to IDEViewer Enterprise for unlimited hosts.'
+                }), 403
             return jsonify({
-                'error': f'Host limit reached ({key.max_hosts}). Upgrade your plan or remove existing hosts.'
+                'error': f'Host limit reached ({key.max_hosts}). Contact your administrator to increase the limit.'
             }), 403
     
     # Find or create host
@@ -281,8 +287,14 @@ def submit_report():
     if not host:
         # Check host limit
         if key.host_count >= key.max_hosts:
+            from flask import current_app
+            limit = current_app.config.get('FREE_TIER_HOST_LIMIT', 5)
+            if key.max_hosts <= limit:
+                return jsonify({
+                    'error': f'Free tier limited to {limit} hosts. Upgrade to IDEViewer Enterprise for unlimited hosts.'
+                }), 403
             return jsonify({
-                'error': f'Host limit reached ({key.max_hosts})'
+                'error': f'Host limit reached ({key.max_hosts}). Contact your administrator to increase the limit.'
             }), 403
         
         host = Host(
