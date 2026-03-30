@@ -128,13 +128,20 @@ class APIClient:
                             error_message: str = None) -> Dict[str, Any]:
         """
         Update progress of an on-demand scan request.
-        
+
         Args:
             request_id: The scan request ID.
             status: New status for the request.
             log_message: Progress log message.
             log_level: Log level (info, warning, error, success).
             error_message: Error message if scan failed.
+
+        Returns:
+            Response dict. If the scan was cancelled by the user,
+            the response will contain 'cancelled': True.
+
+        Raises:
+            ScanCancelledError: If the scan was cancelled by the portal user.
         """
         data = {}
         if status:
@@ -144,9 +151,14 @@ class APIClient:
             data['log_level'] = log_level
         if error_message:
             data['error_message'] = error_message
-        
-        return self._make_request(f'/scan-requests/{request_id}/update', 
-                                   method='POST', data=data)
+
+        result = self._make_request(f'/scan-requests/{request_id}/update',
+                                     method='POST', data=data)
+
+        if result.get('cancelled'):
+            raise ScanCancelledError(request_id)
+
+        return result
     
     def send_heartbeat(self) -> Dict[str, Any]:
         """
@@ -176,6 +188,20 @@ class APIClient:
             'details': details,
         })
     
+    def send_hook_bypass(self, bypass_data: dict) -> Dict[str, Any]:
+        """
+        Send a hook bypass event to the portal.
+
+        Args:
+            bypass_data: Dictionary with commit_hash, commit_message, commit_author,
+                         repo_path, and timestamp.
+        """
+        return self._make_request('/hook-bypass', method='POST', data={
+            'hostname': socket.gethostname(),
+            'platform': f"{platform.system()} {platform.release()}",
+            **bypass_data,
+        })
+
     def health_check(self) -> bool:
         """Check if the portal is reachable."""
         try:
@@ -248,8 +274,16 @@ class APIClient:
 
 class APIError(Exception):
     """Error from the portal API."""
-    
+
     def __init__(self, status_code: int, message: str):
         self.status_code = status_code
         self.message = message
         super().__init__(f"API Error ({status_code}): {message}")
+
+
+class ScanCancelledError(Exception):
+    """Raised when an on-demand scan is cancelled by the portal user."""
+
+    def __init__(self, request_id: int):
+        self.request_id = request_id
+        super().__init__(f"Scan #{request_id} was cancelled by user")

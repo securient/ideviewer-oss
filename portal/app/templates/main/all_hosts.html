@@ -1,0 +1,180 @@
+{% extends "base.html" %}
+
+{% block title %}All Hosts - IDE Viewer{% endblock %}
+
+{% block content %}
+<div class="fade-in">
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 2rem;">
+        <div>
+            <h1 style="font-size: 1.75rem; font-weight: 700; margin-bottom: 0.25rem;">All Hosts</h1>
+            <p style="color: var(--text-secondary);">{{ total_hosts }} host{{ 's' if total_hosts != 1 else '' }}{% if filter_mode == 'active' %} active in the last 24 hours{% endif %}</p>
+        </div>
+        <a href="{{ url_for('main.dashboard') }}" class="btn btn-secondary">
+            <i class="fas fa-arrow-left"></i>
+            Back to Dashboard
+        </a>
+    </div>
+
+    <!-- Filters -->
+    <div class="card" style="margin-bottom: 1.5rem; padding: 1rem;">
+        <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
+            <i class="fas fa-filter" style="color: var(--text-muted);"></i>
+            <input type="text" id="hostSearch" placeholder="Search hostname or IP..."
+                   style="flex: 1; min-width: 200px; padding: 0.5rem 0.75rem; background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 0.875rem;">
+            <select id="filterStatus" style="padding: 0.5rem 0.75rem; background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 0.875rem;">
+                <option value="">All Statuses</option>
+                <option value="online">Online</option>
+                <option value="idle">Idle</option>
+                <option value="offline">Offline</option>
+            </select>
+            <select id="filterPlatform" style="padding: 0.5rem 0.75rem; background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 0.875rem;">
+                <option value="">All Platforms</option>
+                {% for plat in platforms %}
+                <option value="{{ plat|lower }}">{{ plat }}</option>
+                {% endfor %}
+            </select>
+            <button onclick="clearFilters()" class="btn btn-sm btn-secondary" style="padding: 0.5rem 0.75rem; font-size: 0.8125rem;">
+                <i class="fas fa-times"></i> Clear
+            </button>
+            <span id="filterCount" style="color: var(--text-muted); font-size: 0.8125rem;"></span>
+        </div>
+    </div>
+
+    {% if host_list %}
+    <div class="card">
+        <div style="overflow-x: auto;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 0.875rem;">
+                <thead>
+                    <tr style="border-bottom: 2px solid var(--border-color);">
+                        <th style="text-align: left; padding: 0.75rem; color: var(--text-muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;">Status</th>
+                        <th style="text-align: left; padding: 0.75rem; color: var(--text-muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;">Hostname</th>
+                        <th style="text-align: left; padding: 0.75rem; color: var(--text-muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;">IP</th>
+                        <th style="text-align: left; padding: 0.75rem; color: var(--text-muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;">Platform</th>
+                        <th style="text-align: left; padding: 0.75rem; color: var(--text-muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;">Last Seen</th>
+                        <th style="text-align: center; padding: 0.75rem; color: var(--text-muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;">Extensions</th>
+                        <th style="text-align: center; padding: 0.75rem; color: var(--text-muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;">Packages</th>
+                        <th style="text-align: center; padding: 0.75rem; color: var(--text-muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;">Vulns</th>
+                        <th style="text-align: center; padding: 0.75rem; color: var(--text-muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;">Secrets</th>
+                    </tr>
+                </thead>
+                <tbody id="hostTableBody">
+                    {% for item in host_list %}
+                    <tr class="host-row" style="border-bottom: 1px solid var(--border-color);"
+                        data-name="{{ item.host.hostname|lower }}"
+                        data-ip="{{ (item.host.ip_address or '')|lower }}"
+                        data-status="{{ item.status }}"
+                        data-platform="{{ (item.host.platform or '')|lower }}">
+                        <td style="padding: 0.75rem; text-align: center;">
+                            {% if item.status == 'online' %}
+                            <span style="display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--success);" title="Online"></span>
+                            {% elif item.status == 'idle' %}
+                            <span style="display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--warning);" title="Idle"></span>
+                            {% else %}
+                            <span style="display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--danger);" title="Offline"></span>
+                            {% endif %}
+                        </td>
+                        <td style="padding: 0.75rem;">
+                            <a href="{{ url_for('main.host_detail', host_id=item.host.public_id) }}" style="color: var(--accent-primary); text-decoration: none; font-weight: 500;">
+                                {% if 'darwin' in (item.host.platform or '')|lower or 'mac' in (item.host.platform or '')|lower %}
+                                <i class="fab fa-apple" style="margin-right: 0.375rem; font-size: 0.8125rem;"></i>
+                                {% elif 'windows' in (item.host.platform or '')|lower %}
+                                <i class="fab fa-windows" style="margin-right: 0.375rem; font-size: 0.8125rem;"></i>
+                                {% else %}
+                                <i class="fab fa-linux" style="margin-right: 0.375rem; font-size: 0.8125rem;"></i>
+                                {% endif %}
+                                {{ item.host.hostname }}
+                            </a>
+                        </td>
+                        <td style="padding: 0.75rem; color: var(--text-secondary); font-family: var(--font-mono); font-size: 0.8125rem;">{{ item.host.ip_address or 'N/A' }}</td>
+                        <td style="padding: 0.75rem; color: var(--text-secondary); font-size: 0.8125rem;">{{ item.host.platform or 'Unknown' }}</td>
+                        <td style="padding: 0.75rem; color: var(--text-secondary); font-size: 0.8125rem;">
+                            <span class="local-time" data-utc="{{ item.host.last_seen_at.isoformat() + 'Z' if item.host.last_seen_at else '' }}">{{ item.host.last_seen_at.strftime('%Y-%m-%d %H:%M') if item.host.last_seen_at else 'Never' }}</span>
+                        </td>
+                        <td style="padding: 0.75rem; text-align: center; color: var(--text-secondary);">{{ item.ext_count }}</td>
+                        <td style="padding: 0.75rem; text-align: center; color: var(--text-secondary);">{{ item.pkg_count }}</td>
+                        <td style="padding: 0.75rem; text-align: center;">
+                            <span style="color: {% if item.vuln_count > 0 %}var(--danger){% else %}var(--text-secondary){% endif %}; font-weight: {% if item.vuln_count > 0 %}600{% else %}400{% endif %};">{{ item.vuln_count }}</span>
+                        </td>
+                        <td style="padding: 0.75rem; text-align: center;">
+                            <span style="color: {% if item.secret_count > 0 %}var(--danger){% else %}var(--text-secondary){% endif %}; font-weight: {% if item.secret_count > 0 %}600{% else %}400{% endif %};">{{ item.secret_count }}</span>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% else %}
+    <div class="card">
+        <div class="empty-state">
+            <i class="fas fa-server" style="color: var(--text-muted);"></i>
+            <h3 style="margin-bottom: 0.5rem;">No Hosts Found</h3>
+            <p>{% if filter_mode == 'active' %}No hosts have been active in the last 24 hours.{% else %}No hosts are registered yet.{% endif %}</p>
+            <a href="{{ url_for('main.dashboard') }}" class="btn btn-primary" style="margin-top: 1rem;">
+                <i class="fas fa-arrow-left"></i>
+                Back to Dashboard
+            </a>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<script>
+var searchInput = document.getElementById('hostSearch');
+var statusSelect = document.getElementById('filterStatus');
+var platformSelect = document.getElementById('filterPlatform');
+var filterCount = document.getElementById('filterCount');
+
+function applyFilters() {
+    var search = (searchInput.value || '').trim().toLowerCase();
+    var status = statusSelect.value;
+    var platform = platformSelect.value;
+
+    var rows = document.querySelectorAll('.host-row');
+    var shown = 0;
+
+    rows.forEach(function(row) {
+        var matchSearch = !search || row.dataset.name.indexOf(search) !== -1 || row.dataset.ip.indexOf(search) !== -1;
+        var matchStatus = !status || row.dataset.status === status;
+        var matchPlatform = !platform || row.dataset.platform.indexOf(platform) !== -1;
+
+        if (matchSearch && matchStatus && matchPlatform) {
+            row.style.display = '';
+            shown++;
+        } else {
+            row.style.display = 'none';
+        }
+    });
+
+    var total = rows.length;
+    if (search || status || platform) {
+        filterCount.textContent = 'Showing ' + shown + ' of ' + total;
+    } else {
+        filterCount.textContent = '';
+    }
+}
+
+function clearFilters() {
+    searchInput.value = '';
+    statusSelect.value = '';
+    platformSelect.value = '';
+    applyFilters();
+}
+
+searchInput.addEventListener('input', applyFilters);
+statusSelect.addEventListener('change', applyFilters);
+platformSelect.addEventListener('change', applyFilters);
+
+// Convert UTC timestamps to local timezone
+document.querySelectorAll('.local-time').forEach(function(el) {
+    var utc = el.dataset.utc;
+    if (utc) {
+        var d = new Date(utc);
+        el.textContent = d.toLocaleString(undefined, {
+            year: 'numeric', month: '2-digit', day: '2-digit',
+            hour: '2-digit', minute: '2-digit'
+        });
+    }
+});
+</script>
+{% endblock %}

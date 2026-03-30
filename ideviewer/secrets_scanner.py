@@ -21,6 +21,15 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 
+def _redact_value(value: str) -> str:
+    """Redact a secret value, showing only first 4 and last 4 characters."""
+    if not value:
+        return ''
+    if len(value) <= 10:
+        return value[:2] + '*' * (len(value) - 2)
+    return value[:4] + '*' * (len(value) - 8) + value[-4:]
+
+
 @dataclass
 class SecretFinding:
     """Represents a detected secret (without the actual value)."""
@@ -31,9 +40,15 @@ class SecretFinding:
     severity: str = "critical"  # critical, high, medium, low
     description: str = ""
     recommendation: str = ""
-    
+    redacted_value: str = ""
+    source: str = "filesystem"  # "filesystem" or "git_history"
+    commit_hash: Optional[str] = None
+    commit_author: Optional[str] = None
+    commit_date: Optional[str] = None
+    repo_path: Optional[str] = None
+
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d = {
             "file_path": self.file_path,
             "secret_type": self.secret_type,
             "variable_name": self.variable_name,
@@ -41,7 +56,15 @@ class SecretFinding:
             "severity": self.severity,
             "description": self.description,
             "recommendation": self.recommendation,
+            "redacted_value": self.redacted_value,
+            "source": self.source,
         }
+        if self.source == "git_history":
+            d["commit_hash"] = self.commit_hash
+            d["commit_author"] = self.commit_author
+            d["commit_date"] = self.commit_date
+            d["repo_path"] = self.repo_path
+        return d
 
 
 @dataclass
@@ -173,7 +196,7 @@ class SecretsScanner:
                 if path.exists():
                     scan_dirs.append(path)
         
-        # Scan each directory
+        # Scan each directory for current .env files
         for scan_dir in scan_dirs:
             try:
                 self._scan_directory(scan_dir, result, depth=0)
@@ -181,7 +204,14 @@ class SecretsScanner:
                 error_msg = f"Error scanning {scan_dir}: {str(e)}"
                 logger.error(error_msg)
                 result.errors.append(error_msg)
-        
+
+        # Scan git history for secrets in .env files
+        for scan_dir in scan_dirs:
+            try:
+                self._scan_git_repos(scan_dir, result, depth=0)
+            except Exception as e:
+                logger.debug(f"Error scanning git repos in {scan_dir}: {e}")
+
         return result
     
     def _scan_directory(self, directory: Path, result: SecretsResult, depth: int):
@@ -214,6 +244,144 @@ class SecretsScanner:
         except PermissionError:
             pass  # Skip directories we can't access
     
+    def _scan_git_repos(self, directory: Path, result: SecretsResult, depth: int):
+        """Find git repos and scan their history for secrets in .env files."""
+        if depth > self.max_depth:
+            return
+
+        try:
+            git_dir = directory / '.git'
+            if git_dir.is_dir():
+                self._scan_git_history(directory, result)
+                return  # Don't recurse into subdirs of a git repo
+
+            for item in directory.iterdir():
+                if not item.is_dir():
+                    continue
+                if item.name.startswith('.') or item.name in (
+                    'node_modules', 'venv', '.venv', '__pycache__',
+                    'vendor', 'dist', 'build', '.cache',
+                    'Library', 'Applications', '.Trash'
+                ):
+                    continue
+                self._scan_git_repos(item, result, depth + 1)
+
+        except PermissionError:
+            pass
+
+    def _scan_git_history(self, repo_path: Path, result: SecretsResult):
+        """Scan a git repo's history for secrets in .env files."""
+        import subprocess
+
+        env_patterns = ' '.join(f"'*/{f}'" if '/' not in f else f"'{f}'" for f in self.TARGET_FILES)
+        # Also match files at repo root
+        all_patterns = self.TARGET_FILES
+
+        logger.debug(f"Scanning git history in {repo_path}")
+        result.scanned_paths.append(f"git:{repo_path}")
+
+        try:
+            # Get commits that touched .env files, limited to last 500 commits for performance
+            cmd = [
+                'git', '-C', str(repo_path),
+                'log', '--all', '--diff-filter=ACMR',
+                '-p', '--max-count=500',
+                '--format=COMMIT:%H|%an|%aI',
+                '--'
+            ] + all_patterns
+
+            proc = subprocess.run(
+                cmd,
+                capture_output=True, text=True, timeout=30,
+                env={**os.environ, 'GIT_TERMINAL_PROMPT': '0'}
+            )
+
+            if proc.returncode != 0:
+                return
+
+            self._parse_git_diff(proc.stdout, repo_path, result)
+
+        except subprocess.TimeoutExpired:
+            logger.warning(f"Git history scan timed out for {repo_path}")
+        except FileNotFoundError:
+            pass  # git not installed
+        except Exception as e:
+            logger.debug(f"Git history scan error for {repo_path}: {e}")
+
+    def _parse_git_diff(self, output: str, repo_path: Path, result: SecretsResult):
+        """Parse git log -p output and check added lines for secrets."""
+        current_commit = None
+        current_author = None
+        current_date = None
+        current_file = None
+        # Track already-found secrets to avoid duplicates
+        seen = set()
+
+        for line in output.split('\n'):
+            # Parse commit header
+            if line.startswith('COMMIT:'):
+                parts = line[7:].split('|', 2)
+                if len(parts) == 3:
+                    current_commit = parts[0]
+                    current_author = parts[1]
+                    current_date = parts[2]
+                continue
+
+            # Parse diff file header
+            if line.startswith('+++ b/'):
+                current_file = line[6:]
+                continue
+
+            # Parse added lines (potential secrets)
+            if not line.startswith('+') or line.startswith('+++'):
+                continue
+            if not current_commit or not current_file:
+                continue
+
+            added_line = line[1:].strip()
+            if not added_line or added_line.startswith('#') or '=' not in added_line:
+                continue
+
+            key, _, value = added_line.partition('=')
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+
+            if not value:
+                continue
+
+            # Check for secrets using the same detection methods
+            finding = self._check_eth_private_key(Path(current_file), key, value, None)
+            if not finding:
+                finding = self._check_mnemonic(Path(current_file), key, value, None)
+            if not finding:
+                finding = self._check_aws_credentials(Path(current_file), key, value, None)
+
+            if finding:
+                # Deduplicate by (commit, file, variable)
+                dedup_key = (current_commit, current_file, key)
+                if dedup_key in seen:
+                    continue
+                seen.add(dedup_key)
+
+                # Convert to git history finding
+                finding.source = "git_history"
+                finding.file_path = current_file
+                finding.repo_path = str(repo_path)
+                finding.commit_hash = current_commit
+                finding.commit_author = current_author
+                finding.commit_date = current_date
+                finding.description = (
+                    f"[Git History] {finding.description} "
+                    f"Found in commit {current_commit[:8]} by {current_author}."
+                )
+                finding.recommendation = (
+                    f"{finding.recommendation} "
+                    f"This secret was committed to git history and may still be accessible "
+                    f"even if the file has been deleted. Consider rotating this credential "
+                    f"and using 'git filter-branch' or BFG Repo-Cleaner to purge it from history."
+                )
+                result.findings.append(finding)
+
     def _scan_env_file(self, file_path: Path, result: SecretsResult):
         """Scan a single .env file for secrets."""
         try:
@@ -282,6 +450,7 @@ class SecretsScanner:
                 severity="critical",
                 description="Plaintext Ethereum/EVM private key detected. This key can be used to sign transactions and drain funds from the associated wallet.",
                 recommendation="Use encrypted keystores (e.g., Foundry's 'cast wallet import') or hardware wallets for production deployments. Never store private keys in plaintext.",
+                redacted_value=_redact_value(value),
             )
         
         return None
@@ -306,6 +475,7 @@ class SecretsScanner:
                 severity="critical",
                 description="Plaintext mnemonic/seed phrase detected. This can be used to derive all wallet keys and drain all associated funds.",
                 recommendation="Use encrypted keystores or hardware wallets. Never store seed phrases in plaintext files.",
+                redacted_value=_redact_value(words[0] + ' ' + words[1]) + ' ... ' + _redact_value(words[-1]),
             )
         
         return None
@@ -326,6 +496,7 @@ class SecretsScanner:
                     severity="high",
                     description="AWS Access Key ID detected in plaintext.",
                     recommendation="Use AWS IAM roles, environment variables from secure vaults, or AWS SSO instead of hardcoded credentials.",
+                    redacted_value=_redact_value(value),
                 )
         
         # Check for AWS secret key
@@ -339,6 +510,7 @@ class SecretsScanner:
                     severity="critical",
                     description="AWS Secret Access Key detected in plaintext.",
                     recommendation="Use AWS IAM roles, environment variables from secure vaults, or AWS SSO instead of hardcoded credentials.",
+                    redacted_value=_redact_value(value),
                 )
         
         return None

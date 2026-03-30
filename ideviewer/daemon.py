@@ -22,14 +22,14 @@ from typing import Optional, Callable
 try:
     from .scanner import IDEScanner
     from .models import ScanResult
-    from .api_client import APIClient, APIError
+    from .api_client import APIClient, APIError, ScanCancelledError
     from .secrets_scanner import SecretsScanner, SecretsResult
     from .dependency_scanner import DependencyScanner, DependencyResult
 except ImportError:
     sys.path.insert(0, str(Path(__file__).parent.parent))
     from ideviewer.scanner import IDEScanner
     from ideviewer.models import ScanResult
-    from ideviewer.api_client import APIClient, APIError
+    from ideviewer.api_client import APIClient, APIError, ScanCancelledError
     from ideviewer.secrets_scanner import SecretsScanner, SecretsResult
     from ideviewer.dependency_scanner import DependencyScanner, DependencyResult
 
@@ -180,6 +180,11 @@ class IDEViewerDaemon:
                 self._check_tamper()
                 last_tamper_check = datetime.now()
 
+            # Check for hook bypass events every 30 seconds
+            if self.api_client and (now - getattr(self, '_last_bypass_check', datetime.min)).total_seconds() >= 30:
+                self._check_hook_bypasses()
+                self._last_bypass_check = datetime.now()
+
             # Sleep for a short interval, checking shutdown event
             self._shutdown_event.wait(timeout=5)
         
@@ -312,7 +317,48 @@ class IDEViewerDaemon:
                         self._file_checksums[path_str] = current_hash
                 except Exception:
                     pass
-    
+
+    # ==========================================
+    # Hook Bypass Detection
+    # ==========================================
+
+    def _check_hook_bypasses(self):
+        """Check for pending hook bypass events and report them to the portal."""
+        if not self.api_client:
+            return
+
+        bypasses_file = Path.home() / '.ideviewer' / 'bypasses' / 'pending.jsonl'
+        if not bypasses_file.exists():
+            return
+
+        try:
+            with open(bypasses_file, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+
+            if not lines:
+                return
+
+            logger.info(f"Found {len(lines)} hook bypass event(s) to report")
+
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    bypass_data = json.loads(line)
+                    self.api_client.send_hook_bypass(bypass_data)
+                    logger.info(f"Reported hook bypass: {bypass_data.get('commit_hash', 'unknown')[:8]}")
+                except json.JSONDecodeError:
+                    logger.warning(f"Invalid bypass event JSON: {line[:100]}")
+                except Exception as e:
+                    logger.debug(f"Failed to report hook bypass: {e}")
+
+            # Remove the file after processing
+            bypasses_file.unlink(missing_ok=True)
+
+        except Exception as e:
+            logger.debug(f"Error checking hook bypasses: {e}")
+
     def _run_scan(self):
         """Run all scans and handle the results."""
         logger.info(f"Starting scan at {datetime.now().isoformat()}")
@@ -485,6 +531,9 @@ class IDEViewerDaemon:
             
             logger.info(f"On-demand scan #{request_id} completed successfully")
             
+        except ScanCancelledError:
+            logger.info(f"On-demand scan #{request_id} was cancelled by user")
+
         except Exception as e:
             logger.error(f"On-demand scan #{request_id} failed: {e}")
             try:

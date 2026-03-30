@@ -7,7 +7,7 @@
     <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 2rem;">
         <div>
             <h1 style="font-size: 1.75rem; font-weight: 700; margin-bottom: 0.25rem;">Dashboard</h1>
-            <p style="color: var(--text-secondary);">Monitor your IDE extensions across all machines</p>
+            <p style="color: var(--text-secondary);">Security posture across your development fleet</p>
         </div>
         {% if not customer_keys %}
         <a href="{{ url_for('main.keys') }}" class="btn btn-primary">
@@ -19,43 +19,25 @@
 
     <!-- Stats -->
     <div class="stats-grid">
-        <div class="stat-card">
+        <a href="{{ url_for('main.all_hosts') }}" class="stat-card stat-card-link">
             <div class="stat-icon purple">
                 <i class="fas fa-desktop"></i>
             </div>
             <div class="stat-content">
-                <h3>{{ stats.total_hosts }}</h3>
-                <p>Total Hosts</p>
+                <h3>{{ stats.active_hosts }}<span style="font-size: 0.875rem; font-weight: 400; color: var(--text-muted);">/{{ stats.total_hosts }}</span></h3>
+                <p>Hosts <span style="font-size: 0.6875rem; color: var(--text-muted);">(active/total)</span></p>
             </div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-icon green">
-                <i class="fas fa-check-circle"></i>
-            </div>
-            <div class="stat-content">
-                <h3>{{ stats.active_hosts }}</h3>
-                <p>Active (24h)</p>
-            </div>
-        </div>
-        <div class="stat-card">
+        </a>
+        <a href="{{ url_for('main.all_extensions') }}" class="stat-card stat-card-link">
             <div class="stat-icon orange">
                 <i class="fas fa-puzzle-piece"></i>
             </div>
             <div class="stat-content">
-                <h3>{{ stats.total_extensions }}</h3>
-                <p>Total Extensions</p>
+                <h3>{{ stats.total_extensions }} {% if stats.dangerous_extensions > 0 %}<span class="badge badge-critical" style="font-size: 0.6rem; vertical-align: middle;">{{ stats.dangerous_extensions }} risky</span>{% endif %}</h3>
+                <p>Extensions</p>
             </div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-icon red">
-                <i class="fas fa-exclamation-triangle"></i>
-            </div>
-            <div class="stat-content">
-                <h3>{{ stats.dangerous_extensions }}</h3>
-                <p>Risky Extensions</p>
-            </div>
-        </div>
-        <div class="stat-card">
+        </a>
+        <a href="{{ url_for('main.all_secrets') }}" class="stat-card stat-card-link">
             <div class="stat-icon {% if stats.total_secrets > 0 %}red{% else %}green{% endif %}">
                 <i class="fas fa-key"></i>
             </div>
@@ -63,8 +45,8 @@
                 <h3>{{ stats.total_secrets }}</h3>
                 <p>Exposed Secrets</p>
             </div>
-        </div>
-        <div class="stat-card">
+        </a>
+        <a href="{{ url_for('main.all_packages') }}" class="stat-card stat-card-link">
             <div class="stat-icon blue">
                 <i class="fas fa-cubes"></i>
             </div>
@@ -72,7 +54,25 @@
                 <h3>{{ stats.total_packages }}</h3>
                 <p>Packages</p>
             </div>
-        </div>
+        </a>
+        <a href="{{ url_for('main.vulnerabilities') }}" class="stat-card stat-card-link">
+            <div class="stat-icon {% if total_vulnerabilities > 0 %}red{% else %}green{% endif %}">
+                <i class="fas fa-shield-alt"></i>
+            </div>
+            <div class="stat-content">
+                <h3>{{ total_vulnerabilities }}</h3>
+                <p>Vulnerabilities</p>
+            </div>
+        </a>
+        <a href="{{ url_for('main.all_hook_bypasses') }}" class="stat-card stat-card-link">
+            <div class="stat-icon {% if stats.total_hook_bypasses > 0 %}orange{% else %}green{% endif %}">
+                <i class="fas fa-ban"></i>
+            </div>
+            <div class="stat-content">
+                <h3>{{ stats.total_hook_bypasses }}</h3>
+                <p>Hook Bypasses</p>
+            </div>
+        </a>
     </div>
     
     <!-- Tamper Alerts -->
@@ -182,27 +182,6 @@
     </div>
     {% endif %}
 
-    <!-- IDE Distribution -->
-    {% if stats.ide_counts %}
-    <div class="card" style="margin-bottom: 2rem;">
-        <div class="card-header">
-            <h2 class="card-title">
-                <i class="fas fa-chart-pie" style="color: var(--accent-primary);"></i>
-                IDE Distribution
-            </h2>
-        </div>
-        <div style="display: flex; flex-wrap: wrap; gap: 1rem;">
-            {% for ide_name, count in stats.ide_counts.items() %}
-            <div style="display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 1rem; background: var(--bg-tertiary); border-radius: var(--radius-sm);">
-                <i class="fas fa-code" style="color: var(--accent-secondary);"></i>
-                <span style="font-weight: 500;">{{ ide_name }}</span>
-                <span class="badge badge-low">{{ count }}</span>
-            </div>
-            {% endfor %}
-        </div>
-    </div>
-    {% endif %}
-
     <!-- Hosts -->
     <div class="card">
         <div class="card-header">
@@ -245,24 +224,34 @@
                     <span style="width: 8px; height: 8px; border-radius: 50%; background: var(--danger); display: inline-block;" title="Offline"></span>
                     {% endif %}
                     <i class="fas fa-clock"></i>
-                    Last seen: {{ host.last_seen_at.strftime('%Y-%m-%d %H:%M') if host.last_seen_at else 'Never' }}
+                    Last seen: <span class="local-time" data-utc="{{ host.last_seen_at.isoformat() + 'Z' if host.last_seen_at else '' }}">{{ host.last_seen_at.strftime('%Y-%m-%d %H:%M') if host.last_seen_at else 'Never' }}</span>
                 </p>
                 
                 {% set latest = host.latest_report %}
+                {% set host_vuln_count = host.vulnerabilities.filter_by(is_resolved=False).count() if host.vulnerabilities else 0 %}
+                {% set host_secret_count = host.secret_findings.filter_by(is_resolved=False).count() %}
                 <div class="host-stats">
-                    <div class="host-stat">
-                        <div class="host-stat-value">{{ latest.total_ides if latest else 0 }}</div>
-                        <div class="host-stat-label">IDEs</div>
-                    </div>
                     <div class="host-stat">
                         <div class="host-stat-value">{{ latest.total_extensions if latest else 0 }}</div>
                         <div class="host-stat-label">Extensions</div>
                     </div>
                     <div class="host-stat">
-                        <div class="host-stat-value" style="color: {% if latest and latest.dangerous_extensions > 0 %}var(--danger){% else %}var(--success){% endif %};">
+                        <div class="host-stat-value" style="color: {% if latest and latest.dangerous_extensions > 0 %}var(--danger){% else %}var(--text-secondary){% endif %};">
                             {{ latest.dangerous_extensions if latest else 0 }}
                         </div>
-                        <div class="host-stat-label">Dangerous</div>
+                        <div class="host-stat-label">Risky</div>
+                    </div>
+                    <div class="host-stat">
+                        <div class="host-stat-value" style="color: {% if host_vuln_count > 0 %}var(--danger){% else %}var(--success){% endif %};">
+                            {{ host_vuln_count }}
+                        </div>
+                        <div class="host-stat-label">CVEs</div>
+                    </div>
+                    <div class="host-stat">
+                        <div class="host-stat-value" style="color: {% if host_secret_count > 0 %}var(--critical){% else %}var(--success){% endif %};">
+                            {{ host_secret_count }}
+                        </div>
+                        <div class="host-stat-label">Secrets</div>
                     </div>
                 </div>
             </a>
@@ -290,4 +279,18 @@
         {% endif %}
     </div>
 </div>
+
+<script>
+// Convert UTC timestamps to local timezone
+document.querySelectorAll('.local-time').forEach(el => {
+    const utc = el.dataset.utc;
+    if (utc) {
+        const d = new Date(utc);
+        el.textContent = d.toLocaleString(undefined, {
+            year: 'numeric', month: '2-digit', day: '2-digit',
+            hour: '2-digit', minute: '2-digit'
+        });
+    }
+});
+</script>
 {% endblock %}

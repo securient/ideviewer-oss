@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+
+{% block title %}Hook Bypasses - IDE Viewer{% endblock %}
+
+{% block content %}
+<div class="fade-in">
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 2rem;">
+        <div>
+            <h1 style="font-size: 1.75rem; font-weight: 700; margin-bottom: 0.25rem;">Hook Bypasses</h1>
+            <p style="color: var(--text-secondary);">{{ total_bypasses }} hook bypass event{{ 's' if total_bypasses != 1 else '' }} detected across your hosts</p>
+        </div>
+        <a href="{{ url_for('main.dashboard') }}" class="btn btn-secondary">
+            <i class="fas fa-arrow-left"></i>
+            Back to Dashboard
+        </a>
+    </div>
+
+    <!-- Filters -->
+    <div class="card" style="margin-bottom: 1.5rem; padding: 1rem;">
+        <div style="display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
+            <i class="fas fa-filter" style="color: var(--text-muted);"></i>
+            <input type="text" id="bypassSearch" placeholder="Search commit, message, author, or repo..."
+                   style="flex: 1; min-width: 200px; padding: 0.5rem 0.75rem; background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 0.875rem;">
+            <select id="filterHost" style="padding: 0.5rem 0.75rem; background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 0.875rem;">
+                <option value="">All Hosts</option>
+                {% for h in all_hosts %}
+                <option value="{{ h|lower }}">{{ h }}</option>
+                {% endfor %}
+            </select>
+            <button onclick="clearFilters()" class="btn btn-sm btn-secondary" style="padding: 0.5rem 0.75rem; font-size: 0.8125rem;">
+                <i class="fas fa-times"></i> Clear
+            </button>
+            <span id="filterCount" style="color: var(--text-muted); font-size: 0.8125rem;"></span>
+        </div>
+    </div>
+
+    {% if bypasses %}
+    <div class="card">
+        <div style="overflow-x: auto;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 0.875rem;">
+                <thead>
+                    <tr style="border-bottom: 2px solid var(--border-color);">
+                        <th style="text-align: left; padding: 0.75rem; color: var(--text-muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;">Commit</th>
+                        <th style="text-align: left; padding: 0.75rem; color: var(--text-muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;">Message</th>
+                        <th style="text-align: left; padding: 0.75rem; color: var(--text-muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;">Author</th>
+                        <th style="text-align: left; padding: 0.75rem; color: var(--text-muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;">Repository</th>
+                        <th style="text-align: left; padding: 0.75rem; color: var(--text-muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;">Host</th>
+                        <th style="text-align: left; padding: 0.75rem; color: var(--text-muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;">Detected At</th>
+                    </tr>
+                </thead>
+                <tbody id="bypassTableBody">
+                    {% for item in bypasses %}
+                    {% set b = item.bypass %}
+                    <tr class="bypass-row" style="border-bottom: 1px solid var(--border-color);"
+                        data-commit="{{ (b.commit_hash or '')|lower }}"
+                        data-message="{{ (b.commit_message or '')|lower }}"
+                        data-author="{{ (b.commit_author or '')|lower }}"
+                        data-repo="{{ (b.repo_path or '')|lower }}"
+                        data-host="{{ (item.host.hostname if item.host else '')|lower }}">
+                        <td style="padding: 0.75rem;">
+                            <span style="font-family: var(--font-mono); font-size: 0.8125rem; padding: 0.15rem 0.4rem; background: var(--bg-tertiary); border-radius: var(--radius-sm); color: var(--warning);">
+                                <i class="fas fa-ban" style="font-size: 0.625rem; margin-right: 0.25rem;"></i>
+                                {{ (b.commit_hash or 'N/A')[:8] }}
+                            </span>
+                        </td>
+                        <td style="padding: 0.75rem; color: var(--text-primary); font-size: 0.8125rem; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="{{ b.commit_message }}">
+                            {{ b.commit_message or 'No message' }}
+                        </td>
+                        <td style="padding: 0.75rem; color: var(--text-secondary); font-size: 0.8125rem;">
+                            <i class="fas fa-user" style="font-size: 0.6875rem; margin-right: 0.25rem;"></i>
+                            {{ b.commit_author or 'Unknown' }}
+                        </td>
+                        <td style="padding: 0.75rem; color: var(--text-secondary); font-family: var(--font-mono); font-size: 0.75rem; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="{{ b.repo_path }}">
+                            {{ b.repo_path or 'N/A' }}
+                        </td>
+                        <td style="padding: 0.75rem;">
+                            {% if item.host %}
+                            <a href="{{ url_for('main.host_detail', host_id=item.host.public_id) }}" style="color: var(--accent-primary); text-decoration: none; font-size: 0.8125rem;">
+                                <i class="fas fa-server" style="font-size: 0.6875rem; margin-right: 0.2rem;"></i>
+                                {{ item.host.hostname }}
+                            </a>
+                            {% else %}
+                            <span style="color: var(--text-muted); font-size: 0.8125rem;">Unknown</span>
+                            {% endif %}
+                        </td>
+                        <td style="padding: 0.75rem; color: var(--text-secondary); font-size: 0.8125rem;">
+                            <span class="local-time" data-utc="{{ b.detected_at.isoformat() + 'Z' if b.detected_at else '' }}">{{ b.detected_at.strftime('%Y-%m-%d %H:%M') if b.detected_at else 'Unknown' }}</span>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% else %}
+    <div class="card">
+        <div class="empty-state">
+            <i class="fas fa-check-circle" style="color: var(--success);"></i>
+            <h3 style="margin-bottom: 0.5rem;">No Hook Bypasses</h3>
+            <p>No pre-commit hook bypass events have been detected.</p>
+            <a href="{{ url_for('main.dashboard') }}" class="btn btn-primary" style="margin-top: 1rem;">
+                <i class="fas fa-arrow-left"></i>
+                Back to Dashboard
+            </a>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<script>
+var searchInput = document.getElementById('bypassSearch');
+var hostSelect = document.getElementById('filterHost');
+var filterCount = document.getElementById('filterCount');
+
+function applyFilters() {
+    var search = (searchInput.value || '').trim().toLowerCase();
+    var host = hostSelect.value;
+
+    var rows = document.querySelectorAll('.bypass-row');
+    var shown = 0;
+
+    rows.forEach(function(row) {
+        var matchSearch = !search ||
+            row.dataset.commit.indexOf(search) !== -1 ||
+            row.dataset.message.indexOf(search) !== -1 ||
+            row.dataset.author.indexOf(search) !== -1 ||
+            row.dataset.repo.indexOf(search) !== -1;
+        var matchHost = !host || row.dataset.host === host;
+
+        if (matchSearch && matchHost) {
+            row.style.display = '';
+            shown++;
+        } else {
+            row.style.display = 'none';
+        }
+    });
+
+    var total = rows.length;
+    if (search || host) {
+        filterCount.textContent = 'Showing ' + shown + ' of ' + total;
+    } else {
+        filterCount.textContent = '';
+    }
+}
+
+function clearFilters() {
+    searchInput.value = '';
+    hostSelect.value = '';
+    applyFilters();
+}
+
+searchInput.addEventListener('input', applyFilters);
+hostSelect.addEventListener('change', applyFilters);
+
+// Convert UTC timestamps to local timezone
+document.querySelectorAll('.local-time').forEach(function(el) {
+    var utc = el.dataset.utc;
+    if (utc) {
+        var d = new Date(utc);
+        el.textContent = d.toLocaleString(undefined, {
+            year: 'numeric', month: '2-digit', day: '2-digit',
+            hour: '2-digit', minute: '2-digit'
+        });
+    }
+});
+</script>
+{% endblock %}

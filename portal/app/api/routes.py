@@ -4,14 +4,18 @@ API routes for daemon communication.
 All API endpoints require a valid customer key in the X-Customer-Key header.
 """
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
 from datetime import datetime
 import socket
 import traceback
 
+import logging
+
 from app import db
-from app.models import CustomerKey, Host, ScanReport, ExtensionInfo, SecretFinding, PackageInfo, ScanRequest, TamperAlert
+from app.models import CustomerKey, Host, ScanReport, ExtensionInfo, SecretFinding, PackageInfo, ScanRequest, TamperAlert, Vulnerability, HookBypass
 from app.main.routes import calculate_risk_level
+
+vuln_logger = logging.getLogger('ideviewer.vuln_scan')
 
 api_bp = Blueprint('api', __name__)
 
@@ -46,7 +50,6 @@ def handle_api_error(error):
     api_logger.error(f"API Error on {request.method} {request.path}: {type(error).__name__}: {error}")
     
     # Only include detailed error info in debug mode
-    from flask import current_app
     if current_app.debug:
         traceback.print_exc()
         return jsonify({
@@ -184,7 +187,6 @@ def register_host():
         ).first()
         
         if not existing:
-            from flask import current_app
             limit = current_app.config.get('FREE_TIER_HOST_LIMIT', 5)
             if key.max_hosts <= limit:
                 return jsonify({
@@ -287,7 +289,6 @@ def submit_report():
     if not host:
         # Check host limit
         if key.host_count >= key.max_hosts:
-            from flask import current_app
             limit = current_app.config.get('FREE_TIER_HOST_LIMIT', 5)
             if key.max_hosts <= limit:
                 return jsonify({
@@ -372,6 +373,12 @@ def submit_report():
                     severity=finding.get('severity', 'critical'),
                     description=finding.get('description', ''),
                     recommendation=finding.get('recommendation', ''),
+                    redacted_value=finding.get('redacted_value', ''),
+                    source=finding.get('source', 'filesystem'),
+                    commit_hash=finding.get('commit_hash'),
+                    commit_author=finding.get('commit_author'),
+                    commit_date=finding.get('commit_date'),
+                    repo_path=finding.get('repo_path'),
                 )
                 db.session.add(secret)
 
@@ -414,9 +421,28 @@ def submit_report():
     
     # Update key last used
     key.last_used_at = datetime.utcnow()
-    
+
+    # Commit everything first so the daemon gets a fast response
     db.session.commit()
-    
+
+    # Run vulnerability scan in a background thread so it doesn't block the API
+    import threading
+    host_id_for_vuln = host.id
+    app = current_app._get_current_object()
+
+    def _background_vuln_scan():
+        with app.app_context():
+            try:
+                _scan_vulnerabilities(Host.query.get(host_id_for_vuln))
+                db.session.commit()
+                vuln_logger.info(f"Background vulnerability scan completed for host {host_id_for_vuln}")
+            except Exception as e:
+                db.session.rollback()
+                vuln_logger.error(f"Background vulnerability scan failed: {e}")
+
+    thread = threading.Thread(target=_background_vuln_scan, daemon=True)
+    thread.start()
+
     return jsonify({
         'success': True,
         'report_id': report.id,
@@ -430,6 +456,95 @@ def submit_report():
             'packages_found': packages_count,
         }
     })
+
+
+def _scan_vulnerabilities(host):
+    """Scan a host's packages against OSV.dev and update the Vulnerability table."""
+    from app.osv_client import query_packages_batch, get_ecosystem
+
+    packages = PackageInfo.query.filter_by(host_id=host.id).all()
+    if not packages:
+        return 0
+
+    # Build batch query — only packages with a supported ecosystem
+    batch = []
+    pkg_map = {}  # (name, version, ecosystem) -> PackageInfo
+    for pkg in packages:
+        ecosystem = get_ecosystem(pkg.package_manager)
+        if not ecosystem:
+            continue
+        key = (pkg.name, pkg.version or '', ecosystem)
+        if key not in pkg_map:
+            batch.append({'name': pkg.name, 'version': pkg.version or '', 'ecosystem': ecosystem})
+            pkg_map[key] = pkg
+
+    if not batch:
+        return 0
+
+    vuln_logger.info(f"Querying OSV.dev for {len(batch)} packages on host {host.hostname}")
+
+    results = query_packages_batch(batch)
+
+    # Track which vulns we found in this scan
+    found_vuln_keys = set()
+    vuln_count = 0
+
+    for (name, version, ecosystem), vulns in results.items():
+        pkg = pkg_map.get((name, version, ecosystem))
+        if not pkg:
+            continue
+
+        for v in vulns:
+            vuln_id = v.get('vuln_id', '')
+            if not vuln_id:
+                continue
+
+            found_vuln_keys.add((vuln_id, name, version, pkg.package_manager))
+
+            # Check if this vulnerability already exists for this host
+            existing = Vulnerability.query.filter_by(
+                host_id=host.id,
+                vuln_id=vuln_id,
+                package_name=name,
+                package_version=version,
+            ).first()
+
+            if existing:
+                existing.last_seen_at = datetime.utcnow()
+                existing.is_resolved = False
+                existing.package_info_id = pkg.id
+            else:
+                vuln = Vulnerability(
+                    host_id=host.id,
+                    package_info_id=pkg.id,
+                    package_name=name,
+                    package_version=version,
+                    package_manager=pkg.package_manager,
+                    ecosystem=ecosystem,
+                    vuln_id=vuln_id,
+                    summary=v.get('summary', ''),
+                    severity_label=v.get('severity_label', 'UNKNOWN'),
+                    cvss_score=v.get('cvss_score'),
+                    affected_versions=v.get('affected_versions', ''),
+                    fixed_version=v.get('fixed_version'),
+                    references=v.get('references', []),
+                )
+                db.session.add(vuln)
+                vuln_count += 1
+
+    # Mark vulns no longer present as resolved
+    existing_vulns = Vulnerability.query.filter_by(
+        host_id=host.id,
+        is_resolved=False
+    ).all()
+
+    for ev in existing_vulns:
+        key = (ev.vuln_id, ev.package_name, ev.package_version, ev.package_manager)
+        if key not in found_vuln_keys:
+            ev.is_resolved = True
+
+    vuln_logger.info(f"Found {vuln_count} new vulnerabilities for host {host.hostname}")
+    return vuln_count
 
 
 @api_bp.route('/hosts', methods=['GET'])
@@ -516,8 +631,12 @@ def update_scan_request(request_id):
     if not host or host.customer_key_id != key.id:
         return jsonify({'error': 'Access denied'}), 403
     
+    # If scan was cancelled by user, tell the daemon to stop
+    if scan_req.status == 'cancelled':
+        return jsonify({'success': False, 'cancelled': True, 'request': scan_req.to_dict()})
+
     data = request.get_json() or {}
-    
+
     VALID_SCAN_STATUSES = {
         'pending', 'connecting', 'scanning_ides', 'scanning_secrets',
         'scanning_packages', 'completed', 'failed', 'timeout'
@@ -619,8 +738,48 @@ def receive_alert():
     )
     db.session.add(alert)
     db.session.commit()
-    
+
     return jsonify({
         'received': True,
         'alert_id': alert.id,
+    })
+
+
+@api_bp.route('/hook-bypass', methods=['POST'])
+def receive_hook_bypass():
+    """
+    Receive a hook bypass event from the daemon.
+    This is triggered when a developer uses --no-verify to skip the pre-commit hook.
+    """
+    key, error, status = get_customer_key()
+    if error:
+        return jsonify(error), status
+
+    data = request.get_json() or {}
+    hostname = data.get('hostname')
+
+    if not hostname:
+        return jsonify({'error': 'hostname is required'}), 400
+
+    host = Host.query.filter_by(
+        hostname=hostname,
+        customer_key_id=key.id
+    ).first()
+
+    if not host:
+        return jsonify({'error': 'Host not found'}), 404
+
+    bypass = HookBypass(
+        host_id=host.id,
+        commit_hash=data.get('commit_hash', '')[:40],
+        commit_message=data.get('commit_message', '')[:500],
+        commit_author=data.get('commit_author', '')[:200],
+        repo_path=data.get('repo_path', '')[:500],
+    )
+    db.session.add(bypass)
+    db.session.commit()
+
+    return jsonify({
+        'received': True,
+        'bypass_id': bypass.id,
     })

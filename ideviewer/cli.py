@@ -4,6 +4,7 @@ Command-line interface for IDE Viewer.
 
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Optional
@@ -41,17 +42,41 @@ except ImportError:
 console = Console()
 
 
-def setup_logging(verbose: bool, log_file: Optional[str] = None):
+def _get_default_log_dir() -> Path:
+    """Get the default log directory for the platform."""
+    if sys.platform == 'darwin':
+        return Path('/var/log/ideviewer')
+    elif sys.platform == 'win32':
+        return Path(os.environ.get('LOCALAPPDATA', Path.home())) / 'IDEViewer' / 'logs'
+    else:
+        return Path('/var/log/ideviewer')
+
+
+def setup_logging(verbose: bool, log_file: Optional[str] = None, daemon_mode: bool = False):
     """Setup logging configuration."""
     level = logging.DEBUG if verbose else logging.INFO
-    
+
     handlers = []
-    
+
     if log_file:
+        Path(log_file).parent.mkdir(parents=True, exist_ok=True)
         handlers.append(logging.FileHandler(log_file))
-    else:
+    elif daemon_mode:
+        # Always log to file when running as a daemon (not foreground)
+        log_dir = _get_default_log_dir()
+        try:
+            log_dir.mkdir(parents=True, exist_ok=True)
+            handlers.append(logging.FileHandler(log_dir / 'daemon.log'))
+        except PermissionError:
+            # Fall back to user-level log dir
+            log_dir = Path.home() / '.ideviewer' / 'logs'
+            log_dir.mkdir(parents=True, exist_ok=True)
+            handlers.append(logging.FileHandler(log_dir / 'daemon.log'))
+
+    # Always include stderr for foreground mode
+    if not daemon_mode or not handlers:
         handlers.append(logging.StreamHandler(sys.stderr))
-    
+
     logging.basicConfig(
         level=level,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -100,6 +125,92 @@ def send_to_portal(scan_data: dict, secrets_data: dict = None, deps_data: dict =
     except Exception as e:
         console.print(f"[red]✗ Failed to send to portal: {e}[/]")
         return False
+
+
+def _scan_staged_secrets(use_exit_code: bool):
+    """Scan only git-staged .env files for secrets (used by pre-commit hook)."""
+    import subprocess as _sp
+
+    # Get staged file list
+    try:
+        result = _sp.run(
+            ["git", "diff", "--cached", "--name-only"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            console.print("[yellow]Not in a git repository or git error[/]")
+            sys.exit(0)
+        staged_files = [f.strip() for f in result.stdout.strip().split("\n") if f.strip()]
+    except FileNotFoundError:
+        console.print("[yellow]git is not installed[/]")
+        sys.exit(0)
+    except _sp.TimeoutExpired:
+        console.print("[yellow]git command timed out[/]")
+        sys.exit(0)
+
+    if not staged_files:
+        sys.exit(0)
+
+    # Filter to .env files matching SecretsScanner.TARGET_FILES
+    target_files = set(SecretsScanner.TARGET_FILES)
+    env_files = [f for f in staged_files if Path(f).name in target_files]
+
+    if not env_files:
+        sys.exit(0)
+
+    # Scan each staged .env file using git show to get staged content
+    scanner = SecretsScanner()
+    all_findings = []
+
+    for filepath in env_files:
+        try:
+            result = _sp.run(
+                ["git", "show", f":{filepath}"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode != 0:
+                continue
+
+            content = result.stdout
+            lines = content.split("\n")
+
+            for line_num, line in enumerate(lines, 1):
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+
+                key, _, value = line.partition("=")
+                key = key.strip()
+                value = value.strip().strip('"').strip("'")
+
+                if not value:
+                    continue
+
+                finding = scanner._check_eth_private_key(Path(filepath), key, value, line_num)
+                if not finding:
+                    finding = scanner._check_mnemonic(Path(filepath), key, value, line_num)
+                if not finding:
+                    finding = scanner._check_aws_credentials(Path(filepath), key, value, line_num)
+
+                if finding:
+                    all_findings.append(finding)
+
+        except (_sp.TimeoutExpired, Exception) as e:
+            console.print(f"[yellow]Warning: could not read staged {filepath}: {e}[/]")
+
+    if all_findings:
+        console.print(f"[bold red]Found {len(all_findings)} secret(s) in staged files:[/]")
+        for f in all_findings:
+            severity_color = "red" if f.severity == "critical" else "yellow"
+            console.print(
+                f"  [{severity_color}]{f.severity.upper()}[/] "
+                f"{f.secret_type.replace('_', ' ').title()} "
+                f"({f.variable_name}) in {f.file_path}:{f.line_number}"
+            )
+        if use_exit_code:
+            sys.exit(1)
+    else:
+        sys.exit(0)
 
 
 @cli.command()
@@ -222,17 +333,24 @@ def dangerous(verbose: bool):
 @click.option("--json", "output_json", is_flag=True, help="Output as JSON")
 @click.option("--output-sarif", is_flag=True, help="Output in SARIF v2.1.0 format")
 @click.option("--portal", is_flag=True, help="Send results to the portal")
+@click.option("--check-staged", is_flag=True, help="Only scan files currently staged in git")
+@click.option("--exit-code", "use_exit_code", is_flag=True, help="Exit with code 1 if secrets found (for use in hooks)")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
-def secrets(output_json: bool, output_sarif: bool, portal: bool, verbose: bool):
+def secrets(output_json: bool, output_sarif: bool, portal: bool, check_staged: bool, use_exit_code: bool, verbose: bool):
     """Scan for plaintext secrets (wallet keys, API keys) in configuration files.
-    
+
     This command scans .env files and similar configuration files for
     exposed secrets like Ethereum private keys, mnemonics, and API credentials.
-    
+
     IMPORTANT: This scanner does NOT extract or display actual secret values.
     It only reports the presence and location of potential secrets.
     """
     setup_logging(verbose)
+
+    # Handle --check-staged mode
+    if check_staged:
+        _scan_staged_secrets(use_exit_code)
+        return
     
     with console.status("[bold cyan]Scanning for plaintext secrets...[/]"):
         scanner = SecretsScanner()
@@ -430,7 +548,7 @@ def daemon(
         # Use saved configuration
         ideviewer daemon --foreground
     """
-    setup_logging(verbose, log_file)
+    setup_logging(verbose, log_file, daemon_mode=not foreground)
     
     # Setup API client
     api_client = None
@@ -597,12 +715,130 @@ def register(customer_key: str, portal_url: str, interval: int):
     except Exception as e:
         console.print(f"  [yellow]![/] Initial scan failed: {e}")
     
+    # Step 5: Install gitleaks + global hooks
+    console.print("\n[cyan]Step 5:[/] Installing pre-commit hooks...")
+    try:
+        from .gitleaks import install_gitleaks, is_gitleaks_installed, get_gitleaks_version
+        from .hooks import install_global_hook
+    except ImportError:
+        from ideviewer.gitleaks import install_gitleaks, is_gitleaks_installed, get_gitleaks_version
+        from ideviewer.hooks import install_global_hook
+
+    try:
+        if install_gitleaks():
+            version = get_gitleaks_version()
+            console.print(f"  [green]✓[/] gitleaks installed (version: {version})")
+        else:
+            console.print(f"  [yellow]![/] Could not install gitleaks; built-in scanner will be used")
+    except Exception as e:
+        console.print(f"  [yellow]![/] gitleaks installation failed: {e}")
+
+    try:
+        if install_global_hook():
+            console.print(f"  [green]✓[/] Global pre-commit hooks installed")
+        else:
+            console.print(f"  [yellow]![/] Could not install global hooks")
+    except Exception as e:
+        console.print(f"  [yellow]![/] Hook installation failed: {e}")
+
+    # Step 6: Start the daemon
+    console.print("\n[cyan]Step 6:[/] Starting daemon...")
+    daemon_started = _start_daemon_service()
+
     console.print("\n" + "="*50)
     console.print("[bold green]Registration complete![/]")
-    console.print("\nTo start the daemon, run:")
-    console.print(f"  [cyan]ideviewer daemon --foreground[/]")
-    console.print("\nOr to run in background:")
-    console.print(f"  [cyan]ideviewer daemon[/]")
+    if daemon_started:
+        console.print("\nDaemon is running in the background.")
+        console.print(f"[dim]Logs: {_get_default_log_dir() / 'daemon.log'}[/]")
+    else:
+        console.print("\nTo start the daemon manually:")
+        console.print(f"  [cyan]ideviewer daemon --foreground[/]")
+
+
+def _start_daemon_service() -> bool:
+    """Start the daemon as a background service. Returns True if started."""
+    import subprocess
+
+    if sys.platform == 'darwin':
+        plist = '/Library/LaunchDaemons/com.ideviewer.daemon.plist'
+        if Path(plist).exists():
+            try:
+                # Unload first in case it's already loaded
+                subprocess.run(
+                    ['sudo', 'launchctl', 'unload', plist],
+                    capture_output=True, timeout=10
+                )
+                result = subprocess.run(
+                    ['sudo', 'launchctl', 'load', plist],
+                    capture_output=True, text=True, timeout=10
+                )
+                if result.returncode == 0:
+                    console.print("  [green]✓[/] Daemon started via launchd")
+                    return True
+                else:
+                    console.print(f"  [yellow]![/] launchctl load failed: {result.stderr.strip()}")
+            except subprocess.TimeoutExpired:
+                console.print("  [yellow]![/] Timed out starting daemon")
+            except Exception as e:
+                console.print(f"  [yellow]![/] Could not start daemon: {e}")
+        else:
+            # Not installed via .pkg — start as a background process
+            try:
+                subprocess.Popen(
+                    ['ideviewer', 'daemon'],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True
+                )
+                console.print("  [green]✓[/] Daemon started as background process")
+                return True
+            except Exception as e:
+                console.print(f"  [yellow]![/] Could not start daemon: {e}")
+
+    elif sys.platform == 'linux':
+        service_file = Path('/lib/systemd/system/ideviewer.service')
+        if service_file.exists():
+            try:
+                subprocess.run(['sudo', 'systemctl', 'daemon-reload'], capture_output=True, timeout=10)
+                subprocess.run(['sudo', 'systemctl', 'enable', 'ideviewer'], capture_output=True, timeout=10)
+                result = subprocess.run(
+                    ['sudo', 'systemctl', 'start', 'ideviewer'],
+                    capture_output=True, text=True, timeout=10
+                )
+                if result.returncode == 0:
+                    console.print("  [green]✓[/] Daemon started via systemd")
+                    return True
+                else:
+                    console.print(f"  [yellow]![/] systemctl start failed: {result.stderr.strip()}")
+            except Exception as e:
+                console.print(f"  [yellow]![/] Could not start daemon: {e}")
+        else:
+            try:
+                subprocess.Popen(
+                    ['ideviewer', 'daemon'],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True
+                )
+                console.print("  [green]✓[/] Daemon started as background process")
+                return True
+            except Exception as e:
+                console.print(f"  [yellow]![/] Could not start daemon: {e}")
+
+    elif sys.platform == 'win32':
+        try:
+            subprocess.Popen(
+                ['ideviewer', 'daemon'],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+            )
+            console.print("  [green]✓[/] Daemon started as background process")
+            return True
+        except Exception as e:
+            console.print(f"  [yellow]![/] Could not start daemon: {e}")
+
+    return False
 
 
 @cli.command()
@@ -635,6 +871,80 @@ def stop(pid_file: str):
         pid_path.unlink()
     except PermissionError:
         console.print("[red]Permission denied. Try running with sudo.[/]")
+
+
+@cli.group()
+def hooks():
+    """Manage pre-commit hooks for secret scanning."""
+    pass
+
+
+@hooks.command()
+def status():
+    """Show the current status of global pre-commit hooks."""
+    try:
+        from .hooks import get_hook_status
+    except ImportError:
+        from ideviewer.hooks import get_hook_status
+
+    hook_status = get_hook_status()
+
+    console.print(Panel(
+        "[bold]Pre-commit Hook Status[/]",
+        border_style="cyan"
+    ))
+
+    installed = hook_status["installed"]
+    if installed:
+        console.print(f"  [green]Installed:[/]  Yes")
+    else:
+        console.print(f"  [red]Installed:[/]  No")
+
+    console.print(f"  [cyan]Hook path:[/]  {hook_status['hook_path']}")
+    console.print(f"  [cyan]Scanner:[/]    {hook_status['scanner']}")
+
+    if hook_status["gitleaks_version"]:
+        console.print(f"  [cyan]Gitleaks:[/]   {hook_status['gitleaks_version']}")
+    else:
+        console.print(f"  [dim]Gitleaks:[/]   Not installed (using built-in scanner)")
+
+
+@hooks.command()
+def install():
+    """Install global pre-commit hooks."""
+    try:
+        from .gitleaks import install_gitleaks, get_gitleaks_version
+        from .hooks import install_global_hook
+    except ImportError:
+        from ideviewer.gitleaks import install_gitleaks, get_gitleaks_version
+        from ideviewer.hooks import install_global_hook
+
+    console.print("[cyan]Installing gitleaks...[/]")
+    if install_gitleaks():
+        version = get_gitleaks_version()
+        console.print(f"  [green]✓[/] gitleaks installed (version: {version})")
+    else:
+        console.print(f"  [yellow]![/] Could not install gitleaks; built-in scanner will be used")
+
+    console.print("[cyan]Installing global hooks...[/]")
+    if install_global_hook():
+        console.print(f"  [green]✓[/] Global pre-commit hooks installed")
+    else:
+        console.print(f"  [red]✗[/] Failed to install global hooks")
+
+
+@hooks.command()
+def uninstall():
+    """Uninstall global pre-commit hooks."""
+    try:
+        from .hooks import uninstall_global_hook
+    except ImportError:
+        from ideviewer.hooks import uninstall_global_hook
+
+    if uninstall_global_hook():
+        console.print("[green]✓ Global hooks uninstalled[/]")
+    else:
+        console.print("[red]✗ Failed to uninstall global hooks[/]")
 
 
 def display_scan_result(result: ScanResult):

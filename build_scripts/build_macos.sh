@@ -104,7 +104,10 @@ cat > "$PKG_ROOT/Library/LaunchDaemons/com.ideviewer.daemon.plist" << EOF
     <key>RunAtLoad</key>
     <false/>
     <key>KeepAlive</key>
-    <false/>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
     <key>StandardOutPath</key>
     <string>/var/log/ideviewer/stdout.log</string>
     <key>StandardErrorPath</key>

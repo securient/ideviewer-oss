@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import or_
 
 from app import db
-from app.models import CustomerKey, Host, ScanReport, ExtensionInfo, SecretFinding, PackageInfo, ScanRequest, TamperAlert
+from app.models import CustomerKey, Host, ScanReport, ExtensionInfo, SecretFinding, PackageInfo, ScanRequest, TamperAlert, Vulnerability, HookBypass
 from app.auth.forms import CustomerKeyForm
 from app.marketplace import fetch_extension_details
 
@@ -110,6 +110,87 @@ def dashboard():
                 'host': host_map.get(alert.host_id),
             })
     
+    # Vulnerability statistics
+    total_vulnerabilities = 0
+    vulnerable_packages_count = 0
+    vulnerable_hosts_count = 0
+    critical_vuln_count = 0
+    top_vulnerable_packages = []
+
+    if host_ids:
+        total_vulnerabilities = Vulnerability.query.filter(
+            Vulnerability.host_id.in_(host_ids),
+            Vulnerability.is_resolved == False
+        ).count()
+
+        # Count distinct vulnerable packages (name + version + manager)
+        vulnerable_packages_sub = db.session.query(
+            Vulnerability.package_name,
+            Vulnerability.package_version,
+            Vulnerability.package_manager
+        ).filter(
+            Vulnerability.host_id.in_(host_ids),
+            Vulnerability.is_resolved == False
+        ).group_by(
+            Vulnerability.package_name,
+            Vulnerability.package_version,
+            Vulnerability.package_manager
+        ).subquery()
+        vulnerable_packages_count = db.session.query(
+            db.func.count()
+        ).select_from(vulnerable_packages_sub).scalar() or 0
+
+        vulnerable_hosts_count = db.session.query(
+            db.func.count(db.func.distinct(Vulnerability.host_id))
+        ).filter(
+            Vulnerability.host_id.in_(host_ids),
+            Vulnerability.is_resolved == False
+        ).scalar() or 0
+
+        critical_vuln_count = Vulnerability.query.filter(
+            Vulnerability.host_id.in_(host_ids),
+            Vulnerability.is_resolved == False,
+            Vulnerability.severity_label == 'CRITICAL'
+        ).count()
+
+        # Top 5 most common vulnerable packages across all hosts
+        top_pkgs = db.session.query(
+            Vulnerability.package_name,
+            Vulnerability.package_version,
+            Vulnerability.package_manager,
+            Vulnerability.severity_label,
+            db.func.count(db.func.distinct(Vulnerability.host_id)).label('host_count')
+        ).filter(
+            Vulnerability.host_id.in_(host_ids),
+            Vulnerability.is_resolved == False
+        ).group_by(
+            Vulnerability.package_name,
+            Vulnerability.package_version,
+            Vulnerability.package_manager,
+            Vulnerability.severity_label
+        ).order_by(
+            db.desc('host_count')
+        ).limit(5).all()
+
+        top_vulnerable_packages = [
+            {
+                'name': row.package_name,
+                'version': row.package_version,
+                'manager': row.package_manager,
+                'severity': row.severity_label,
+                'host_count': row.host_count,
+            }
+            for row in top_pkgs
+        ]
+
+    # Hook bypass statistics
+    total_hook_bypasses = 0
+    if host_ids:
+        total_hook_bypasses = HookBypass.query.filter(
+            HookBypass.host_id.in_(host_ids),
+            HookBypass.is_acknowledged == False
+        ).count()
+
     stats = {
         'total_hosts': total_hosts,
         'active_hosts': active_hosts,
@@ -120,16 +201,387 @@ def dashboard():
         'total_packages': total_packages,
         'missing_hosts': len(missing_hosts),
         'tamper_alerts': len(tamper_alerts),
+        'total_hook_bypasses': total_hook_bypasses,
     }
-    
-    return render_template('main/dashboard.html', 
-                           hosts=hosts, 
+
+    return render_template('main/dashboard.html',
+                           hosts=hosts,
                            stats=stats,
                            customer_keys=customer_keys,
                            hosts_with_secrets=hosts_with_secrets,
                            missing_hosts=missing_hosts,
                            tamper_alerts=tamper_alerts,
+                           total_vulnerabilities=total_vulnerabilities,
+                           vulnerable_packages_count=vulnerable_packages_count,
+                           vulnerable_hosts_count=vulnerable_hosts_count,
+                           critical_vuln_count=critical_vuln_count,
+                           top_vulnerable_packages=top_vulnerable_packages,
                            now=datetime.utcnow())
+
+
+@main_bp.route('/vulnerabilities')
+@login_required
+def vulnerabilities():
+    """Show all vulnerabilities across all hosts."""
+    customer_keys = current_user.customer_keys.filter_by(is_active=True).all()
+    key_ids = [k.id for k in customer_keys]
+    hosts = Host.query.filter(Host.customer_key_id.in_(key_ids)).all() if key_ids else []
+    host_ids = [h.id for h in hosts]
+    host_map = {h.id: h for h in hosts}
+
+    grouped = {}
+    if host_ids:
+        vulns = Vulnerability.query.filter(
+            Vulnerability.host_id.in_(host_ids),
+            Vulnerability.is_resolved == False
+        ).order_by(
+            Vulnerability.package_name,
+            Vulnerability.package_version,
+            Vulnerability.package_manager
+        ).all()
+
+        for v in vulns:
+            key = (v.package_name, v.package_version or '', v.package_manager or '')
+            if key not in grouped:
+                grouped[key] = {
+                    'package_name': v.package_name,
+                    'package_version': v.package_version,
+                    'package_manager': v.package_manager,
+                    'severity': v.severity_label,
+                    'cvss_score': v.cvss_score,
+                    'vuln_ids': [],
+                    'host_ids': set(),
+                    'host_names': [],
+                }
+            entry = grouped[key]
+            if v.vuln_id and v.vuln_id not in entry['vuln_ids']:
+                entry['vuln_ids'].append(v.vuln_id)
+            if v.host_id not in entry['host_ids']:
+                entry['host_ids'].add(v.host_id)
+                host_obj = host_map.get(v.host_id)
+                if host_obj:
+                    entry['host_names'].append(host_obj.hostname)
+            # Keep the highest severity
+            severity_order = {'CRITICAL': 0, 'HIGH': 1, 'MEDIUM': 2, 'LOW': 3}
+            if severity_order.get(v.severity_label, 4) < severity_order.get(entry['severity'], 4):
+                entry['severity'] = v.severity_label
+            if v.cvss_score and (entry['cvss_score'] is None or v.cvss_score > entry['cvss_score']):
+                entry['cvss_score'] = v.cvss_score
+
+    # Convert to list and sort by severity then host count
+    severity_order = {'CRITICAL': 0, 'HIGH': 1, 'MEDIUM': 2, 'LOW': 3}
+    packages = sorted(
+        grouped.values(),
+        key=lambda x: (severity_order.get(x['severity'], 4), -len(x['host_ids']))
+    )
+    for pkg in packages:
+        pkg['host_count'] = len(pkg['host_ids'])
+        del pkg['host_ids']
+
+    # Collect distinct filter values
+    all_managers = sorted(set(p['package_manager'] for p in packages if p['package_manager']))
+    all_severities = sorted(set(p['severity'] for p in packages if p['severity']),
+                            key=lambda s: {'CRITICAL': 0, 'HIGH': 1, 'MEDIUM': 2, 'LOW': 3}.get(s, 4))
+    all_hosts = sorted(set(h for p in packages for h in p['host_names']))
+    all_cves = sorted(set(vid for p in packages for vid in p['vuln_ids']))
+
+    return render_template('main/vulnerabilities.html',
+                           packages=packages,
+                           total_packages=len(packages),
+                           all_managers=all_managers,
+                           all_severities=all_severities,
+                           all_hosts=all_hosts,
+                           all_cves=all_cves)
+
+
+@main_bp.route('/hosts')
+@login_required
+def all_hosts():
+    """Show all hosts across all customer keys."""
+    customer_keys = current_user.customer_keys.filter_by(is_active=True).all()
+    key_ids = [k.id for k in customer_keys]
+    hosts = Host.query.filter(Host.customer_key_id.in_(key_ids)).order_by(Host.last_seen_at.desc()).all() if key_ids else []
+    host_ids = [h.id for h in hosts]
+    now = datetime.utcnow()
+
+    filter_mode = request.args.get('filter', '')
+
+    host_list = []
+    platforms = set()
+    for host in hosts:
+        hb_time = host.last_heartbeat_at or host.last_seen_at
+        if hb_time and (now - hb_time).total_seconds() < 300:
+            status = 'online'
+        elif hb_time and (now - hb_time).total_seconds() < 1800:
+            status = 'idle'
+        else:
+            status = 'offline'
+
+        if filter_mode == 'active':
+            if not host.last_seen_at or host.last_seen_at < now - timedelta(hours=24):
+                continue
+
+        latest = host.latest_report
+        ext_count = latest.total_extensions if latest else 0
+        pkg_count = PackageInfo.query.filter_by(host_id=host.id).count()
+        vuln_count = Vulnerability.query.filter(
+            Vulnerability.host_id == host.id,
+            Vulnerability.is_resolved == False
+        ).count()
+        secret_count = SecretFinding.query.filter_by(
+            host_id=host.id, is_resolved=False
+        ).count()
+
+        if host.platform:
+            platforms.add(host.platform)
+
+        host_list.append({
+            'host': host,
+            'status': status,
+            'ext_count': ext_count,
+            'pkg_count': pkg_count,
+            'vuln_count': vuln_count,
+            'secret_count': secret_count,
+        })
+
+    return render_template('main/all_hosts.html',
+                           host_list=host_list,
+                           total_hosts=len(host_list),
+                           platforms=sorted(platforms),
+                           filter_mode=filter_mode,
+                           now=now)
+
+
+@main_bp.route('/extensions')
+@login_required
+def all_extensions():
+    """Show all extensions across all hosts, deduplicated."""
+    customer_keys = current_user.customer_keys.filter_by(is_active=True).all()
+    key_ids = [k.id for k in customer_keys]
+    hosts = Host.query.filter(Host.customer_key_id.in_(key_ids)).all() if key_ids else []
+    host_map = {h.id: h for h in hosts}
+
+    filter_mode = request.args.get('filter', '')
+
+    # Group extensions by extension_id
+    ext_groups = {}
+    ides = set()
+    risk_levels = set()
+
+    for host in hosts:
+        latest = host.latest_report
+        if not latest or not latest.scan_data:
+            continue
+        for ide in latest.scan_data.get('ides', []):
+            ide_name = ide.get('name', 'Unknown')
+            ides.add(ide_name)
+            for ext in ide.get('extensions', []):
+                ext_id = ext.get('id', ext.get('name', 'Unknown'))
+                permissions = ext.get('permissions', [])
+                risk_level = calculate_risk_level(permissions)
+                risk_levels.add(risk_level)
+
+                if ext_id not in ext_groups:
+                    ext_groups[ext_id] = {
+                        'extension_id': ext_id,
+                        'name': ext.get('name', 'Unknown'),
+                        'ide': ide_name,
+                        'version': ext.get('version', ''),
+                        'publisher': ext.get('publisher', 'Unknown'),
+                        'risk_level': risk_level,
+                        'host_ids': set(),
+                        'host_names': [],
+                    }
+                entry = ext_groups[ext_id]
+                if host.id not in entry['host_ids']:
+                    entry['host_ids'].add(host.id)
+                    entry['host_names'].append(host.hostname)
+                # Keep highest risk
+                risk_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
+                if risk_order.get(risk_level, 4) < risk_order.get(entry['risk_level'], 4):
+                    entry['risk_level'] = risk_level
+
+    extensions_list = list(ext_groups.values())
+    for e in extensions_list:
+        e['host_count'] = len(e['host_ids'])
+        del e['host_ids']
+
+    if filter_mode == 'risky':
+        extensions_list = [e for e in extensions_list if e['risk_level'] in ('high', 'critical')]
+
+    risk_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
+    extensions_list.sort(key=lambda x: (risk_order.get(x['risk_level'], 4), -x['host_count']))
+
+    all_hostnames = sorted(set(h.hostname for h in hosts))
+
+    return render_template('main/all_extensions.html',
+                           extensions=extensions_list,
+                           total_extensions=len(extensions_list),
+                           all_ides=sorted(ides),
+                           all_risk_levels=sorted(risk_levels, key=lambda r: risk_order.get(r, 4)),
+                           all_hosts=all_hostnames,
+                           filter_mode=filter_mode)
+
+
+@main_bp.route('/secrets')
+@login_required
+def all_secrets():
+    """Show all unresolved secrets across all hosts."""
+    customer_keys = current_user.customer_keys.filter_by(is_active=True).all()
+    key_ids = [k.id for k in customer_keys]
+    hosts = Host.query.filter(Host.customer_key_id.in_(key_ids)).all() if key_ids else []
+    host_ids = [h.id for h in hosts]
+    host_map = {h.id: h for h in hosts}
+
+    secrets = []
+    all_severities = set()
+    all_sources = set()
+    all_types = set()
+
+    if host_ids:
+        findings = SecretFinding.query.filter(
+            SecretFinding.host_id.in_(host_ids),
+            SecretFinding.is_resolved == False
+        ).order_by(SecretFinding.severity.asc(), SecretFinding.last_seen_at.desc()).all()
+
+        for s in findings:
+            host_obj = host_map.get(s.host_id)
+            all_severities.add(s.severity or 'unknown')
+            all_sources.add(s.source or 'filesystem')
+            all_types.add(s.secret_type)
+            secrets.append({
+                'finding': s,
+                'host': host_obj,
+            })
+
+    severity_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
+    return render_template('main/all_secrets.html',
+                           secrets=secrets,
+                           total_secrets=len(secrets),
+                           all_severities=sorted(all_severities, key=lambda x: severity_order.get(x, 4)),
+                           all_sources=sorted(all_sources),
+                           all_types=sorted(all_types))
+
+
+@main_bp.route('/packages')
+@login_required
+def all_packages():
+    """Show all packages across all hosts, deduplicated."""
+    customer_keys = current_user.customer_keys.filter_by(is_active=True).all()
+    key_ids = [k.id for k in customer_keys]
+    hosts = Host.query.filter(Host.customer_key_id.in_(key_ids)).all() if key_ids else []
+    host_ids = [h.id for h in hosts]
+    host_map = {h.id: h for h in hosts}
+
+    filter_mode = request.args.get('filter', '')
+
+    pkg_groups = {}
+    all_managers = set()
+
+    if host_ids:
+        packages_query = PackageInfo.query.filter(
+            PackageInfo.host_id.in_(host_ids)
+        ).all()
+
+        for pkg in packages_query:
+            key = (pkg.name, pkg.version or '', pkg.package_manager or '')
+            all_managers.add(pkg.package_manager)
+            if key not in pkg_groups:
+                pkg_groups[key] = {
+                    'name': pkg.name,
+                    'version': pkg.version,
+                    'manager': pkg.package_manager,
+                    'host_ids': set(),
+                    'host_names': [],
+                    'vuln_ids': [],
+                    'severity': None,
+                    'has_hooks': False,
+                }
+            entry = pkg_groups[key]
+            if pkg.host_id not in entry['host_ids']:
+                entry['host_ids'].add(pkg.host_id)
+                host_obj = host_map.get(pkg.host_id)
+                if host_obj:
+                    entry['host_names'].append(host_obj.hostname)
+            if pkg.lifecycle_hooks:
+                entry['has_hooks'] = True
+
+        # Attach vulnerability info
+        vulns = Vulnerability.query.filter(
+            Vulnerability.host_id.in_(host_ids),
+            Vulnerability.is_resolved == False
+        ).all()
+
+        for v in vulns:
+            key = (v.package_name, v.package_version or '', v.package_manager or '')
+            if key in pkg_groups:
+                entry = pkg_groups[key]
+                if v.vuln_id and v.vuln_id not in entry['vuln_ids']:
+                    entry['vuln_ids'].append(v.vuln_id)
+                severity_order = {'CRITICAL': 0, 'HIGH': 1, 'MEDIUM': 2, 'LOW': 3}
+                if entry['severity'] is None or severity_order.get(v.severity_label, 4) < severity_order.get(entry['severity'], 4):
+                    entry['severity'] = v.severity_label
+
+    packages_list = list(pkg_groups.values())
+    for p in packages_list:
+        p['host_count'] = len(p['host_ids'])
+        del p['host_ids']
+
+    if filter_mode == 'vulnerable':
+        packages_list = [p for p in packages_list if p['vuln_ids']]
+    elif filter_mode == 'hooks':
+        packages_list = [p for p in packages_list if p['has_hooks']]
+
+    severity_order = {'CRITICAL': 0, 'HIGH': 1, 'MEDIUM': 2, 'LOW': 3}
+    packages_list.sort(key=lambda x: (
+        severity_order.get(x['severity'], 99),
+        -len(x['vuln_ids']),
+        -x['host_count'],
+        x['name']
+    ))
+
+    all_severities = sorted(set(p['severity'] for p in packages_list if p['severity']),
+                            key=lambda s: severity_order.get(s, 4))
+
+    return render_template('main/all_packages.html',
+                           packages=packages_list,
+                           total_packages=len(packages_list),
+                           all_managers=sorted(all_managers),
+                           all_severities=all_severities,
+                           filter_mode=filter_mode)
+
+
+@main_bp.route('/hook-bypasses')
+@login_required
+def all_hook_bypasses():
+    """Show all hook bypass events across all hosts."""
+    customer_keys = current_user.customer_keys.filter_by(is_active=True).all()
+    key_ids = [k.id for k in customer_keys]
+    hosts = Host.query.filter(Host.customer_key_id.in_(key_ids)).all() if key_ids else []
+    host_ids = [h.id for h in hosts]
+    host_map = {h.id: h for h in hosts}
+
+    bypasses = []
+    all_host_names = set()
+
+    if host_ids:
+        records = HookBypass.query.filter(
+            HookBypass.host_id.in_(host_ids)
+        ).order_by(HookBypass.detected_at.desc()).all()
+
+        for b in records:
+            host_obj = host_map.get(b.host_id)
+            if host_obj:
+                all_host_names.add(host_obj.hostname)
+            bypasses.append({
+                'bypass': b,
+                'host': host_obj,
+            })
+
+    return render_template('main/all_hook_bypasses.html',
+                           bypasses=bypasses,
+                           total_bypasses=len(bypasses),
+                           all_hosts=sorted(all_host_names))
 
 
 @main_bp.route('/host/<host_id>')
@@ -214,9 +666,31 @@ def host_detail(host_id):
     
     # Serialize secrets for JavaScript
     secrets_json = [s.to_dict() for s in secrets]
-    
-    return render_template('main/host_detail.html', 
-                           host=host, 
+
+    # Get vulnerability findings for this host, indexed by package for quick lookup
+    host_vulns = Vulnerability.query.filter_by(
+        host_id=host.id,
+        is_resolved=False
+    ).order_by(Vulnerability.cvss_score.desc().nullslast()).all()
+
+    # Build lookup: "package_name:package_version:package_manager" -> [vulns]
+    # Using string keys because Jinja2 can't use tuple keys in .get()
+    pkg_vuln_map = {}
+    for v in host_vulns:
+        key = f"{v.package_name}:{v.package_version}:{v.package_manager}"
+        if key not in pkg_vuln_map:
+            pkg_vuln_map[key] = []
+        pkg_vuln_map[key].append(v)
+
+    total_vuln_count = len(host_vulns)
+
+    # Get hook bypass events for this host
+    hook_bypasses = HookBypass.query.filter_by(
+        host_id=host.id
+    ).order_by(HookBypass.detected_at.desc()).limit(50).all()
+
+    return render_template('main/host_detail.html',
+                           host=host,
                            extensions=extensions,
                            latest_report=latest_report,
                            permission_info=PERMISSION_INFO,
@@ -224,7 +698,10 @@ def host_detail(host_id):
                            secrets=secrets,
                            secrets_json=secrets_json,
                            packages_by_manager=packages_by_manager,
-                           total_packages=len(packages_query))
+                           total_packages=len(packages_query),
+                           pkg_vuln_map=pkg_vuln_map,
+                           total_vuln_count=total_vuln_count,
+                           hook_bypasses=hook_bypasses)
 
 
 @main_bp.route('/keys')
@@ -381,6 +858,60 @@ def trigger_scan(host_id):
         'success': True,
         'scan_request': scan_req.to_dict()
     })
+
+
+@main_bp.route('/host/<host_id>/cancel-scan', methods=['POST'])
+@login_required
+def cancel_scan(host_id):
+    """Cancel an in-progress on-demand scan."""
+    host = Host.query.filter_by(public_id=host_id).first_or_404()
+    if host.customer_key.user_id != current_user.id:
+        return jsonify({'error': 'Access denied'}), 403
+
+    active_scan = ScanRequest.query.filter(
+        ScanRequest.host_id == host.id,
+        ScanRequest.status.in_(['pending', 'connecting', 'scanning_ides',
+                                 'scanning_secrets', 'scanning_packages'])
+    ).first()
+
+    if not active_scan:
+        return jsonify({'error': 'No active scan to cancel'}), 404
+
+    active_scan.status = 'cancelled'
+    active_scan.completed_at = datetime.utcnow()
+    active_scan.add_log(f'Scan cancelled by {current_user.username}', level='warning')
+    db.session.commit()
+
+    return jsonify({
+        'success': True,
+        'scan_request': active_scan.to_dict()
+    })
+
+
+@main_bp.route('/host/<host_id>/delete', methods=['POST'])
+@login_required
+def delete_host(host_id):
+    """Delete a host and all its associated data."""
+    host = Host.query.filter_by(public_id=host_id).first_or_404()
+    if host.customer_key.user_id != current_user.id:
+        flash('Access denied', 'error')
+        return redirect(url_for('main.dashboard'))
+
+    hostname = host.hostname
+
+    # Delete all associated data
+    ScanRequest.query.filter_by(host_id=host.id).delete()
+    ScanReport.query.filter_by(host_id=host.id).delete()
+    ExtensionInfo.query.filter_by(host_id=host.id).delete()
+    SecretFinding.query.filter_by(host_id=host.id).delete()
+    PackageInfo.query.filter_by(host_id=host.id).delete()
+    TamperAlert.query.filter_by(host_id=host.id).delete()
+
+    db.session.delete(host)
+    db.session.commit()
+
+    flash(f'Host "{hostname}" has been deleted', 'success')
+    return redirect(url_for('main.dashboard'))
 
 
 @main_bp.route('/host/<host_id>/scan-status')
@@ -867,7 +1398,7 @@ def extension_detail(extension_id):
                            permission_info=PERMISSION_INFO)
 
 
-@main_bp.route('/package/<package_name>')
+@main_bp.route('/package/<path:package_name>')
 @login_required
 def package_detail(package_name):
     """Detailed view of a package showing which hosts have it installed."""
@@ -932,7 +1463,7 @@ def package_detail(package_name):
     return render_template('main/package_detail.html', package=package_data)
 
 
-@main_bp.route('/package/<package_name>/export-csv')
+@main_bp.route('/package/<path:package_name>/export-csv')
 @login_required
 def export_package_csv(package_name):
     """Export hosts with a specific package as CSV."""
@@ -1205,5 +1736,56 @@ def export_host_secrets_csv(host_id):
         mimetype='text/csv',
         headers={
             'Content-Disposition': f'attachment; filename={safe_hostname}_secrets.csv'
+        }
+    )
+
+
+@main_bp.route('/host/<host_id>/export-vulns-csv')
+@login_required
+def export_host_vulns_csv(host_id):
+    """Export all unresolved vulnerabilities for a specific host as CSV."""
+    import csv
+    import io
+    from flask import Response
+
+    host = Host.query.filter_by(public_id=host_id).first_or_404()
+    if host.customer_key.user_id != current_user.id:
+        return "Access denied", 403
+
+    vulns = Vulnerability.query.filter_by(
+        host_id=host.id,
+        is_resolved=False
+    ).order_by(Vulnerability.cvss_score.desc().nullslast()).all()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        'Vulnerability ID', 'Package', 'Version', 'Package Manager',
+        'Severity', 'CVSS Score', 'Summary', 'Fixed Version',
+        'First Detected', 'Last Seen'
+    ])
+
+    for v in vulns:
+        writer.writerow([
+            v.vuln_id,
+            v.package_name,
+            v.package_version,
+            v.package_manager,
+            v.severity_label,
+            f'{v.cvss_score:.1f}' if v.cvss_score else '',
+            v.summary or '',
+            v.fixed_version or '',
+            v.first_detected_at.isoformat() if v.first_detected_at else '',
+            v.last_seen_at.isoformat() if v.last_seen_at else '',
+        ])
+
+    output.seek(0)
+    safe_hostname = host.hostname.replace(' ', '_')
+
+    return Response(
+        output.getvalue(),
+        mimetype='text/csv',
+        headers={
+            'Content-Disposition': f'attachment; filename={safe_hostname}_vulnerabilities.csv'
         }
     )

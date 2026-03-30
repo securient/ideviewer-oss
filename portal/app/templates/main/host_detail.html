@@ -286,12 +286,22 @@
                 <h1 style="font-size: 1.75rem; font-weight: 700; margin-bottom: 0.25rem;">{{ host.hostname }}</h1>
                 <p style="color: var(--text-secondary);">
                     {{ host.ip_address or 'Unknown IP' }} • {{ host.platform or 'Unknown Platform' }}
-                    • Last seen: {{ host.last_seen_at.strftime('%Y-%m-%d %H:%M') if host.last_seen_at else 'Never' }}
+                    • Last seen: <span class="local-time" data-utc="{{ host.last_seen_at.isoformat() + 'Z' if host.last_seen_at else '' }}">{{ host.last_seen_at.strftime('%Y-%m-%d %H:%M') if host.last_seen_at else 'Never' }}</span>
                 </p>
             </div>
-            <button id="triggerScanBtn" onclick="triggerOnDemandScan()" class="btn btn-primary" style="white-space: nowrap;">
-                <i class="fas fa-sync-alt"></i> Trigger Scan
-            </button>
+            <div style="display: flex; gap: 0.5rem;">
+                <button id="triggerScanBtn" onclick="triggerOnDemandScan()" class="btn btn-primary" style="white-space: nowrap;">
+                    <i class="fas fa-sync-alt"></i> Trigger Scan
+                </button>
+                <form method="POST" action="{{ url_for('main.delete_host', host_id=host.public_id) }}"
+                      onsubmit="return confirm('Are you sure you want to delete this host? All scan data, extensions, packages, and secrets for this host will be permanently removed.');"
+                      style="display: inline;">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit" class="btn btn-secondary" style="white-space: nowrap; color: var(--danger);" title="Delete this host">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                </form>
+            </div>
         </div>
     </div>
 
@@ -302,14 +312,19 @@
                 <i class="fas fa-terminal" style="color: var(--accent-primary);"></i>
                 <span id="scanLogTitle">On-Demand Scan</span>
             </h3>
-            <span id="scanStatusBadge" class="badge" style="font-size: 0.75rem;">pending</span>
+            <div style="display: flex; gap: 0.5rem; align-items: center;">
+                <span id="scanStatusBadge" class="badge" style="font-size: 0.75rem;">pending</span>
+                <button id="cancelScanBtn" onclick="cancelOnDemandScan()" class="btn btn-sm btn-secondary" style="font-size: 0.6875rem; padding: 0.25rem 0.5rem; color: var(--danger); display: none;">
+                    <i class="fas fa-stop"></i> Stop
+                </button>
+            </div>
         </div>
         <div id="scanLogEntries" style="background: var(--bg-primary); border-radius: var(--radius-sm); padding: 0.75rem 1rem; max-height: 350px; overflow-y: auto; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.8125rem; line-height: 1.6;">
         </div>
     </div>
 
     <!-- Stats Row -->
-    <div class="stats-grid" style="grid-template-columns: repeat(5, 1fr);">
+    <div class="stats-grid" style="grid-template-columns: repeat(7, 1fr);">
         <div class="stat-card">
             <div class="stat-icon purple">
                 <i class="fas fa-code"></i>
@@ -355,7 +370,59 @@
                 <p>Risky</p>
             </div>
         </div>
+        <div class="stat-card">
+            <div class="stat-icon {% if vulnerabilities|length > 0 %}red{% else %}green{% endif %}">
+                <i class="fas fa-shield-alt"></i>
+            </div>
+            <div class="stat-content">
+                <h3>{{ vulnerabilities|length }}</h3>
+                <p>CVEs</p>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon {% if hook_bypasses|length > 0 %}orange{% else %}green{% endif %}">
+                <i class="fas fa-ban"></i>
+            </div>
+            <div class="stat-content">
+                <h3>{{ hook_bypasses|length }}</h3>
+                <p>Bypasses</p>
+            </div>
+        </div>
     </div>
+
+    {% if hook_bypasses %}
+    <!-- Hook Bypass Warnings -->
+    <div class="card" style="border-left: 4px solid var(--warning, #f0ad4e); margin-bottom: 1.5rem;">
+        <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem;">
+            <i class="fas fa-exclamation-circle" style="color: var(--warning, #f0ad4e);"></i>
+            <h3 style="margin: 0; font-size: 1rem;">Pre-commit Hook Bypasses (--no-verify)</h3>
+        </div>
+        <div style="overflow-x: auto;">
+            <table style="width: 100%; font-size: 0.8125rem; border-collapse: collapse;">
+                <thead>
+                    <tr style="border-bottom: 1px solid var(--border-color);">
+                        <th style="text-align: left; padding: 0.5rem;">Commit</th>
+                        <th style="text-align: left; padding: 0.5rem;">Message</th>
+                        <th style="text-align: left; padding: 0.5rem;">Author</th>
+                        <th style="text-align: left; padding: 0.5rem;">Repository</th>
+                        <th style="text-align: left; padding: 0.5rem;">Detected</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for bypass in hook_bypasses %}
+                    <tr style="border-bottom: 1px solid var(--border-color);">
+                        <td style="padding: 0.5rem; font-family: monospace;">{{ bypass.commit_hash[:8] if bypass.commit_hash else '-' }}</td>
+                        <td style="padding: 0.5rem;">{{ bypass.commit_message[:60] if bypass.commit_message else '-' }}{% if bypass.commit_message and bypass.commit_message|length > 60 %}...{% endif %}</td>
+                        <td style="padding: 0.5rem;">{{ bypass.commit_author or '-' }}</td>
+                        <td style="padding: 0.5rem; font-size: 0.75rem; color: var(--text-secondary);">{{ bypass.repo_path or '-' }}</td>
+                        <td style="padding: 0.5rem; white-space: nowrap;">{{ bypass.detected_at.strftime('%Y-%m-%d %H:%M') if bypass.detected_at else '-' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
 
     <!-- Tabs Navigation -->
     <div class="card">
@@ -379,21 +446,51 @@
 
         <!-- Extensions Tab -->
         <div id="extensions-tab" class="tab-content active">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
                 <h3 style="font-weight: 600;">IDE Extensions</h3>
-                <div style="display: flex; gap: 0.5rem; align-items: center;">
-                    <input type="text" id="extensionSearch" class="form-input" placeholder="Search extensions..."
-                           style="width: 250px;" onkeyup="filterTable('extensionSearch', 'extensionsTable')">
-                    {% if extensions %}
-                    <a href="{{ url_for('main.export_host_extensions_csv', host_id=host.public_id) }}"
-                       class="btn btn-secondary" style="font-size: 0.75rem; padding: 0.5rem 0.75rem; white-space: nowrap;">
-                        <i class="fas fa-download"></i> CSV
-                    </a>
-                    {% endif %}
-                </div>
+                {% if extensions %}
+                <a href="{{ url_for('main.export_host_extensions_csv', host_id=host.public_id) }}"
+                   class="btn btn-secondary" style="font-size: 0.75rem; padding: 0.5rem 0.75rem; white-space: nowrap;">
+                    <i class="fas fa-download"></i> CSV
+                </a>
+                {% endif %}
             </div>
-            
+
             {% if extensions %}
+            <!-- Extension Filters -->
+            <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-bottom: 1rem; padding: 0.75rem; background: var(--bg-tertiary); border-radius: var(--radius-sm);">
+                <i class="fas fa-filter" style="color: var(--text-muted); font-size: 0.8125rem;"></i>
+                <input type="text" id="extSearch" placeholder="Search..."
+                       style="width: 180px; padding: 0.375rem 0.625rem; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 0.8125rem;">
+                <select id="extRiskFilter"
+                        style="padding: 0.375rem 0.625rem; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 0.8125rem;">
+                    <option value="">All Risk Levels</option>
+                    <option value="critical">Critical</option>
+                    <option value="high">High</option>
+                    <option value="medium">Medium</option>
+                    <option value="low">Low</option>
+                </select>
+                <select id="extIdeFilter"
+                        style="padding: 0.375rem 0.625rem; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 0.8125rem;">
+                    <option value="">All IDEs</option>
+                    {% set ide_names = extensions|map(attribute='ide_name')|unique|sort %}
+                    {% for ide in ide_names %}
+                    <option value="{{ ide|lower }}">{{ ide }}</option>
+                    {% endfor %}
+                </select>
+                <!-- Quick filter buttons -->
+                <button onclick="setExtFilter('high-risk')" class="btn btn-sm" style="font-size: 0.6875rem; padding: 0.25rem 0.5rem; background: rgba(220,38,38,0.15); color: var(--danger); border: 1px solid rgba(220,38,38,0.3); border-radius: var(--radius-sm);">
+                    <i class="fas fa-exclamation-triangle"></i> High Risk Only
+                </button>
+                <button onclick="setExtFilter('dangerous-perms')" class="btn btn-sm" style="font-size: 0.6875rem; padding: 0.25rem 0.5rem; background: rgba(245,158,11,0.15); color: var(--warning); border: 1px solid rgba(245,158,11,0.3); border-radius: var(--radius-sm);">
+                    <i class="fas fa-shield-alt"></i> Dangerous Permissions
+                </button>
+                <button onclick="clearExtFilters()" class="btn btn-sm" style="font-size: 0.6875rem; padding: 0.25rem 0.5rem;">
+                    <i class="fas fa-times"></i> Clear
+                </button>
+                <span id="extFilterCount" style="color: var(--text-muted); font-size: 0.75rem; margin-left: auto;"></span>
+            </div>
+
             <div class="table-container">
                 <table id="extensionsTable">
                     <thead>
@@ -408,7 +505,12 @@
                     </thead>
                     <tbody>
                         {% for ext in extensions %}
-                        <tr class="data-row clickable-row" onclick="showExtensionDetail({{ loop.index0 }})">
+                        <tr class="data-row clickable-row ext-row" onclick="showExtensionDetail({{ loop.index0 }})"
+                            data-name="{{ ext.name|lower }}"
+                            data-ide="{{ ext.ide_name|lower }}"
+                            data-risk="{{ ext.risk_level }}"
+                            data-dangerous="{{ 'yes' if ext.is_dangerous else 'no' }}"
+                            data-publisher="{{ (ext.publisher or '')|lower }}">
                             <td>
                                 <div style="font-weight: 500;">{{ ext.name }}</div>
                             </td>
@@ -458,78 +560,142 @@
 
         <!-- Packages Tab -->
         <div id="packages-tab" class="tab-content">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-                <h3 style="font-weight: 600;">Installed Packages</h3>
-                <div style="display: flex; gap: 0.5rem; align-items: center;">
-                    <input type="text" id="packageSearch" class="form-input" placeholder="Search packages..."
-                           style="width: 250px;" onkeyup="filterPackageList()">
-                    {% if packages_by_manager %}
-                    <a href="{{ url_for('main.export_host_packages_csv', host_id=host.public_id) }}"
-                       class="btn btn-secondary" style="font-size: 0.75rem; padding: 0.5rem 0.75rem; white-space: nowrap;">
-                        <i class="fas fa-download"></i> CSV
-                    </a>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                <h3 style="font-weight: 600;">
+                    Installed Packages
+                    {% if total_vuln_count > 0 %}
+                    <span class="badge badge-critical" style="font-size: 0.6875rem; margin-left: 0.5rem;">{{ total_vuln_count }} CVE{{ 's' if total_vuln_count != 1 else '' }}</span>
                     {% endif %}
-                </div>
+                </h3>
+                {% if packages_by_manager %}
+                <a href="{{ url_for('main.export_host_packages_csv', host_id=host.public_id) }}"
+                   class="btn btn-secondary" style="font-size: 0.75rem; padding: 0.5rem 0.75rem; white-space: nowrap;">
+                    <i class="fas fa-download"></i> CSV
+                </a>
+                {% endif %}
             </div>
-            
+
             {% if packages_by_manager %}
-            {% for manager, packages in packages_by_manager.items() %}
-            <div style="margin-bottom: 1.5rem;">
-                <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem;">
-                    <div class="pm-icon">
-                        {% if manager == 'pip' or manager == 'pipenv' or manager == 'poetry' %}
-                        <i class="fab fa-python" style="color: #3776ab; font-size: 1.25rem;"></i>
-                        {% elif manager == 'npm' or manager == 'yarn' %}
-                        <i class="fab fa-npm" style="color: #cb3837; font-size: 1.25rem;"></i>
-                        {% elif manager == 'go' %}
-                        <i class="fab fa-golang" style="color: #00ADD8; font-size: 1.25rem;"></i>
-                        {% elif manager == 'cargo' %}
-                        <i class="fab fa-rust" style="color: #DEA584; font-size: 1.25rem;"></i>
-                        {% elif manager == 'gem' %}
-                        <i class="fas fa-gem" style="color: #CC342D;"></i>
-                        {% elif manager == 'brew' or manager == 'brew-cask' %}
-                        <i class="fas fa-beer-mug-empty" style="color: #FBB040;"></i>
-                        {% else %}
-                        <i class="fas fa-box" style="color: var(--text-secondary);"></i>
-                        {% endif %}
-                    </div>
-                    <span style="font-weight: 600; text-transform: uppercase;">{{ manager }}</span>
-                    <span class="badge" style="background: var(--bg-tertiary);">{{ packages|length }}</span>
-                </div>
-                
-                <div class="table-container">
-                    <table class="package-table">
-                        <thead>
-                            <tr>
-                                <th>Package</th>
-                                <th>Version</th>
-                                <th>Type</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for pkg in packages %}
-                            <tr class="package-row clickable-row" onclick="showPackageDetail('{{ pkg.name }}', '{{ pkg.version }}', '{{ manager }}')">
-                                <td style="font-weight: 500;">{{ pkg.name }}</td>
-                                <td class="mono">{{ pkg.version }}</td>
-                                <td>
-                                    <span class="badge {% if pkg.install_type == 'global' %}badge-low{% else %}badge-medium{% endif %}" style="font-size: 0.6875rem;">
-                                        {{ pkg.install_type }}
-                                    </span>
-                                </td>
-                                <td>
-                                    <a href="https://www.google.com/search?q={{ manager }}+{{ pkg.name }}" target="_blank"
-                                       onclick="event.stopPropagation();" style="color: var(--accent-primary);">
-                                        <i class="fas fa-external-link-alt"></i>
-                                    </a>
-                                </td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
+            <!-- Package Filters -->
+            <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-bottom: 1rem; padding: 0.75rem; background: var(--bg-tertiary); border-radius: var(--radius-sm);">
+                <i class="fas fa-filter" style="color: var(--text-muted); font-size: 0.8125rem;"></i>
+                <input type="text" id="pkgSearch" placeholder="Search..."
+                       style="width: 180px; padding: 0.375rem 0.625rem; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 0.8125rem;">
+                <select id="pkgManagerFilter"
+                        style="padding: 0.375rem 0.625rem; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 0.8125rem;">
+                    <option value="">All Managers</option>
+                    {% for mgr in packages_by_manager.keys()|sort %}
+                    <option value="{{ mgr }}">{{ mgr }} ({{ packages_by_manager[mgr]|length }})</option>
+                    {% endfor %}
+                </select>
+                <select id="pkgSeverityFilter"
+                        style="padding: 0.375rem 0.625rem; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 0.8125rem;">
+                    <option value="">All Severities</option>
+                    <option value="CRITICAL">Critical</option>
+                    <option value="HIGH">High</option>
+                    <option value="MEDIUM">Medium</option>
+                    <option value="LOW">Low</option>
+                </select>
+                <!-- Quick filter buttons -->
+                <button onclick="setPkgFilter('vulnerable')" class="btn btn-sm" style="font-size: 0.6875rem; padding: 0.25rem 0.5rem; background: rgba(220,38,38,0.15); color: var(--danger); border: 1px solid rgba(220,38,38,0.3); border-radius: var(--radius-sm);">
+                    <i class="fas fa-bug"></i> Vulnerable Only
+                </button>
+                <button onclick="setPkgFilter('hooks')" class="btn btn-sm" style="font-size: 0.6875rem; padding: 0.25rem 0.5rem; background: rgba(245,158,11,0.15); color: var(--warning); border: 1px solid rgba(245,158,11,0.3); border-radius: var(--radius-sm);">
+                    <i class="fas fa-terminal"></i> Has Lifecycle Hooks
+                </button>
+                <button onclick="clearPkgFilters()" class="btn btn-sm" style="font-size: 0.6875rem; padding: 0.25rem 0.5rem;">
+                    <i class="fas fa-times"></i> Clear
+                </button>
+                <span id="pkgFilterCount" style="color: var(--text-muted); font-size: 0.75rem; margin-left: auto;"></span>
             </div>
-            {% endfor %}
+            {% endif %}
+
+            {% if packages_by_manager %}
+            <!-- Single flat table for all packages -->
+            <div class="table-container">
+                <table class="package-table" id="packagesTable">
+                    <thead>
+                        <tr>
+                            <th>Package</th>
+                            <th>Version</th>
+                            <th>Manager</th>
+                            <th>Type</th>
+                            <th>Vulnerability</th>
+                            <th>Severity</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for manager, packages in packages_by_manager.items() %}
+                        {% for pkg in packages %}
+                        {% set vulns = pkg_vuln_map.get(pkg.name ~ ':' ~ pkg.version ~ ':' ~ manager, []) %}
+                        {% set worst_sev = vulns[0].severity_label if vulns else '' %}
+                        <tr class="package-row clickable-row pkg-row" onclick="showPackageDetail('{{ pkg.name }}', '{{ pkg.version }}', '{{ manager }}')"
+                            style="{% if vulns %}background: rgba(220, 38, 38, 0.04);{% endif %}"
+                            data-name="{{ pkg.name|lower }}"
+                            data-manager="{{ manager }}"
+                            data-severity="{{ worst_sev }}"
+                            data-vulnerable="{{ 'yes' if vulns else 'no' }}"
+                            data-hooks="{{ 'yes' if pkg.lifecycle_hooks else 'no' }}">
+                            <td style="font-weight: 500;">{{ pkg.name }}</td>
+                            <td class="mono" style="font-size: 0.8125rem;">{{ pkg.version }}</td>
+                            <td>
+                                <span style="display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.75rem; color: var(--text-secondary);">
+                                    {% if manager == 'pip' %}<i class="fab fa-python" style="color: #3776ab;"></i>
+                                    {% elif manager == 'npm' %}<i class="fab fa-npm" style="color: #cb3837;"></i>
+                                    {% elif manager == 'go' %}<i class="fab fa-golang" style="color: #00ADD8;"></i>
+                                    {% elif manager == 'cargo' %}<i class="fab fa-rust" style="color: #DEA584;"></i>
+                                    {% elif manager == 'gem' %}<i class="fas fa-gem" style="color: #CC342D;"></i>
+                                    {% elif 'brew' in manager %}<i class="fas fa-beer-mug-empty" style="color: #FBB040;"></i>
+                                    {% else %}<i class="fas fa-box"></i>{% endif %}
+                                    {{ manager }}
+                                </span>
+                            </td>
+                            <td>
+                                <span class="badge {% if pkg.install_type == 'global' %}badge-low{% else %}badge-medium{% endif %}" style="font-size: 0.6875rem;">
+                                    {{ pkg.install_type }}
+                                </span>
+                                {% if pkg.lifecycle_hooks %}
+                                <span class="badge" style="font-size: 0.6rem; background: rgba(245,158,11,0.2); color: var(--warning); margin-left: 0.25rem;" title="Has lifecycle hooks: {{ pkg.lifecycle_hooks.keys()|join(', ') }}">
+                                    <i class="fas fa-terminal"></i> hooks
+                                </span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if vulns %}
+                                <div style="display: flex; flex-wrap: wrap; gap: 0.25rem;">
+                                    {% for v in vulns[:3] %}
+                                    <a href="https://osv.dev/vulnerability/{{ v.vuln_id }}" target="_blank"
+                                       onclick="event.stopPropagation();"
+                                       style="display: inline-block; padding: 0.1rem 0.35rem; background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: var(--radius-sm); font-size: 0.6875rem; color: var(--accent-primary); text-decoration: none; font-family: var(--font-mono);">
+                                        {{ v.vuln_id }} <i class="fas fa-external-link-alt" style="font-size: 0.5rem;"></i>
+                                    </a>
+                                    {% endfor %}
+                                    {% if vulns|length > 3 %}
+                                    <span style="font-size: 0.6875rem; color: var(--text-muted);">+{{ vulns|length - 3 }}</span>
+                                    {% endif %}
+                                </div>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if vulns %}
+                                {% set worst = vulns[0].severity_label %}
+                                {% if worst == 'CRITICAL' %}
+                                <span class="badge badge-critical" style="font-size: 0.6875rem;">Critical</span>
+                                {% elif worst == 'HIGH' %}
+                                <span class="badge badge-high" style="font-size: 0.6875rem;">High</span>
+                                {% elif worst == 'MEDIUM' %}
+                                <span class="badge badge-medium" style="font-size: 0.6875rem;">Medium</span>
+                                {% else %}
+                                <span class="badge badge-low" style="font-size: 0.6875rem;">Low</span>
+                                {% endif %}
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
             {% else %}
             <div class="empty-state">
                 <i class="fas fa-cubes"></i>
@@ -571,10 +737,11 @@
                 <table id="secretsTable">
                     <thead>
                         <tr>
+                            <th>Source</th>
                             <th>Type</th>
-                            <th>Variable Name</th>
-                            <th>File Path</th>
-                            <th>Line</th>
+                            <th>Variable</th>
+                            <th>Redacted Value</th>
+                            <th>Location</th>
                             <th>Severity</th>
                             <th>Actions</th>
                         </tr>
@@ -582,6 +749,17 @@
                     <tbody>
                         {% for secret in secrets %}
                         <tr class="data-row clickable-row" onclick="showSecretDetail({{ loop.index0 }})">
+                            <td>
+                                {% if secret.source == 'git_history' %}
+                                <span class="badge" style="background: var(--accent-secondary); color: white; font-size: 0.6875rem;">
+                                    <i class="fab fa-git-alt"></i> Git History
+                                </span>
+                                {% else %}
+                                <span class="badge badge-low" style="font-size: 0.6875rem;">
+                                    <i class="fas fa-file"></i> File
+                                </span>
+                                {% endif %}
+                            </td>
                             <td>
                                 <div style="display: flex; align-items: center; gap: 0.5rem;">
                                     {% if 'ethereum' in secret.secret_type or 'wallet' in secret.secret_type %}
@@ -593,17 +771,33 @@
                                     {% else %}
                                     <i class="fas fa-lock-open" style="color: var(--danger);"></i>
                                     {% endif %}
-                                    <span style="text-transform: capitalize;">{{ secret.secret_type.replace('_', ' ') }}</span>
+                                    <span style="text-transform: capitalize; font-size: 0.8125rem;">{{ secret.secret_type.replace('_', ' ') }}</span>
                                 </div>
                             </td>
-                            <td class="mono" style="color: var(--danger);">{{ secret.variable_name or 'N/A' }}</td>
+                            <td class="mono" style="color: var(--danger); font-size: 0.8125rem;">{{ secret.variable_name or 'N/A' }}</td>
                             <td>
-                                <div class="mono" style="font-size: 0.75rem; max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" 
+                                {% if secret.redacted_value %}
+                                <code style="background: var(--bg-tertiary); padding: 0.15rem 0.4rem; border-radius: var(--radius-sm); font-size: 0.75rem; color: var(--warning);">
+                                    {{ secret.redacted_value }}
+                                </code>
+                                {% else %}
+                                <span style="color: var(--text-muted); font-size: 0.75rem;">—</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <div class="mono" style="font-size: 0.75rem; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
                                      title="{{ secret.file_path }}">
                                     {{ secret.file_path }}
                                 </div>
+                                {% if secret.source == 'git_history' and secret.commit_hash %}
+                                <div style="font-size: 0.6875rem; color: var(--text-muted); margin-top: 0.125rem;">
+                                    <i class="fas fa-code-branch"></i>
+                                    {{ secret.commit_hash[:8] }} by {{ secret.commit_author or 'unknown' }}
+                                </div>
+                                {% elif secret.line_number %}
+                                <div style="font-size: 0.6875rem; color: var(--text-muted);">Line {{ secret.line_number }}</div>
+                                {% endif %}
                             </td>
-                            <td class="mono">{{ secret.line_number or '-' }}</td>
                             <td>
                                 {% if secret.severity == 'critical' %}
                                 <span class="badge badge-critical"><i class="fas fa-skull-crossbones"></i> Critical</span>
@@ -615,7 +809,7 @@
                             </td>
                             <td>
                                 <button class="btn btn-sm" onclick="event.stopPropagation(); showSecretDetail({{ loop.index0 }})">
-                                    <i class="fas fa-info-circle"></i> Details
+                                    <i class="fas fa-info-circle"></i>
                                 </button>
                             </td>
                         </tr>
@@ -631,6 +825,7 @@
             </div>
             {% endif %}
         </div>
+
     </div>
 </div>
 
@@ -972,6 +1167,7 @@ function updateScanLogUI(req) {
     const btn = document.getElementById('triggerScanBtn');
 
     // Update status badge
+    const cancelBtn = document.getElementById('cancelScanBtn');
     const statusColors = {
         'pending': 'var(--text-muted)',
         'connecting': 'var(--info)',
@@ -980,7 +1176,8 @@ function updateScanLogUI(req) {
         'scanning_packages': 'var(--info)',
         'completed': 'var(--success)',
         'failed': 'var(--danger)',
-        'timeout': 'var(--danger)'
+        'timeout': 'var(--danger)',
+        'cancelled': 'var(--warning)'
     };
     const statusLabels = {
         'pending': 'Pending',
@@ -990,7 +1187,8 @@ function updateScanLogUI(req) {
         'scanning_packages': 'Scanning Packages',
         'completed': 'Completed',
         'failed': 'Failed',
-        'timeout': 'Timed Out'
+        'timeout': 'Timed Out',
+        'cancelled': 'Cancelled'
     };
     badge.textContent = statusLabels[req.status] || req.status;
     badge.style.background = statusColors[req.status] || 'var(--text-muted)';
@@ -1023,13 +1221,15 @@ function updateScanLogUI(req) {
     entries.scrollTop = entries.scrollHeight;
 
     // Update button state
-    if (['completed', 'failed', 'timeout'].includes(req.status)) {
+    if (['completed', 'failed', 'timeout', 'cancelled'].includes(req.status)) {
         btn.disabled = false;
         btn.innerHTML = '<i class="fas fa-sync-alt"></i> Trigger Scan';
+        cancelBtn.style.display = 'none';
         stopPolling();
     } else {
         btn.disabled = true;
         btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Scanning...';
+        cancelBtn.style.display = 'inline-flex';
     }
 }
 
@@ -1061,12 +1261,197 @@ function pollScanStatus() {
     fetch(`/host/${hostPublicId}/scan-status`)
     .then(r => r.json())
     .then(data => {
-        if (data.scan_request && !['completed', 'failed', 'timeout'].includes(data.scan_request.status)) {
+        if (data.scan_request && !['completed', 'failed', 'timeout', 'cancelled'].includes(data.scan_request.status)) {
             showScanLog(data.scan_request);
             startPolling();
         }
     })
     .catch(() => {});
 })();
+
+function cancelOnDemandScan() {
+    const cancelBtn = document.getElementById('cancelScanBtn');
+    cancelBtn.disabled = true;
+    cancelBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+
+    fetch(`/host/${hostPublicId}/cancel-scan`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': document.querySelector('meta[name="csrf-token"]')?.content || ''
+        }
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            updateScanLogUI(data.scan_request);
+        } else {
+            alert(data.error || 'Failed to cancel scan');
+        }
+        cancelBtn.disabled = false;
+        cancelBtn.innerHTML = '<i class="fas fa-stop"></i> Stop';
+    })
+    .catch(err => {
+        alert('Error: ' + err.message);
+        cancelBtn.disabled = false;
+        cancelBtn.innerHTML = '<i class="fas fa-stop"></i> Stop';
+    });
+}
+
+// Convert UTC timestamps to local timezone
+document.querySelectorAll('.local-time').forEach(el => {
+    const utc = el.dataset.utc;
+    if (utc) {
+        const d = new Date(utc);
+        el.textContent = d.toLocaleString(undefined, {
+            year: 'numeric', month: '2-digit', day: '2-digit',
+            hour: '2-digit', minute: '2-digit'
+        });
+    }
+});
+
+// ==========================================
+// Extension Filters
+// ==========================================
+function applyExtFilters() {
+    var search = (document.getElementById('extSearch').value || '').trim().toLowerCase();
+    var risk = document.getElementById('extRiskFilter').value;
+    var ide = document.getElementById('extIdeFilter').value;
+    var rows = document.querySelectorAll('.ext-row');
+    var shown = 0;
+
+    rows.forEach(function(row) {
+        var matchSearch = !search || row.dataset.name.indexOf(search) !== -1 || row.dataset.publisher.indexOf(search) !== -1;
+        var matchRisk = !risk || row.dataset.risk === risk;
+        var matchIde = !ide || row.dataset.ide === ide;
+
+        if (matchSearch && matchRisk && matchIde) {
+            row.style.display = '';
+            shown++;
+        } else {
+            row.style.display = 'none';
+        }
+    });
+
+    var counter = document.getElementById('extFilterCount');
+    if (search || risk || ide) {
+        counter.textContent = 'Showing ' + shown + ' of ' + rows.length;
+    } else {
+        counter.textContent = '';
+    }
+}
+
+function setExtFilter(preset) {
+    clearExtFilters();
+    if (preset === 'high-risk') {
+        // Show critical and high
+        var rows = document.querySelectorAll('.ext-row');
+        var shown = 0;
+        rows.forEach(function(row) {
+            if (row.dataset.risk === 'critical' || row.dataset.risk === 'high') {
+                row.style.display = '';
+                shown++;
+            } else {
+                row.style.display = 'none';
+            }
+        });
+        document.getElementById('extFilterCount').textContent = 'Showing ' + shown + ' of ' + rows.length + ' (high risk)';
+    } else if (preset === 'dangerous-perms') {
+        var rows = document.querySelectorAll('.ext-row');
+        var shown = 0;
+        rows.forEach(function(row) {
+            if (row.dataset.dangerous === 'yes') {
+                row.style.display = '';
+                shown++;
+            } else {
+                row.style.display = 'none';
+            }
+        });
+        document.getElementById('extFilterCount').textContent = 'Showing ' + shown + ' of ' + rows.length + ' (dangerous permissions)';
+    }
+}
+
+function clearExtFilters() {
+    document.getElementById('extSearch').value = '';
+    document.getElementById('extRiskFilter').value = '';
+    document.getElementById('extIdeFilter').value = '';
+    document.querySelectorAll('.ext-row').forEach(function(r) { r.style.display = ''; });
+    document.getElementById('extFilterCount').textContent = '';
+}
+
+document.getElementById('extSearch')?.addEventListener('input', applyExtFilters);
+document.getElementById('extRiskFilter')?.addEventListener('change', applyExtFilters);
+document.getElementById('extIdeFilter')?.addEventListener('change', applyExtFilters);
+
+// ==========================================
+// Package Filters
+// ==========================================
+function applyPkgFilters() {
+    var search = (document.getElementById('pkgSearch').value || '').trim().toLowerCase();
+    var manager = document.getElementById('pkgManagerFilter').value;
+    var severity = document.getElementById('pkgSeverityFilter').value;
+    var rows = document.querySelectorAll('.pkg-row');
+    var shown = 0;
+
+    rows.forEach(function(row) {
+        var matchSearch = !search || row.dataset.name.indexOf(search) !== -1;
+        var matchManager = !manager || row.dataset.manager === manager;
+        var matchSeverity = !severity || row.dataset.severity === severity;
+
+        if (matchSearch && matchManager && matchSeverity) {
+            row.style.display = '';
+            shown++;
+        } else {
+            row.style.display = 'none';
+        }
+    });
+
+    var counter = document.getElementById('pkgFilterCount');
+    if (search || manager || severity) {
+        counter.textContent = 'Showing ' + shown + ' of ' + rows.length;
+    } else {
+        counter.textContent = '';
+    }
+}
+
+function setPkgFilter(preset) {
+    clearPkgFilters();
+    var rows = document.querySelectorAll('.pkg-row');
+    var shown = 0;
+
+    if (preset === 'vulnerable') {
+        rows.forEach(function(row) {
+            if (row.dataset.vulnerable === 'yes') {
+                row.style.display = '';
+                shown++;
+            } else {
+                row.style.display = 'none';
+            }
+        });
+        document.getElementById('pkgFilterCount').textContent = 'Showing ' + shown + ' of ' + rows.length + ' (vulnerable)';
+    } else if (preset === 'hooks') {
+        rows.forEach(function(row) {
+            if (row.dataset.hooks === 'yes') {
+                row.style.display = '';
+                shown++;
+            } else {
+                row.style.display = 'none';
+            }
+        });
+        document.getElementById('pkgFilterCount').textContent = 'Showing ' + shown + ' of ' + rows.length + ' (lifecycle hooks)';
+    }
+}
+
+function clearPkgFilters() {
+    document.getElementById('pkgSearch').value = '';
+    document.getElementById('pkgManagerFilter').value = '';
+    document.getElementById('pkgSeverityFilter').value = '';
+    document.querySelectorAll('.pkg-row').forEach(function(r) { r.style.display = ''; });
+    document.getElementById('pkgFilterCount').textContent = '';
+}
+
+document.getElementById('pkgSearch')?.addEventListener('input', applyPkgFilters);
+document.getElementById('pkgManagerFilter')?.addEventListener('change', applyPkgFilters);
+document.getElementById('pkgSeverityFilter')?.addEventListener('change', applyPkgFilters);
 </script>
 {% endblock %}

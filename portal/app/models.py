@@ -218,7 +218,7 @@ class SecretFinding(db.Model):
     host_id = db.Column(db.Integer, db.ForeignKey('hosts.id'), nullable=False)
     scan_report_id = db.Column(db.Integer, db.ForeignKey('scan_reports.id'), nullable=False)
     
-    # Finding details (NO actual secret values stored!)
+    # Finding details (NO actual secret values stored — only redacted!)
     file_path = db.Column(db.String(500), nullable=False)
     secret_type = db.Column(db.String(50), nullable=False)  # ethereum_private_key, mnemonic, aws_key, etc.
     variable_name = db.Column(db.String(200))
@@ -226,24 +226,32 @@ class SecretFinding(db.Model):
     severity = db.Column(db.String(20), default='critical')  # critical, high, medium, low
     description = db.Column(db.Text)
     recommendation = db.Column(db.Text)
-    
+    redacted_value = db.Column(db.String(200), default='')  # e.g., "AKIA****XMPL"
+
+    # Source: "filesystem" (current .env files) or "git_history" (committed secrets)
+    source = db.Column(db.String(20), default='filesystem')
+    commit_hash = db.Column(db.String(40))
+    commit_author = db.Column(db.String(200))
+    commit_date = db.Column(db.String(30))
+    repo_path = db.Column(db.String(500))
+
     # Timestamps
     first_detected_at = db.Column(db.DateTime, default=datetime.utcnow)
     last_seen_at = db.Column(db.DateTime, default=datetime.utcnow)
     is_resolved = db.Column(db.Boolean, default=False)
     resolved_at = db.Column(db.DateTime)
-    
+
     # Relationships
     host = db.relationship('Host', backref=db.backref('secret_findings', lazy='dynamic'))
-    
+
     # Indexes
     __table_args__ = (
         db.Index('idx_secret_type', 'secret_type'),
         db.Index('idx_secret_host', 'host_id', 'is_resolved'),
     )
-    
+
     def to_dict(self):
-        return {
+        d = {
             'id': self.id,
             'file_path': self.file_path,
             'secret_type': self.secret_type,
@@ -252,10 +260,18 @@ class SecretFinding(db.Model):
             'severity': self.severity,
             'description': self.description,
             'recommendation': self.recommendation,
+            'redacted_value': self.redacted_value or '',
+            'source': self.source or 'filesystem',
             'first_detected_at': self.first_detected_at.isoformat() if self.first_detected_at else None,
             'last_seen_at': self.last_seen_at.isoformat() if self.last_seen_at else None,
             'is_resolved': self.is_resolved,
         }
+        if self.source == 'git_history':
+            d['commit_hash'] = self.commit_hash
+            d['commit_author'] = self.commit_author
+            d['commit_date'] = self.commit_date
+            d['repo_path'] = self.repo_path
+        return d
     
     def __repr__(self):
         return f'<SecretFinding {self.secret_type} in {self.file_path}>'
@@ -416,3 +432,108 @@ class TamperAlert(db.Model):
     
     def __repr__(self):
         return f'<TamperAlert {self.alert_type} for Host {self.host_id}>'
+
+
+class HookBypass(db.Model):
+    """Record of a developer using --no-verify to bypass pre-commit hooks."""
+
+    __tablename__ = 'hook_bypasses'
+
+    id = db.Column(db.Integer, primary_key=True)
+    host_id = db.Column(db.Integer, db.ForeignKey('hosts.id'), nullable=False)
+    commit_hash = db.Column(db.String(40))
+    commit_message = db.Column(db.String(500))
+    commit_author = db.Column(db.String(200))
+    repo_path = db.Column(db.String(500))
+    detected_at = db.Column(db.DateTime, default=datetime.utcnow)
+    is_acknowledged = db.Column(db.Boolean, default=False)
+
+    host = db.relationship('Host', backref=db.backref('hook_bypasses', lazy='dynamic'))
+
+    __table_args__ = (
+        db.Index('idx_hook_bypass_host', 'host_id', 'is_acknowledged'),
+    )
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'host_id': self.host_id,
+            'commit_hash': self.commit_hash,
+            'commit_message': self.commit_message,
+            'commit_author': self.commit_author,
+            'repo_path': self.repo_path,
+            'detected_at': self.detected_at.isoformat() if self.detected_at else None,
+            'is_acknowledged': self.is_acknowledged,
+        }
+
+    def __repr__(self):
+        return f'<HookBypass {self.commit_hash[:8] if self.commit_hash else "?"} for Host {self.host_id}>'
+
+
+class Vulnerability(db.Model):
+    """Known vulnerability associated with a package on a host."""
+
+    __tablename__ = 'vulnerabilities'
+
+    id = db.Column(db.Integer, primary_key=True)
+    host_id = db.Column(db.Integer, db.ForeignKey('hosts.id'), nullable=False)
+    package_info_id = db.Column(db.Integer, db.ForeignKey('package_info.id'), nullable=True)
+
+    # Denormalised package details (kept even if PackageInfo row is deleted on rescan)
+    package_name = db.Column(db.String(200), nullable=False)
+    package_version = db.Column(db.String(100))
+    package_manager = db.Column(db.String(50), nullable=False)
+    ecosystem = db.Column(db.String(50), nullable=False)
+
+    # Vulnerability details
+    vuln_id = db.Column(db.String(100), nullable=False)  # e.g. CVE-2021-44228, GHSA-xxx
+    summary = db.Column(db.Text)
+    severity_label = db.Column(db.String(20))  # critical, high, medium, low
+    cvss_score = db.Column(db.Float, nullable=True)
+    affected_versions = db.Column(db.Text)
+    fixed_version = db.Column(db.String(100), nullable=True)
+
+    # Extra metadata
+    references = db.Column(db.JSON)  # list of URL strings
+    source = db.Column(db.String(50), default='osv.dev')
+
+    # Lifecycle
+    first_detected_at = db.Column(db.DateTime, default=datetime.utcnow)
+    last_seen_at = db.Column(db.DateTime, default=datetime.utcnow)
+    is_resolved = db.Column(db.Boolean, default=False)
+
+    # Relationships
+    host = db.relationship('Host', backref=db.backref('vulnerabilities', lazy='dynamic'))
+    package_info = db.relationship('PackageInfo', backref=db.backref('vulnerabilities', lazy='dynamic'))
+
+    # Indexes
+    __table_args__ = (
+        db.Index('idx_vuln_host_resolved', 'host_id', 'is_resolved'),
+        db.Index('idx_vuln_id', 'vuln_id'),
+        db.Index('idx_vuln_package', 'package_name', 'package_manager'),
+    )
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'host_id': self.host_id,
+            'package_info_id': self.package_info_id,
+            'package_name': self.package_name,
+            'package_version': self.package_version,
+            'package_manager': self.package_manager,
+            'ecosystem': self.ecosystem,
+            'vuln_id': self.vuln_id,
+            'summary': self.summary,
+            'severity_label': self.severity_label,
+            'cvss_score': self.cvss_score,
+            'affected_versions': self.affected_versions,
+            'fixed_version': self.fixed_version,
+            'references': self.references,
+            'source': self.source,
+            'first_detected_at': self.first_detected_at.isoformat() if self.first_detected_at else None,
+            'last_seen_at': self.last_seen_at.isoformat() if self.last_seen_at else None,
+            'is_resolved': self.is_resolved,
+        }
+
+    def __repr__(self):
+        return f'<Vulnerability {self.vuln_id} for {self.package_name}@{self.package_version}>'
