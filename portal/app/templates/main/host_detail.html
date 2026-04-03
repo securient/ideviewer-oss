@@ -287,6 +287,9 @@
                 <p style="color: var(--text-secondary);">
                     {{ host.ip_address or 'Unknown IP' }} • {{ host.platform or 'Unknown Platform' }}
                     • Last seen: <span class="local-time" data-utc="{{ host.last_seen_at.isoformat() + 'Z' if host.last_seen_at else '' }}">{{ host.last_seen_at.strftime('%Y-%m-%d %H:%M') if host.last_seen_at else 'Never' }}</span>
+                    {% if host.last_realtime_event %}
+                    • <i class="fas fa-bolt" style="color: #22c55e; font-size: 0.75rem;"></i> Last live update: <span class="local-time" data-utc="{{ host.last_realtime_event.isoformat() + 'Z' }}">{{ host.last_realtime_event.strftime('%Y-%m-%d %H:%M') }}</span>
+                    {% endif %}
                 </p>
             </div>
             <div style="display: flex; gap: 0.5rem;">
@@ -442,6 +445,11 @@
                 Secrets
                 <span class="count">{{ secrets|length }}</span>
             </button>
+            <button class="tab-btn" onclick="showTab('aitools')">
+                <i class="fas fa-robot"></i>
+                AI Tools
+                <span class="count">{{ ai_tools|length }}</span>
+            </button>
         </div>
 
         <!-- Extensions Tab -->
@@ -479,10 +487,10 @@
                     {% endfor %}
                 </select>
                 <!-- Quick filter buttons -->
-                <button onclick="setExtFilter('high-risk')" class="btn btn-sm" style="font-size: 0.6875rem; padding: 0.25rem 0.5rem; background: rgba(220,38,38,0.15); color: var(--danger); border: 1px solid rgba(220,38,38,0.3); border-radius: var(--radius-sm);">
+                <button onclick="toggleExtFilter('high-risk')" class="btn btn-sm ext-filter-btn" data-filter="high-risk" style="font-size: 0.6875rem; padding: 0.25rem 0.5rem; background: rgba(220,38,38,0.15); color: var(--danger); border: 1px solid rgba(220,38,38,0.3); border-radius: var(--radius-sm);">
                     <i class="fas fa-exclamation-triangle"></i> High Risk Only
                 </button>
-                <button onclick="setExtFilter('dangerous-perms')" class="btn btn-sm" style="font-size: 0.6875rem; padding: 0.25rem 0.5rem; background: rgba(245,158,11,0.15); color: var(--warning); border: 1px solid rgba(245,158,11,0.3); border-radius: var(--radius-sm);">
+                <button onclick="toggleExtFilter('dangerous-perms')" class="btn btn-sm ext-filter-btn" data-filter="dangerous-perms" style="font-size: 0.6875rem; padding: 0.25rem 0.5rem; background: rgba(245,158,11,0.15); color: var(--warning); border: 1px solid rgba(245,158,11,0.3); border-radius: var(--radius-sm);">
                     <i class="fas fa-shield-alt"></i> Dangerous Permissions
                 </button>
                 <button onclick="clearExtFilters()" class="btn btn-sm" style="font-size: 0.6875rem; padding: 0.25rem 0.5rem;">
@@ -597,11 +605,14 @@
                     <option value="LOW">Low</option>
                 </select>
                 <!-- Quick filter buttons -->
-                <button onclick="setPkgFilter('vulnerable')" class="btn btn-sm" style="font-size: 0.6875rem; padding: 0.25rem 0.5rem; background: rgba(220,38,38,0.15); color: var(--danger); border: 1px solid rgba(220,38,38,0.3); border-radius: var(--radius-sm);">
+                <button onclick="togglePkgFilter('vulnerable')" class="btn btn-sm pkg-filter-btn" data-filter="vulnerable" style="font-size: 0.6875rem; padding: 0.25rem 0.5rem; background: rgba(220,38,38,0.15); color: var(--danger); border: 1px solid rgba(220,38,38,0.3); border-radius: var(--radius-sm);">
                     <i class="fas fa-bug"></i> Vulnerable Only
                 </button>
-                <button onclick="setPkgFilter('hooks')" class="btn btn-sm" style="font-size: 0.6875rem; padding: 0.25rem 0.5rem; background: rgba(245,158,11,0.15); color: var(--warning); border: 1px solid rgba(245,158,11,0.3); border-radius: var(--radius-sm);">
+                <button onclick="togglePkgFilter('hooks')" class="btn btn-sm pkg-filter-btn" data-filter="hooks" style="font-size: 0.6875rem; padding: 0.25rem 0.5rem; background: rgba(245,158,11,0.15); color: var(--warning); border: 1px solid rgba(245,158,11,0.3); border-radius: var(--radius-sm);">
                     <i class="fas fa-terminal"></i> Has Lifecycle Hooks
+                </button>
+                <button onclick="togglePkgFilter('extension')" class="btn btn-sm pkg-filter-btn" data-filter="extension" style="font-size: 0.6875rem; padding: 0.25rem 0.5rem; background: rgba(139,92,246,0.15); color: #8b5cf6; border: 1px solid rgba(139,92,246,0.3); border-radius: var(--radius-sm);">
+                    <i class="fas fa-puzzle-piece"></i> Extension Deps
                 </button>
                 <button onclick="clearPkgFilters()" class="btn btn-sm" style="font-size: 0.6875rem; padding: 0.25rem 0.5rem;">
                     <i class="fas fa-times"></i> Clear
@@ -620,6 +631,7 @@
                             <th>Version</th>
                             <th>Manager</th>
                             <th>Type</th>
+                            <th>Source</th>
                             <th>Vulnerability</th>
                             <th>Severity</th>
                         </tr>
@@ -629,13 +641,23 @@
                         {% for pkg in packages %}
                         {% set vulns = pkg_vuln_map.get(pkg.name ~ ':' ~ pkg.version ~ ':' ~ manager, []) %}
                         {% set worst_sev = vulns[0].severity_label if vulns else '' %}
-                        <tr class="package-row clickable-row pkg-row" onclick="showPackageDetail('{{ pkg.name }}', '{{ pkg.version }}', '{{ manager }}')"
+                        <tr class="package-row clickable-row pkg-row" onclick="showPackageDetail(this)"
                             style="{% if vulns %}background: rgba(220, 38, 38, 0.04);{% endif %}"
-                            data-name="{{ pkg.name|lower }}"
+                            data-name="{{ pkg.name }}"
+                            data-name-lower="{{ pkg.name|lower }}"
+                            data-version="{{ pkg.version }}"
                             data-manager="{{ manager }}"
                             data-severity="{{ worst_sev }}"
                             data-vulnerable="{{ 'yes' if vulns else 'no' }}"
-                            data-hooks="{{ 'yes' if pkg.lifecycle_hooks else 'no' }}">
+                            data-hooks="{{ 'yes' if pkg.lifecycle_hooks else 'no' }}"
+                            data-source-type="{{ pkg.source_type or pkg.install_type }}"
+                            data-source-extension="{{ pkg.source_extension or '' }}"
+                            data-project-path="{{ pkg.project_path or '' }}"
+                            data-install-type="{{ pkg.install_type }}"
+                            data-lifecycle-hooks='{{ pkg.lifecycle_hooks|tojson if pkg.lifecycle_hooks else "" }}'
+                            data-vulns='[{% for v in vulns %}{"vuln_id":"{{ v.vuln_id }}","severity_label":"{{ v.severity_label }}","summary":"{{ v.summary|e }}","fixed_version":"{{ v.fixed_version or '' }}"}{% if not loop.last %},{% endif %}{% endfor %}]'
+                            data-first-seen="{{ pkg.first_seen_at.strftime('%Y-%m-%dT%H:%M:%SZ') if pkg.first_seen_at else '' }}"
+                            data-last-seen="{{ pkg.last_seen_at.strftime('%Y-%m-%dT%H:%M:%SZ') if pkg.last_seen_at else '' }}">
                             <td style="font-weight: 500;">{{ pkg.name }}</td>
                             <td class="mono" style="font-size: 0.8125rem;">{{ pkg.version }}</td>
                             <td>
@@ -657,6 +679,21 @@
                                 {% if pkg.lifecycle_hooks %}
                                 <span class="badge" style="font-size: 0.6rem; background: rgba(245,158,11,0.2); color: var(--warning); margin-left: 0.25rem;" title="Has lifecycle hooks: {{ pkg.lifecycle_hooks.keys()|join(', ') }}">
                                     <i class="fas fa-terminal"></i> hooks
+                                </span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if pkg.source_type == 'extension' %}
+                                <span class="badge" style="font-size: 0.6rem; background: rgba(139,92,246,0.15); color: #8b5cf6; border: 1px solid rgba(139,92,246,0.3);" title="{{ pkg.source_extension or 'Unknown extension' }}">
+                                    <i class="fas fa-puzzle-piece"></i> {{ pkg.source_extension|truncate(30, True) if pkg.source_extension else 'Extension' }}
+                                </span>
+                                {% elif pkg.source_type == 'global' or pkg.install_type == 'global' %}
+                                <span style="font-size: 0.75rem; color: var(--text-muted);">
+                                    <i class="fas fa-globe"></i> System
+                                </span>
+                                {% else %}
+                                <span style="font-size: 0.75rem; color: var(--text-muted);">
+                                    <i class="fas fa-folder"></i> Project
                                 </span>
                                 {% endif %}
                             </td>
@@ -826,6 +863,288 @@
             {% endif %}
         </div>
 
+        <!-- AI Tools Tab -->
+        <div id="aitools-tab" class="tab-content">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                <h3 style="font-weight: 600;">AI Development Tools</h3>
+            </div>
+
+            {% if ai_tools %}
+            <!-- Summary Bar -->
+            {% set total_components = namespace(count=0) %}
+            {% set total_issues = namespace(count=0) %}
+            {% for tool in ai_tools %}
+                {% for c in (tool.mcp_servers or []) %}
+                    {% set total_components.count = total_components.count + 1 %}
+                    {% if c.risk in ['critical', 'high'] %}{% set total_issues.count = total_issues.count + 1 %}{% endif %}
+                {% endfor %}
+            {% endfor %}
+
+            <div style="display: flex; gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap;">
+                <div style="padding: 0.5rem 1rem; background: var(--bg-tertiary); border-radius: var(--radius-sm); font-size: 0.8125rem;">
+                    <i class="fas fa-robot"></i> <strong>{{ ai_tools|length }}</strong> AI Tools
+                </div>
+                <div style="padding: 0.5rem 1rem; background: var(--bg-tertiary); border-radius: var(--radius-sm); font-size: 0.8125rem;">
+                    <i class="fas fa-server"></i> <strong>{{ total_components.count }}</strong> Components
+                </div>
+                {% if total_issues.count > 0 %}
+                <div style="padding: 0.5rem 1rem; background: rgba(220,38,38,0.1); border: 1px solid rgba(220,38,38,0.3); border-radius: var(--radius-sm); font-size: 0.8125rem; color: var(--danger);">
+                    <i class="fas fa-exclamation-triangle"></i> <strong>{{ total_issues.count }}</strong> Security Issues
+                </div>
+                {% endif %}
+            </div>
+
+            <!-- Filter Bar -->
+            <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-bottom: 1rem; padding: 0.75rem; background: var(--bg-tertiary); border-radius: var(--radius-sm);">
+                <i class="fas fa-filter" style="color: var(--text-muted); font-size: 0.8125rem;"></i>
+                <input type="text" id="aiSearch" placeholder="Search..." style="width: 180px; padding: 0.375rem 0.625rem; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 0.8125rem;">
+                <select id="aiTypeFilter" style="padding: 0.375rem 0.625rem; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 0.8125rem;">
+                    <option value="">All Types</option>
+                    <option value="mcp-server">MCP Server</option>
+                    <option value="cloud-mcp">Cloud MCP</option>
+                    <option value="skill">Skill/Plugin</option>
+                    <option value="integration">Integration</option>
+                    <option value="permission">Permission</option>
+                </select>
+                <select id="aiToolFilter" style="padding: 0.375rem 0.625rem; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 0.8125rem;">
+                    <option value="">All Tools</option>
+                    {% for tool in ai_tools %}
+                    <option value="{{ tool.tool_name }}">{{ tool.tool_name }}</option>
+                    {% endfor %}
+                </select>
+                <select id="aiRiskFilter" style="padding: 0.375rem 0.625rem; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 0.8125rem;">
+                    <option value="">All Risk Levels</option>
+                    <option value="critical">Critical</option>
+                    <option value="high">High</option>
+                    <option value="medium">Medium</option>
+                    <option value="low">Low</option>
+                    <option value="info">Info</option>
+                </select>
+                <button onclick="toggleAIFilter('issues')" class="ai-filter-btn btn btn-sm" data-filter="issues" style="font-size: 0.6875rem; padding: 0.25rem 0.5rem; background: rgba(220,38,38,0.15); color: var(--danger); border: 1px solid rgba(220,38,38,0.3); border-radius: var(--radius-sm);">
+                    <i class="fas fa-exclamation-triangle"></i> Issues Only
+                </button>
+                <button onclick="clearAIFilters()" class="btn btn-sm" style="font-size: 0.6875rem; padding: 0.25rem 0.5rem;">
+                    <i class="fas fa-times"></i> Clear
+                </button>
+                <span id="aiFilterCount" style="color: var(--text-muted); font-size: 0.75rem; margin-left: auto;"></span>
+            </div>
+
+            <!-- Tool Summary Cards -->
+            <div style="display: flex; gap: 0.75rem; margin-bottom: 1rem; flex-wrap: wrap;">
+            {% for tool in ai_tools %}
+            <div style="padding: 0.75rem 1rem; background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: var(--radius-sm); display: flex; align-items: center; gap: 0.5rem;">
+                <i class="fas fa-robot" style="color: var(--accent-primary);"></i>
+                <strong style="font-size: 0.875rem;">{{ tool.tool_name }}</strong>
+                {% if tool.version %}<span style="font-size: 0.75rem; color: var(--text-muted);">v{{ tool.version }}</span>{% endif %}
+                {% if tool.is_running %}
+                <span class="badge" style="font-size: 0.6rem; background: rgba(34,197,94,0.15); color: #22c55e;"><i class="fas fa-circle" style="font-size: 0.4rem;"></i> Running</span>
+                {% else %}
+                <span class="badge" style="font-size: 0.6rem; background: var(--bg-tertiary); color: var(--text-muted);"><i class="fas fa-circle" style="font-size: 0.4rem;"></i> Stopped</span>
+                {% endif %}
+                {% set comp_count = (tool.mcp_servers or [])|length %}
+                <span style="font-size: 0.75rem; color: var(--text-muted);">{{ comp_count }} component{{ 's' if comp_count != 1 }}</span>
+            </div>
+            {% endfor %}
+            </div>
+
+            <!-- Unified Components Table -->
+            <div class="table-container">
+            <table id="aiComponentsTable">
+            <thead>
+            <tr>
+                <th>Name</th>
+                <th>Type</th>
+                <th>Source Tool</th>
+                <th>Command</th>
+                <th>Env Vars</th>
+                <th>Permissions</th>
+                <th>Risk</th>
+            </tr>
+            </thead>
+            <tbody>
+            {% for tool in ai_tools %}
+            {% for comp in (tool.mcp_servers or []) %}
+            <tr class="ai-row"
+                data-name="{{ comp.name|lower if comp.name else '' }}"
+                data-type="{{ comp.type or 'unknown' }}"
+                data-tool="{{ tool.tool_name }}"
+                data-risk="{{ comp.risk or 'info' }}">
+                <td style="font-weight: 500;">{{ comp.name or 'Unknown' }}</td>
+                <td>
+                    {% set type_icons = {'mcp-server': 'fas fa-server', 'cloud-mcp': 'fas fa-cloud', 'skill': 'fas fa-puzzle-piece', 'integration': 'fas fa-plug', 'permission': 'fas fa-shield-alt'} %}
+                    {% set type_colors = {'mcp-server': '#3b82f6', 'cloud-mcp': '#8b5cf6', 'skill': '#22c55e', 'integration': '#f59e0b', 'permission': '#ef4444'} %}
+                    {% set t = comp.type or 'unknown' %}
+                    <span class="badge" style="font-size: 0.625rem; background: rgba(0,0,0,0.1); color: {{ type_colors.get(t, 'var(--text-muted)') }};">
+                        <i class="{{ type_icons.get(t, 'fas fa-question') }}"></i> {{ t }}
+                    </span>
+                </td>
+                <td style="font-size: 0.8125rem; color: var(--text-secondary);">{{ tool.tool_name }}</td>
+                <td>
+                    {% if comp.command %}
+                    <code style="font-size: 0.75rem; background: var(--bg-tertiary); padding: 0.1rem 0.3rem; border-radius: 3px;">{{ comp.command }}{% if comp.args %} {{ comp.args|join(' ')|truncate(40) }}{% endif %}</code>
+                    {% else %}
+                    <span style="color: var(--text-muted);">&mdash;</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if comp.env_vars %}
+                    {% for env in comp.env_vars %}
+                    <span class="badge" style="font-size: 0.6rem; background: rgba(245,158,11,0.15); color: var(--warning); margin: 0.1rem;">{{ env }}</span>
+                    {% endfor %}
+                    {% else %}
+                    <span style="color: var(--text-muted);">&mdash;</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% set perms = comp.permissions if comp.permissions else {} %}
+                    {% if perms.get('fs_read') %}<span class="badge" style="font-size: 0.6rem; background: rgba(59,130,246,0.15); color: #3b82f6; margin: 0.1rem;" title="{{ perms.fs_read|join(', ') }}"><i class="fas fa-eye"></i> Read ({{ perms.fs_read|length }})</span>{% endif %}
+                    {% if perms.get('fs_write') %}<span class="badge" style="font-size: 0.6rem; background: rgba(220,38,38,0.15); color: var(--danger); margin: 0.1rem;" title="{{ perms.fs_write|join(', ') }}"><i class="fas fa-pen"></i> Write ({{ perms.fs_write|length }})</span>{% endif %}
+                    {% if perms.get('network_access') %}<span class="badge" style="font-size: 0.6rem; background: rgba(245,158,11,0.15); color: var(--warning); margin: 0.1rem;"><i class="fas fa-globe"></i> Network</span>{% endif %}
+                    {% if perms.get('bash_commands') %}<span class="badge" style="font-size: 0.6rem; background: rgba(220,38,38,0.15); color: var(--danger); margin: 0.1rem;" title="{{ perms.bash_commands|join(', ') }}"><i class="fas fa-terminal"></i> Shell ({{ perms.bash_commands|length }})</span>{% endif %}
+                    {% if perms.get('mcp_tools') %}<span class="badge" style="font-size: 0.6rem; background: rgba(34,197,94,0.15); color: #22c55e; margin: 0.1rem;" title="{{ perms.mcp_tools|join(', ') }}"><i class="fas fa-plug"></i> MCP ({{ perms.mcp_tools|length }})</span>{% endif %}
+                    {% if perms.get('env_access') %}<span class="badge" style="font-size: 0.6rem; background: rgba(139,92,246,0.15); color: #8b5cf6; margin: 0.1rem;" title="{{ perms.env_access|join(', ') }}"><i class="fas fa-key"></i> Env</span>{% endif %}
+                    {% if not perms.get('fs_read') and not perms.get('fs_write') and not perms.get('network_access') and not perms.get('bash_commands') and not perms.get('mcp_tools') and not perms.get('env_access') %}
+                    <span style="color: var(--text-muted); font-size: 0.75rem;">&mdash;</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% set risk = comp.risk or 'info' %}
+                    {% if risk == 'critical' %}
+                    <span class="badge badge-critical" style="font-size: 0.625rem;" title="{{ comp.risk_reason or '' }}">Critical</span>
+                    {% elif risk == 'high' %}
+                    <span class="badge badge-high" style="font-size: 0.625rem;" title="{{ comp.risk_reason or '' }}">High</span>
+                    {% elif risk == 'medium' %}
+                    <span class="badge badge-medium" style="font-size: 0.625rem;" title="{{ comp.risk_reason or '' }}">Medium</span>
+                    {% elif risk == 'low' %}
+                    <span class="badge badge-low" style="font-size: 0.625rem;" title="{{ comp.risk_reason or '' }}">Low</span>
+                    {% else %}
+                    <span style="font-size: 0.75rem; color: var(--text-muted);">Info</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+            {% endfor %}
+            </tbody>
+            </table>
+            </div>
+
+            <!-- Consolidated Open Ports -->
+            {% set all_ports = [] %}
+            {% for tool in ai_tools %}
+                {% for p in (tool.open_ports or []) %}{% if all_ports.append(p) %}{% endif %}{% endfor %}
+            {% endfor %}
+            {% if all_ports %}
+            <div style="margin-top: 1.25rem;">
+                <h5 style="font-size: 0.8125rem; font-weight: 600; margin-bottom: 0.5rem; color: var(--text-secondary);">
+                    <i class="fas fa-network-wired"></i> Open Ports ({{ all_ports|length }})
+                </h5>
+                <div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">
+                    {% for port in all_ports %}
+                    <span class="badge" style="font-size: 0.6875rem; background: rgba(245,158,11,0.15); color: var(--warning); border: 1px solid rgba(245,158,11,0.3);">
+                        <i class="fas fa-plug"></i> :{{ port.port }} ({{ port.process }}/{{ port.proto }})
+                    </span>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Consolidated Redacted Secrets -->
+            {% set all_secrets = [] %}
+            {% for tool in ai_tools %}
+                {% for s in (tool.redacted_secrets or []) %}{% if all_secrets.append(s) %}{% endif %}{% endfor %}
+            {% endfor %}
+            {% if all_secrets %}
+            <div style="margin-top: 1.25rem;">
+                <h5 style="font-size: 0.8125rem; font-weight: 600; margin-bottom: 0.5rem; color: var(--danger);">
+                    <i class="fas fa-key"></i> Detected Secrets ({{ all_secrets|length }}) &mdash; Values Redacted
+                </h5>
+                <div class="table-container">
+                    <table style="width: 100%; font-size: 0.8125rem;">
+                        <thead>
+                            <tr>
+                                <th style="padding: 0.5rem;">Source</th>
+                                <th style="padding: 0.5rem;">Variable</th>
+                                <th style="padding: 0.5rem;">Type</th>
+                                <th style="padding: 0.5rem;">Redacted Value</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for secret in all_secrets %}
+                            <tr>
+                                <td style="padding: 0.5rem;">{{ secret.source }}</td>
+                                <td style="padding: 0.5rem; font-weight: 500;">{{ secret.variable_name }}</td>
+                                <td style="padding: 0.5rem;">
+                                    <span class="badge badge-critical" style="font-size: 0.625rem;">{{ secret.secret_type }}</span>
+                                </td>
+                                <td style="padding: 0.5rem;">
+                                    <code style="font-size: 0.75rem; background: var(--bg-tertiary); padding: 0.1rem 0.3rem; border-radius: 3px;">{{ secret.redacted_value }}</code>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- AI Tools Filter JavaScript -->
+            <script>
+            var activeAIPresets = new Set();
+
+            function toggleAIFilter(preset) {
+                if (activeAIPresets.has(preset)) activeAIPresets.delete(preset);
+                else activeAIPresets.add(preset);
+                applyAIFilters();
+            }
+
+            function applyAIFilters() {
+                var search = (document.getElementById('aiSearch').value || '').trim().toLowerCase();
+                var type = document.getElementById('aiTypeFilter').value;
+                var tool = document.getElementById('aiToolFilter').value;
+                var risk = document.getElementById('aiRiskFilter').value;
+                var rows = document.querySelectorAll('.ai-row');
+                var shown = 0;
+
+                rows.forEach(function(row) {
+                    var match = true;
+                    if (search && row.dataset.name.indexOf(search) === -1) match = false;
+                    if (type && row.dataset.type !== type) match = false;
+                    if (tool && row.dataset.tool !== tool) match = false;
+                    if (risk && row.dataset.risk !== risk) match = false;
+                    if (activeAIPresets.has('issues') && row.dataset.risk !== 'critical' && row.dataset.risk !== 'high') match = false;
+
+                    row.style.display = match ? '' : 'none';
+                    if (match) shown++;
+                });
+
+                document.getElementById('aiFilterCount').textContent = (search || type || tool || risk || activeAIPresets.size > 0) ? 'Showing ' + shown + ' of ' + rows.length : '';
+            }
+
+            function clearAIFilters() {
+                activeAIPresets.clear();
+                document.getElementById('aiSearch').value = '';
+                document.getElementById('aiTypeFilter').value = '';
+                document.getElementById('aiToolFilter').value = '';
+                document.getElementById('aiRiskFilter').value = '';
+                document.querySelectorAll('.ai-row').forEach(function(r) { r.style.display = ''; });
+                document.getElementById('aiFilterCount').textContent = '';
+            }
+
+            document.getElementById('aiSearch')?.addEventListener('input', applyAIFilters);
+            document.getElementById('aiTypeFilter')?.addEventListener('change', applyAIFilters);
+            document.getElementById('aiToolFilter')?.addEventListener('change', applyAIFilters);
+            document.getElementById('aiRiskFilter')?.addEventListener('change', applyAIFilters);
+            </script>
+
+            {% else %}
+            <div class="empty-state">
+                <i class="fas fa-robot"></i>
+                <h3>No AI tools detected</h3>
+                <p>No AI development tools (Claude Code, Cursor, OpenClaw) were detected on this host.</p>
+            </div>
+            {% endif %}
+        </div>
+
     </div>
 </div>
 
@@ -947,10 +1266,119 @@ function showExtensionDetail(index) {
     modal.style.display = 'block';
 }
 
-function showPackageDetail(name, version, manager) {
+function showPackageDetail(row) {
     const modal = document.getElementById('detailModal');
     const content = document.getElementById('modalContent');
-    
+
+    const d = row.dataset;
+    const name = d.name;
+    const version = d.version;
+    const manager = d.manager;
+    const installType = d.installType;
+    const sourceType = d.sourceType;
+    const sourceExtension = d.sourceExtension;
+    const projectPath = d.projectPath;
+    const firstSeen = d.firstSeen;
+    const lastSeen = d.lastSeen;
+
+    // Parse lifecycle hooks
+    let hooks = null;
+    try { if (d.lifecycleHooks) hooks = JSON.parse(d.lifecycleHooks); } catch(e) {}
+
+    // Parse vulnerabilities
+    let vulns = [];
+    try { vulns = JSON.parse(d.vulns || '[]'); } catch(e) {}
+
+    // Manager icon HTML
+    const managerIcons = {
+        'pip': '<i class="fab fa-python" style="color: #3776ab;"></i>',
+        'pipenv': '<i class="fab fa-python" style="color: #3776ab;"></i>',
+        'poetry': '<i class="fab fa-python" style="color: #3776ab;"></i>',
+        'npm': '<i class="fab fa-npm" style="color: #cb3837;"></i>',
+        'yarn': '<i class="fab fa-npm" style="color: #cb3837;"></i>',
+        'go': '<i class="fab fa-golang" style="color: #00ADD8;"></i>',
+        'cargo': '<i class="fab fa-rust" style="color: #DEA584;"></i>',
+        'gem': '<i class="fas fa-gem" style="color: #CC342D;"></i>',
+    };
+    const managerIcon = managerIcons[manager] || '<i class="fas fa-box"></i>';
+
+    // Source display
+    let sourceHtml = '';
+    if (sourceType === 'extension') {
+        sourceHtml = `<span style="display: inline-flex; align-items: center; gap: 0.5rem;">
+            <i class="fas fa-puzzle-piece" style="color: #8b5cf6;"></i>
+            IDE Extension: <strong>${sourceExtension || 'Unknown'}</strong>
+        </span>`;
+    } else if (sourceType === 'global' || installType === 'global') {
+        sourceHtml = `<span style="display: inline-flex; align-items: center; gap: 0.5rem;">
+            <i class="fas fa-globe" style="color: var(--text-muted);"></i>
+            System (global install)
+        </span>`;
+    } else {
+        sourceHtml = `<span style="display: inline-flex; align-items: center; gap: 0.5rem;">
+            <i class="fas fa-folder" style="color: var(--info);"></i>
+            Project${projectPath ? ': <strong>' + projectPath + '</strong>' : ''}
+        </span>`;
+    }
+
+    // Hooks HTML
+    let hooksHtml = '';
+    if (hooks && Object.keys(hooks).length > 0) {
+        const hookEntries = Object.entries(hooks).map(([hook, cmd]) =>
+            `<div style="margin-bottom: 0.5rem;">
+                <span class="badge" style="font-size: 0.6875rem; background: rgba(245,158,11,0.2); color: var(--warning);"><i class="fas fa-terminal"></i> ${hook}</span>
+                <pre style="margin-top: 0.25rem; padding: 0.5rem; background: var(--bg-tertiary); border-radius: var(--radius-sm); font-size: 0.8125rem; overflow-x: auto; white-space: pre-wrap; word-break: break-all;">${typeof cmd === 'string' ? cmd : JSON.stringify(cmd)}</pre>
+            </div>`
+        ).join('');
+        hooksHtml = `
+        <div class="detail-section">
+            <div class="detail-label">Lifecycle Hooks</div>
+            <div style="margin-top: 0.5rem;">${hookEntries}</div>
+        </div>`;
+    }
+
+    // Vulnerabilities HTML
+    let vulnsHtml = '';
+    if (vulns.length > 0) {
+        const vulnItems = vulns.map(v => {
+            const sevClass = v.severity_label ? 'badge-' + v.severity_label.toLowerCase() : 'badge-low';
+            return `<div style="display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem 0; border-bottom: 1px solid var(--border-color);">
+                <a href="https://osv.dev/vulnerability/${v.vuln_id}" target="_blank" style="font-family: var(--font-mono); font-size: 0.8125rem; color: var(--accent-primary); text-decoration: none;">
+                    ${v.vuln_id} <i class="fas fa-external-link-alt" style="font-size: 0.5rem;"></i>
+                </a>
+                <span class="badge ${sevClass}" style="font-size: 0.6875rem;">${v.severity_label || 'Unknown'}</span>
+                ${v.fixed_version ? `<span style="font-size: 0.75rem; color: var(--text-muted);">Fixed in: <span class="mono">${v.fixed_version}</span></span>` : ''}
+            </div>`;
+        }).join('');
+        vulnsHtml = `
+        <div class="detail-section">
+            <div class="detail-label" style="color: var(--critical);"><i class="fas fa-shield-alt"></i> Vulnerabilities (${vulns.length})</div>
+            <div style="margin-top: 0.5rem;">${vulnItems}</div>
+        </div>`;
+    }
+
+    // Timestamps
+    let timestampsHtml = '';
+    if (firstSeen || lastSeen) {
+        const fmtDate = (iso) => {
+            if (!iso) return 'N/A';
+            try { return new Date(iso).toLocaleString(); } catch(e) { return iso; }
+        };
+        timestampsHtml = `
+        <div class="detail-section">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                <div>
+                    <div class="detail-label">First Seen</div>
+                    <div class="detail-value" style="font-size: 0.875rem;">${fmtDate(firstSeen)}</div>
+                </div>
+                <div>
+                    <div class="detail-label">Last Seen</div>
+                    <div class="detail-value" style="font-size: 0.875rem;">${fmtDate(lastSeen)}</div>
+                </div>
+            </div>
+        </div>`;
+    }
+
     // Build search URLs based on package manager
     let searchUrls = {};
     if (manager === 'pip' || manager === 'pipenv' || manager === 'poetry') {
@@ -980,50 +1408,54 @@ function showPackageDetail(name, version, manager) {
             'pkg.go.dev': `https://pkg.go.dev/${name}`
         };
     }
-    
-    let linksHtml = Object.entries(searchUrls).map(([label, url]) => 
+
+    let linksHtml = Object.entries(searchUrls).map(([label, url]) =>
         `<a href="${url}" target="_blank" class="btn btn-sm" style="margin-right: 0.5rem; margin-bottom: 0.5rem;">
             <i class="fas fa-external-link-alt"></i> ${label}
         </a>`
     ).join('');
-    
+
     content.innerHTML = `
         <h2 style="margin-bottom: 1.5rem; display: flex; align-items: center; gap: 0.75rem;">
             <i class="fas fa-cube" style="color: var(--info);"></i>
-            ${name}
+            ${name} <span style="font-size: 0.875rem; color: var(--text-muted); font-weight: 400;">@ ${version}</span>
         </h2>
-        
+
         <div class="detail-section">
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
                 <div>
-                    <div class="detail-label">Version</div>
-                    <div class="detail-value mono">${version}</div>
+                    <div class="detail-label">Package Manager</div>
+                    <div class="detail-value" style="display: flex; align-items: center; gap: 0.5rem;">
+                        ${managerIcon} <span style="text-transform: uppercase;">${manager}</span>
+                    </div>
                 </div>
                 <div>
-                    <div class="detail-label">Package Manager</div>
-                    <div class="detail-value" style="text-transform: uppercase;">${manager}</div>
+                    <div class="detail-label">Install Type</div>
+                    <div class="detail-value">
+                        <span class="badge ${installType === 'global' ? 'badge-low' : 'badge-medium'}" style="font-size: 0.75rem;">${installType}</span>
+                    </div>
                 </div>
             </div>
         </div>
-        
+
+        <div class="detail-section">
+            <div class="detail-label">Source</div>
+            <div class="detail-value" style="margin-top: 0.25rem;">${sourceHtml}</div>
+            ${projectPath && sourceType !== 'global' ? `<div style="margin-top: 0.5rem;"><div class="detail-label">Project Path</div><div class="detail-value mono" style="font-size: 0.8125rem; word-break: break-all;">${projectPath}</div></div>` : ''}
+        </div>
+
+        ${vulnsHtml}
+        ${hooksHtml}
+        ${timestampsHtml}
+
         <div class="detail-section">
             <div class="detail-label">External Links</div>
             <div style="margin-top: 0.75rem;">
                 ${linksHtml || '<p style="color: var(--text-muted);">No external links available</p>'}
             </div>
         </div>
-        
-        <div class="detail-section">
-            <div class="detail-label">Security Recommendations</div>
-            <ul style="margin-top: 0.5rem; padding-left: 1.5rem; font-size: 0.875rem; color: var(--text-secondary);">
-                <li>Check for known vulnerabilities on Snyk or similar services</li>
-                <li>Verify the package is actively maintained</li>
-                <li>Review the package's dependencies for security issues</li>
-                <li>Keep packages updated to their latest secure versions</li>
-            </ul>
-        </div>
     `;
-    
+
     modal.style.display = 'block';
 }
 
@@ -1313,6 +1745,30 @@ document.querySelectorAll('.local-time').forEach(el => {
 // ==========================================
 // Extension Filters
 // ==========================================
+var activeExtPresets = new Set();
+
+function toggleExtFilter(preset) {
+    if (activeExtPresets.has(preset)) {
+        activeExtPresets.delete(preset);
+    } else {
+        activeExtPresets.add(preset);
+    }
+    updateExtFilterButtons();
+    applyExtFilters();
+}
+
+function updateExtFilterButtons() {
+    document.querySelectorAll('.ext-filter-btn').forEach(function(btn) {
+        if (activeExtPresets.has(btn.dataset.filter)) {
+            btn.style.outline = '2px solid';
+            btn.style.outlineOffset = '1px';
+        } else {
+            btn.style.outline = '';
+            btn.style.outlineOffset = '';
+        }
+    });
+}
+
 function applyExtFilters() {
     var search = (document.getElementById('extSearch').value || '').trim().toLowerCase();
     var risk = document.getElementById('extRiskFilter').value;
@@ -1325,7 +1781,12 @@ function applyExtFilters() {
         var matchRisk = !risk || row.dataset.risk === risk;
         var matchIde = !ide || row.dataset.ide === ide;
 
-        if (matchSearch && matchRisk && matchIde) {
+        // Preset filters (AND logic - all active presets must match)
+        var matchPresets = true;
+        if (activeExtPresets.has('high-risk') && row.dataset.risk !== 'critical' && row.dataset.risk !== 'high') matchPresets = false;
+        if (activeExtPresets.has('dangerous-perms') && row.dataset.dangerous !== 'yes') matchPresets = false;
+
+        if (matchSearch && matchRisk && matchIde && matchPresets) {
             row.style.display = '';
             shown++;
         } else {
@@ -1333,45 +1794,21 @@ function applyExtFilters() {
         }
     });
 
+    var labels = [];
+    if (activeExtPresets.has('high-risk')) labels.push('high risk');
+    if (activeExtPresets.has('dangerous-perms')) labels.push('dangerous permissions');
     var counter = document.getElementById('extFilterCount');
-    if (search || risk || ide) {
-        counter.textContent = 'Showing ' + shown + ' of ' + rows.length;
+    if (search || risk || ide || labels.length > 0) {
+        var suffix = labels.length > 0 ? ' (' + labels.join(' + ') + ')' : '';
+        counter.textContent = 'Showing ' + shown + ' of ' + rows.length + suffix;
     } else {
         counter.textContent = '';
     }
 }
 
-function setExtFilter(preset) {
-    clearExtFilters();
-    if (preset === 'high-risk') {
-        // Show critical and high
-        var rows = document.querySelectorAll('.ext-row');
-        var shown = 0;
-        rows.forEach(function(row) {
-            if (row.dataset.risk === 'critical' || row.dataset.risk === 'high') {
-                row.style.display = '';
-                shown++;
-            } else {
-                row.style.display = 'none';
-            }
-        });
-        document.getElementById('extFilterCount').textContent = 'Showing ' + shown + ' of ' + rows.length + ' (high risk)';
-    } else if (preset === 'dangerous-perms') {
-        var rows = document.querySelectorAll('.ext-row');
-        var shown = 0;
-        rows.forEach(function(row) {
-            if (row.dataset.dangerous === 'yes') {
-                row.style.display = '';
-                shown++;
-            } else {
-                row.style.display = 'none';
-            }
-        });
-        document.getElementById('extFilterCount').textContent = 'Showing ' + shown + ' of ' + rows.length + ' (dangerous permissions)';
-    }
-}
-
 function clearExtFilters() {
+    activeExtPresets.clear();
+    updateExtFilterButtons();
     document.getElementById('extSearch').value = '';
     document.getElementById('extRiskFilter').value = '';
     document.getElementById('extIdeFilter').value = '';
@@ -1386,6 +1823,30 @@ document.getElementById('extIdeFilter')?.addEventListener('change', applyExtFilt
 // ==========================================
 // Package Filters
 // ==========================================
+var activePkgPresets = new Set();
+
+function togglePkgFilter(preset) {
+    if (activePkgPresets.has(preset)) {
+        activePkgPresets.delete(preset);
+    } else {
+        activePkgPresets.add(preset);
+    }
+    updatePkgFilterButtons();
+    applyPkgFilters();
+}
+
+function updatePkgFilterButtons() {
+    document.querySelectorAll('.pkg-filter-btn').forEach(function(btn) {
+        if (activePkgPresets.has(btn.dataset.filter)) {
+            btn.style.outline = '2px solid';
+            btn.style.outlineOffset = '1px';
+        } else {
+            btn.style.outline = '';
+            btn.style.outlineOffset = '';
+        }
+    });
+}
+
 function applyPkgFilters() {
     var search = (document.getElementById('pkgSearch').value || '').trim().toLowerCase();
     var manager = document.getElementById('pkgManagerFilter').value;
@@ -1394,11 +1855,17 @@ function applyPkgFilters() {
     var shown = 0;
 
     rows.forEach(function(row) {
-        var matchSearch = !search || row.dataset.name.indexOf(search) !== -1;
+        var matchSearch = !search || row.dataset.nameLower.indexOf(search) !== -1;
         var matchManager = !manager || row.dataset.manager === manager;
         var matchSeverity = !severity || row.dataset.severity === severity;
 
-        if (matchSearch && matchManager && matchSeverity) {
+        // Preset filters (AND logic - all active presets must match)
+        var matchPresets = true;
+        if (activePkgPresets.has('vulnerable') && row.dataset.vulnerable !== 'yes') matchPresets = false;
+        if (activePkgPresets.has('hooks') && row.dataset.hooks !== 'yes') matchPresets = false;
+        if (activePkgPresets.has('extension') && row.dataset.sourceType !== 'extension') matchPresets = false;
+
+        if (matchSearch && matchManager && matchSeverity && matchPresets) {
             row.style.display = '';
             shown++;
         } else {
@@ -1406,43 +1873,22 @@ function applyPkgFilters() {
         }
     });
 
+    var labels = [];
+    if (activePkgPresets.has('vulnerable')) labels.push('vulnerable');
+    if (activePkgPresets.has('hooks')) labels.push('hooks');
+    if (activePkgPresets.has('extension')) labels.push('extension deps');
     var counter = document.getElementById('pkgFilterCount');
-    if (search || manager || severity) {
-        counter.textContent = 'Showing ' + shown + ' of ' + rows.length;
+    if (search || manager || severity || labels.length > 0) {
+        var suffix = labels.length > 0 ? ' (' + labels.join(' + ') + ')' : '';
+        counter.textContent = 'Showing ' + shown + ' of ' + rows.length + suffix;
     } else {
         counter.textContent = '';
     }
 }
 
-function setPkgFilter(preset) {
-    clearPkgFilters();
-    var rows = document.querySelectorAll('.pkg-row');
-    var shown = 0;
-
-    if (preset === 'vulnerable') {
-        rows.forEach(function(row) {
-            if (row.dataset.vulnerable === 'yes') {
-                row.style.display = '';
-                shown++;
-            } else {
-                row.style.display = 'none';
-            }
-        });
-        document.getElementById('pkgFilterCount').textContent = 'Showing ' + shown + ' of ' + rows.length + ' (vulnerable)';
-    } else if (preset === 'hooks') {
-        rows.forEach(function(row) {
-            if (row.dataset.hooks === 'yes') {
-                row.style.display = '';
-                shown++;
-            } else {
-                row.style.display = 'none';
-            }
-        });
-        document.getElementById('pkgFilterCount').textContent = 'Showing ' + shown + ' of ' + rows.length + ' (lifecycle hooks)';
-    }
-}
-
 function clearPkgFilters() {
+    activePkgPresets.clear();
+    updatePkgFilterButtons();
     document.getElementById('pkgSearch').value = '';
     document.getElementById('pkgManagerFilter').value = '';
     document.getElementById('pkgSeverityFilter').value = '';

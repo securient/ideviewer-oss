@@ -2,15 +2,17 @@
 .git
 .github
 
-# Python virtual environments
-venv/
-.venv/
-portal/venv/
+# Go source (not needed for portal Docker builds)
+cmd/
+pkg/
+internal/
+go.mod
+go.sum
+Makefile
 
 # Build artifacts
 dist/
 build/
-*.egg-info/
 
 # IDE and editor files
 .idea/
@@ -22,13 +24,11 @@ build/
 .DS_Store
 Thumbs.db
 
-# Portal (not needed for daemon builds)
-portal/venv/
-portal/__pycache__/
-
 # Tests
-tests/
+*_test.go
 
-# Byte-compiled files
+# Python caches
 __pycache__/
 *.py[cod]
+venv/
+.venv/

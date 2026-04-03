@@ -1,0 +1,61 @@
+#!/bin/bash
+# Post-installation script
+
+# Create log directory
+mkdir -p /var/log/ideviewer
+chmod 755 /var/log/ideviewer
+
+# Create system-level config directory (daemon runs as root via launchd,
+# so it needs config in a system path, not the user's home directory)
+mkdir -p "/Library/Application Support/IDEViewer"
+chmod 755 "/Library/Application Support/IDEViewer"
+
+# If the user already has a config (from a previous register), copy it to system path
+REAL_HOME=""
+if [ -n "$HOME" ] && [ "$HOME" != "/var/root" ]; then
+    REAL_HOME="$HOME"
+elif [ -n "$USER" ] && [ "$USER" != "root" ]; then
+    REAL_HOME=$(eval echo "~$USER")
+elif [ -n "$SUDO_USER" ]; then
+    REAL_HOME=$(eval echo "~$SUDO_USER")
+fi
+
+if [ -n "$REAL_HOME" ] && [ -f "$REAL_HOME/.ideviewer/config.json" ]; then
+    cp "$REAL_HOME/.ideviewer/config.json" "/Library/Application Support/IDEViewer/config.json"
+    chmod 600 "/Library/Application Support/IDEViewer/config.json"
+    echo "Copied existing config to system path"
+fi
+
+# Make executables accessible
+chmod +x /usr/local/bin/ideviewer
+chmod +x /usr/local/bin/ideviewer-uninstall
+
+echo ""
+echo "============================================"
+echo "  IDE Viewer installed successfully!"
+echo "============================================"
+echo ""
+echo "IMPORTANT: You need a Customer Key to use this daemon."
+echo ""
+echo "Step 1: Get your customer key from the IDE Viewer Portal"
+echo "Step 2: Register this machine:"
+echo ""
+echo "  ideviewer register \\"
+echo "    --customer-key YOUR_KEY_HERE \\"
+echo "    --portal-url https://your-portal.example.com"
+echo ""
+echo "The daemon will start automatically after registration."
+echo "Logs: /tmp/ideviewer-daemon.log"
+echo ""
+echo "Other commands:"
+echo "  ideviewer scan          - Scan for IDEs and extensions"
+echo "  ideviewer secrets       - Scan for plaintext secrets"
+echo "  ideviewer packages      - Inventory installed packages"
+echo "  ideviewer stats         - Show statistics"
+echo "  ideviewer dangerous     - List dangerous extensions"
+echo ""
+echo "To uninstall:"
+echo "  sudo ideviewer-uninstall"
+echo ""
+
+exit 0

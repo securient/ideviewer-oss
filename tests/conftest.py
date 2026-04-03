@@ -1,5 +1,5 @@
 """
-Shared test fixtures for IDEViewer tests.
+Shared test fixtures for IDEViewer portal tests.
 """
 
 import os
@@ -8,115 +8,9 @@ import uuid
 import pytest
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import MagicMock
 
 # Ensure the portal package is importable
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "portal"))
-
-from ideviewer.models import (
-    IDE, IDEType, Extension, Permission, ScanResult,
-)
-from ideviewer.secrets_scanner import SecretFinding, SecretsResult
-from ideviewer.dependency_scanner import Package, DependencyResult
-
-
-# ──────────────────────────────────────────────
-# Data‑model fixtures (used by many test files)
-# ──────────────────────────────────────────────
-
-@pytest.fixture
-def sample_permission():
-    return Permission(name="fileSystem", description="Access the file system", is_dangerous=True)
-
-
-@pytest.fixture
-def safe_permission():
-    return Permission(name="colors", description="Colour themes", is_dangerous=False)
-
-
-@pytest.fixture
-def sample_extension(sample_permission, safe_permission):
-    return Extension(
-        id="pub.dangerous-ext",
-        name="Dangerous Extension",
-        version="2.1.0",
-        publisher="evil-corp",
-        permissions=[sample_permission, safe_permission],
-    )
-
-
-@pytest.fixture
-def safe_extension(safe_permission):
-    return Extension(
-        id="pub.safe-ext",
-        name="Safe Extension",
-        version="1.0.0",
-        publisher="good-corp",
-        permissions=[safe_permission],
-    )
-
-
-@pytest.fixture
-def sample_ide(sample_extension, safe_extension):
-    return IDE(
-        ide_type=IDEType.VSCODE,
-        name="Visual Studio Code",
-        version="1.85.0",
-        install_path="/usr/local/bin/code",
-        extensions=[sample_extension, safe_extension],
-        is_running=True,
-    )
-
-
-@pytest.fixture
-def sample_scan_result(sample_ide):
-    return ScanResult(
-        timestamp=datetime(2024, 1, 15, 10, 30, 0),
-        platform="Darwin 23.0",
-        ides=[sample_ide],
-    )
-
-
-@pytest.fixture
-def sample_secret_finding():
-    return SecretFinding(
-        file_path="/home/user/project/.env",
-        secret_type="ethereum_private_key",
-        variable_name="PRIVATE_KEY",
-        line_number=3,
-        severity="critical",
-        description="Plaintext Ethereum private key detected.",
-        recommendation="Use encrypted keystores.",
-    )
-
-
-@pytest.fixture
-def sample_secrets_result(sample_secret_finding):
-    return SecretsResult(
-        timestamp=datetime(2024, 1, 15, 10, 30, 0),
-        findings=[sample_secret_finding],
-        scanned_paths=["/home/user/project/.env"],
-    )
-
-
-@pytest.fixture
-def sample_package():
-    return Package(
-        name="requests",
-        version="2.31.0",
-        package_manager="pip",
-        install_type="global",
-    )
-
-
-@pytest.fixture
-def sample_dependency_result(sample_package):
-    return DependencyResult(
-        timestamp=datetime(2024, 1, 15, 10, 30, 0),
-        packages=[sample_package],
-        package_managers_found=["pip"],
-        scanned_projects=["/home/user/project"],
-    )
 
 
 # ──────────────────────────────────────────────

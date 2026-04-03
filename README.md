@@ -83,43 +83,28 @@ Run `IDEViewer-Setup-*.exe` and follow the installer wizard. The installer will 
 sudo dpkg -i ideviewer_*_amd64.deb    # or _arm64.deb
 ```
 
-### Option B: Install from Source
+### Option B: Build from Source
 
-Requires Python 3.8+ on all platforms.
-
-#### macOS / Linux
+Requires [Go 1.25+](https://go.dev/dl/).
 
 ```bash
 git clone https://github.com/securient/ideviewer-oss.git
 cd ideviewer-oss
-python3 -m venv venv
-source venv/bin/activate
-pip install -e .
+
+# Build for your current platform
+make build
+# Output: dist/ideviewer (or ideviewer.exe on Windows)
+
+# Or cross-compile for all platforms
+make build-all
+# Output: dist/ideviewer-{linux,darwin}-{amd64,arm64}, dist/ideviewer-windows-amd64.exe
+
+# Install locally
+sudo cp dist/ideviewer /usr/local/bin/
 
 # Verify
 ideviewer --version
 ideviewer scan
-```
-
-#### Windows
-
-```powershell
-git clone https://github.com/securient/ideviewer-oss.git
-cd ideviewer-oss
-python -m venv venv
-venv\Scripts\activate
-pip install -e .
-
-# Verify
-ideviewer --version
-ideviewer scan
-```
-
-#### Windows (with pywin32 for full registry detection)
-
-```powershell
-pip install -e .
-pip install pywin32
 ```
 
 ### Updating
@@ -237,20 +222,20 @@ FREE_TIER_HOST_LIMIT=20 FLASK_CONFIG=development flask run
 Once you have a portal running and a customer key:
 
 ```bash
-# Step 1: Register this machine with the portal
+# Register and start the daemon (starts automatically after registration)
 ideviewer register \
   --customer-key YOUR-UUID-KEY \
   --portal-url http://localhost:5000
-
-# Step 2: Start the daemon for continuous monitoring
-ideviewer daemon --foreground
 ```
 
 The daemon will:
-- Run full scans at a regular interval (default: 60 minutes, configurable with `--interval`)
+- Run full scans at a regular interval (default: 30 minutes, configurable with `--interval`)
+- Monitor IDE extension directories in real-time via filesystem watchers (detects changes within 30 seconds)
+- Detect AI tools (Claude Code, Cursor, OpenClaw) and their MCP server configurations
 - Check for on-demand scan requests every 5 seconds
 - Send heartbeats every 2 minutes so the portal knows the machine is online
 - Monitor its own files for tampering and alert the portal
+- Detect and report git hook bypasses (`--no-verify` usage)
 
 ### Custom Scan Interval
 
@@ -281,9 +266,12 @@ ideviewer stop
 ## Portal Features
 
 - **Dashboard** — all registered machines and their security posture at a glance
-- **Host Detail** — tabbed view with Extensions, Packages, and Secrets for each machine
+- **Host Detail** — tabbed view with Extensions, Packages, Secrets, and AI Tools for each machine
 - **Extension Detail** — marketplace data, risk assessment, install counts, and which hosts have it
-- **Package Search** — search for any package across all machines
+- **Extension Dependency Scanning** — inventories packages bundled inside VS Code node_modules and JetBrains plugin JARs, with CVE correlation via OSV.dev
+- **AI Tools Detection** — discovers Claude Code, Cursor, and OpenClaw configurations, MCP server permissions, open ports, and redacted secrets
+- **Real-Time Monitoring** — filesystem watcher detects extension installs/uninstalls/updates within 30 seconds
+- **Package Search** — search for any package across all machines, filter by "Extension Deps" to isolate extension-bundled packages
 - **Marketplace Integration** — extension details from VS Code, JetBrains, and Open VSX marketplaces
 - **On-Demand Scans** — trigger a scan on any machine from the portal UI (picked up within ~5 seconds)
 - **Tamper Alerts** — warnings when daemon files are modified, deleted, or the daemon is stopped
@@ -343,6 +331,36 @@ Flags npm packages with `preinstall`, `postinstall`, `prepare`, and other lifecy
 
 The daemon monitors its own files (binary, config, service files) using SHA256 checksums. If any file is modified or deleted, the portal is alerted immediately. The daemon also notifies the portal when it receives a shutdown signal.
 
+### AI Tool Detection
+
+Detects AI development tools and their security-relevant configurations:
+
+| Tool | Detection |
+|------|-----------|
+| Claude Code | `~/.claude/settings.json`, per-project configs, MCP servers, permissions |
+| Cursor | `~/.cursor/mcp.json`, VS Code-like settings, MCP servers |
+| OpenClaw | `~/.openclaw/` configs, Slack/Telegram bot tokens, LLM API keys |
+
+For each tool, IDEViewer reports:
+- MCP server names, commands, and transport types
+- Environment variable names (never values)
+- Filesystem read/write and network permissions
+- Open listening ports from AI-related processes
+- Redacted API keys and tokens found in configs
+
+**Privacy**: Conversation content and tool outputs are never read or transmitted.
+
+### Extension Dependency Scanning
+
+IDE extensions bundle their own dependencies that are invisible to project-level SCA tools:
+- **VS Code/Cursor/VSCodium**: Scans `node_modules/` inside each extension directory
+- **JetBrains**: Inspects JAR files in plugin `lib/` directories for Maven `pom.properties`
+- All extension-bundled packages are correlated against OSV.dev for known CVEs
+
+### Real-Time Monitoring
+
+The daemon uses filesystem watchers (fsnotify) to monitor IDE extension directories. When extensions are installed, uninstalled, or updated, a targeted rescan is triggered within 30 seconds and results are reported to the portal.
+
 ### Heartbeat Monitoring
 
 The daemon sends a heartbeat every 2 minutes. The portal shows:
@@ -361,17 +379,17 @@ ideviewer secrets --output-sarif > secrets.sarif
 
 ## Building Installers from Source
 
+Requires [Go 1.25+](https://go.dev/dl/).
+
 ### macOS (.pkg)
 
-Requires Xcode Command Line Tools (`xcode-select --install`).
-
 ```bash
-pip install pyinstaller
-./build_scripts/build_macos.sh
-# Output: dist/IDEViewer-0.1.0.pkg
+make build                          # Build the binary
+./build_scripts/build_macos.sh      # Package as .pkg installer
+# Output: dist/IDEViewer-<version>-arm64.pkg
 
 # Install
-sudo installer -pkg dist/IDEViewer-0.1.0.pkg -target /
+sudo installer -pkg dist/IDEViewer-*-arm64.pkg -target /
 
 # Uninstall
 sudo ideviewer-uninstall
@@ -379,48 +397,23 @@ sudo ideviewer-uninstall
 
 ### Windows (.exe installer)
 
-Requires [Inno Setup 6](https://jrsoftware.org/isinfo.php) and Python 3.8+.
+Requires [Inno Setup 6](https://jrsoftware.org/isinfo.php).
 
 ```powershell
-pip install pyinstaller pywin32
-pyinstaller --clean --noconfirm ideviewer.spec
-
-# Then open build_scripts\windows_installer.iss in Inno Setup and compile,
-# or from the command line:
+# Cross-compile from any platform, or build natively on Windows
+make build-all
+# Then compile the installer:
 & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" build_scripts\windows_installer.iss
-# Output: dist\IDEViewer-Setup-0.1.0.exe
 ```
 
 Uninstall via **Settings > Apps > IDE Viewer > Uninstall**.
 
-### Linux (.deb via Docker)
-
-Requires Docker. Works from any host OS (macOS, Windows, Linux).
+### Linux (.deb)
 
 ```bash
-./build_scripts/build_linux_docker.sh          # amd64
-./build_scripts/build_linux_docker.sh arm64    # arm64 (uses QEMU if on x64 host)
-# Output: dist/ideviewer_0.1.0_amd64.deb (or _arm64.deb)
-
-# Install
-sudo dpkg -i dist/ideviewer_0.1.0_amd64.deb
-
-# Enable as a systemd service (optional)
-sudo systemctl enable ideviewer
-sudo systemctl start ideviewer
-
-# Uninstall
-sudo dpkg -r ideviewer          # keep config
-sudo dpkg -P ideviewer          # remove config + logs too
-```
-
-### Linux (.deb without Docker)
-
-Requires `dpkg-deb` (standard on Debian/Ubuntu).
-
-```bash
-pip install pyinstaller
-./build_scripts/build_debian.sh
+make build-all
+# .deb packages are created by the GitHub Actions workflow
+# For manual builds, the Makefile produces the binary at dist/ideviewer-linux-amd64
 ```
 
 ### Automated Builds via GitHub Actions
@@ -428,9 +421,11 @@ pip install pyinstaller
 Push a version tag to trigger builds for all platforms:
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.3.0
+git push origin v0.3.0
 ```
+
+The CI pipeline cross-compiles for Linux (amd64/arm64), macOS (arm64), and Windows (amd64), then creates platform-specific installers (.pkg, .deb, .exe) and drafts a GitHub release.
 
 ## Portal Deployment (Production)
 
@@ -468,6 +463,51 @@ Uninstall via **Settings > Apps > IDE Viewer > Uninstall**. This stops the daemo
 ```bash
 sudo dpkg -r ideviewer          # remove, keep config
 sudo dpkg -P ideviewer          # purge config + logs too
+```
+
+## Enterprise Deployment (MDM)
+
+For deploying IDEViewer to managed fleets via JAMF, Mosyle, Kandji, or other MDM solutions:
+
+### macOS (JAMF / MDM)
+
+**1. Deploy the PPPC profile** (prevents macOS access prompts):
+```bash
+# Upload deploy/mdm/ideviewer-tcc.mobileconfig as a Configuration Profile in your MDM
+# This grants Full Disk Access to the daemon — deploy BEFORE the .pkg
+```
+
+**2. Deploy the .pkg installer** via your MDM's package deployment.
+
+**3. Register silently** with a post-install script:
+```bash
+#!/bin/bash
+LOGGED_IN_USER=$(stat -f%Su /dev/console)
+sudo -u "$LOGGED_IN_USER" /usr/local/bin/ideviewer register \
+    --customer-key YOUR-KEY \
+    --portal-url https://portal.yourcompany.com
+```
+
+**4. Upgrade** — deploy a new .pkg version. The preinstall script stops the old daemon, and the LaunchAgent auto-restarts.
+
+**5. Uninstall** silently:
+```bash
+sudo /usr/local/bin/ideviewer-uninstall <<< "y"
+```
+
+See [deploy/mdm/README.md](deploy/mdm/README.md) for detailed JAMF, Mosyle, and Kandji instructions, PPPC profile configuration, and code signing guidance.
+
+### Linux (Fleet Management)
+
+```bash
+# Deploy the .deb package via your package manager
+sudo dpkg -i ideviewer_0.3.0_amd64.deb
+
+# Register
+ideviewer register --customer-key YOUR-KEY --portal-url https://portal.yourcompany.com
+
+# Enable as systemd service
+sudo systemctl enable --now ideviewer
 ```
 
 ## Contributing

@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import or_
 
 from app import db
-from app.models import CustomerKey, Host, ScanReport, ExtensionInfo, SecretFinding, PackageInfo, ScanRequest, TamperAlert, Vulnerability, HookBypass
+from app.models import CustomerKey, Host, ScanReport, ExtensionInfo, SecretFinding, PackageInfo, ScanRequest, TamperAlert, Vulnerability, HookBypass, AIToolInfo
 from app.auth.forms import CustomerKeyForm
 from app.marketplace import fetch_extension_details
 
@@ -375,9 +375,9 @@ def all_extensions():
         for ide in latest.scan_data.get('ides', []):
             ide_name = ide.get('name', 'Unknown')
             ides.add(ide_name)
-            for ext in ide.get('extensions', []):
+            for ext in (ide.get('extensions') or []):
                 ext_id = ext.get('id', ext.get('name', 'Unknown'))
-                permissions = ext.get('permissions', [])
+                permissions = (ext.get('permissions') or [])
                 risk_level = calculate_risk_level(permissions)
                 risk_levels.add(risk_level)
 
@@ -605,8 +605,8 @@ def host_detail(host_id):
             ide_name = ide.get('name', 'Unknown')
             ide_version = ide.get('version', 'Unknown')
             
-            for ext in ide.get('extensions', []):
-                permissions = ext.get('permissions', [])
+            for ext in (ide.get('extensions') or []):
+                permissions = (ext.get('permissions') or [])
                 # Calculate risk level
                 risk_level = calculate_risk_level(permissions)
                 risk_explanation = get_risk_explanation(permissions, risk_level)
@@ -689,6 +689,9 @@ def host_detail(host_id):
         host_id=host.id
     ).order_by(HookBypass.detected_at.desc()).limit(50).all()
 
+    # Get AI tool info for this host
+    ai_tools = AIToolInfo.query.filter_by(host_id=host.id).order_by(AIToolInfo.tool_name).all()
+
     return render_template('main/host_detail.html',
                            host=host,
                            extensions=extensions,
@@ -701,7 +704,8 @@ def host_detail(host_id):
                            total_packages=len(packages_query),
                            pkg_vuln_map=pkg_vuln_map,
                            total_vuln_count=total_vuln_count,
-                           hook_bypasses=hook_bypasses)
+                           hook_bypasses=hook_bypasses,
+                           ai_tools=ai_tools)
 
 
 @main_bp.route('/keys')
@@ -900,12 +904,15 @@ def delete_host(host_id):
     hostname = host.hostname
 
     # Delete all associated data
+    Vulnerability.query.filter_by(host_id=host.id).delete()
+    HookBypass.query.filter_by(host_id=host.id).delete()
     ScanRequest.query.filter_by(host_id=host.id).delete()
     ScanReport.query.filter_by(host_id=host.id).delete()
     ExtensionInfo.query.filter_by(host_id=host.id).delete()
     SecretFinding.query.filter_by(host_id=host.id).delete()
     PackageInfo.query.filter_by(host_id=host.id).delete()
     TamperAlert.query.filter_by(host_id=host.id).delete()
+    AIToolInfo.query.filter_by(host_id=host.id).delete()
 
     db.session.delete(host)
     db.session.commit()
@@ -1212,6 +1219,7 @@ def search():
         'hosts': [],
         'extensions': [],
         'packages': [],
+        'ai_components': [],
     }
     
     # Search hosts
@@ -1245,7 +1253,7 @@ def search():
             ide_name = ide.get('name') or 'Unknown'
             ide_type = ide.get('ide_type') or 'vscode'
             
-            for ext in ide.get('extensions', []):
+            for ext in (ide.get('extensions') or []):
                 ext_id = ext.get('id') or ''
                 ext_name = ext.get('name') or ''
                 publisher = ext.get('publisher') or ''
@@ -1265,7 +1273,7 @@ def search():
                         elif 'cursor' in ide_type.lower() or 'cursor' in ide_name.lower():
                             marketplace = 'cursor'
                         
-                        permissions = ext.get('permissions', [])
+                        permissions = (ext.get('permissions') or [])
                         risk_level = calculate_risk_level(permissions)
                         
                         extension_set[ext_id] = {
@@ -1310,7 +1318,53 @@ def search():
                 package_set[pkg_key]['hosts_count'] += 1
         
         results['packages'] = list(package_set.values())[:15]
-    
+
+    # Search AI tools, MCP servers, skills, and integrations
+    ai_component_set = {}
+    if pkg_host_ids:
+        ai_tools = AIToolInfo.query.filter(
+            AIToolInfo.host_id.in_(pkg_host_ids)
+        ).all()
+
+        for tool in ai_tools:
+            # Search tool name itself
+            if query.lower() in tool.tool_name.lower():
+                key = f"tool:{tool.tool_name}"
+                if key not in ai_component_set:
+                    ai_component_set[key] = {
+                        'name': tool.tool_name,
+                        'type': 'tool',
+                        'source_tool': tool.tool_name,
+                        'version': tool.version,
+                        'risk': None,
+                        'hosts_count': 1,
+                    }
+                else:
+                    ai_component_set[key]['hosts_count'] += 1
+
+            # Search components (MCP servers, skills, integrations, permissions)
+            for comp in (tool.mcp_servers or []):
+                comp_name = comp.get('name', '')
+                comp_type = comp.get('type', '')
+                comp_risk = comp.get('risk', 'info')
+
+                if query.lower() in comp_name.lower() or \
+                   query.lower() in comp_type.lower():
+                    key = f"{comp_type}:{comp_name}:{tool.tool_name}"
+                    if key not in ai_component_set:
+                        ai_component_set[key] = {
+                            'name': comp_name,
+                            'type': comp_type,
+                            'source_tool': tool.tool_name,
+                            'risk': comp_risk,
+                            'risk_reason': comp.get('risk_reason', ''),
+                            'hosts_count': 1,
+                        }
+                    else:
+                        ai_component_set[key]['hosts_count'] += 1
+
+    results['ai_components'] = list(ai_component_set.values())[:15]
+
     return jsonify(results)
 
 
@@ -1340,7 +1394,7 @@ def extension_detail(extension_id):
             continue
         
         for ide in latest_report.scan_data.get('ides', []):
-            for ext in ide.get('extensions', []):
+            for ext in (ide.get('extensions') or []):
                 if ext.get('id') == extension_id:
                     # Deduplicate: only add each host once
                     if host.id not in seen_host_ids:
@@ -1358,7 +1412,7 @@ def extension_detail(extension_id):
                     # Capture local extension data
                     if not local_data:
                         local_data = ext
-                        extension_permissions = ext.get('permissions', [])
+                        extension_permissions = (ext.get('permissions') or [])
     
     # Calculate risk assessment
     risk_level = calculate_risk_level(extension_permissions)
@@ -1557,10 +1611,10 @@ def export_extension_csv(extension_id):
             continue
 
         for ide in latest_report.scan_data.get('ides', []):
-            for ext in ide.get('extensions', []):
+            for ext in (ide.get('extensions') or []):
                 if ext.get('id') == extension_id and host.id not in seen_host_ids:
                     seen_host_ids.add(host.id)
-                    permissions = ext.get('permissions', [])
+                    permissions = (ext.get('permissions') or [])
                     risk_level = calculate_risk_level(permissions)
 
                     writer.writerow([
@@ -1611,8 +1665,8 @@ def export_host_extensions_csv(host_id):
 
     if latest_report and latest_report.scan_data:
         for ide in latest_report.scan_data.get('ides', []):
-            for ext in ide.get('extensions', []):
-                permissions = ext.get('permissions', [])
+            for ext in (ide.get('extensions') or []):
+                permissions = (ext.get('permissions') or [])
                 risk_level = calculate_risk_level(permissions)
                 perm_names = ', '.join(
                     p.get('name', str(p)) if isinstance(p, dict) else str(p)

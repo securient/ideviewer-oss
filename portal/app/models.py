@@ -22,6 +22,8 @@ class User(UserMixin, db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     is_active = db.Column(db.Boolean, default=True)
     
+    must_change_password = db.Column(db.Boolean, default=False)  # Force password change on first login
+
     # OAuth fields
     oauth_provider = db.Column(db.String(50))  # 'google', 'github', etc.
     oauth_id = db.Column(db.String(255))  # Provider's user ID
@@ -131,7 +133,8 @@ class Host(db.Model):
     last_heartbeat_at = db.Column(db.DateTime)  # Last heartbeat from daemon
     daemon_version = db.Column(db.String(50))  # Daemon version
     is_active = db.Column(db.Boolean, default=True)
-    
+    last_realtime_event = db.Column(db.DateTime)  # Last real-time filesystem change event
+
     # Unique constraint on hostname + customer_key
     __table_args__ = (
         db.UniqueConstraint('hostname', 'customer_key_id', name='unique_host_per_key'),
@@ -289,10 +292,12 @@ class PackageInfo(db.Model):
     # Package details
     name = db.Column(db.String(200), nullable=False)
     version = db.Column(db.String(100))
-    package_manager = db.Column(db.String(50), nullable=False)  # pip, npm, go, cargo, gem, composer
+    package_manager = db.Column(db.String(50), nullable=False)  # pip, npm, go, cargo, gem, composer, maven
     install_type = db.Column(db.String(20), default='project')  # global, project
     project_path = db.Column(db.String(500))
     lifecycle_hooks = db.Column(db.JSON)  # npm lifecycle hooks {preinstall: "...", postinstall: "..."}
+    source_type = db.Column(db.String(20), default='project')  # project, global, extension
+    source_extension = db.Column(db.String(200))  # Extension ID when source_type == 'extension'
     
     # Timestamps
     first_seen_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -306,6 +311,7 @@ class PackageInfo(db.Model):
         db.Index('idx_package_name', 'name'),
         db.Index('idx_package_manager', 'package_manager'),
         db.Index('idx_package_host', 'host_id', 'package_manager'),
+        db.Index('idx_package_source', 'host_id', 'source_type'),
     )
     
     def to_dict(self):
@@ -316,6 +322,8 @@ class PackageInfo(db.Model):
             'package_manager': self.package_manager,
             'install_type': self.install_type,
             'project_path': self.project_path,
+            'source_type': self.source_type or self.install_type,
+            'source_extension': self.source_extension,
             'first_seen_at': self.first_seen_at.isoformat() if self.first_seen_at else None,
             'last_seen_at': self.last_seen_at.isoformat() if self.last_seen_at else None,
         }
@@ -468,6 +476,52 @@ class HookBypass(db.Model):
 
     def __repr__(self):
         return f'<HookBypass {self.commit_hash[:8] if self.commit_hash else "?"} for Host {self.host_id}>'
+
+
+class AIToolInfo(db.Model):
+    """AI tool detection information from hosts."""
+
+    __tablename__ = 'ai_tool_info'
+
+    id = db.Column(db.Integer, primary_key=True)
+    host_id = db.Column(db.Integer, db.ForeignKey('hosts.id'), nullable=False)
+    scan_report_id = db.Column(db.Integer, db.ForeignKey('scan_reports.id'), nullable=False)
+
+    tool_name = db.Column(db.String(100), nullable=False)  # "Claude Code", "Cursor", "OpenClaw"
+    version = db.Column(db.String(100))
+    is_running = db.Column(db.Boolean, default=False)
+    config_path = db.Column(db.String(500))
+
+    # JSON fields for complex nested data
+    mcp_servers = db.Column(db.JSON)    # List of MCP server dicts
+    open_ports = db.Column(db.JSON)     # List of open port dicts
+    redacted_secrets = db.Column(db.JSON)  # List of redacted secret dicts
+
+    first_seen_at = db.Column(db.DateTime, default=datetime.utcnow)
+    last_seen_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    host = db.relationship('Host', backref=db.backref('ai_tools', lazy='dynamic'))
+
+    __table_args__ = (
+        db.Index('idx_aitool_host', 'host_id', 'tool_name'),
+    )
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'tool_name': self.tool_name,
+            'version': self.version,
+            'is_running': self.is_running,
+            'config_path': self.config_path,
+            'mcp_servers': self.mcp_servers or [],
+            'open_ports': self.open_ports or [],
+            'redacted_secrets': self.redacted_secrets or [],
+            'first_seen_at': self.first_seen_at.isoformat() if self.first_seen_at else None,
+            'last_seen_at': self.last_seen_at.isoformat() if self.last_seen_at else None,
+        }
+
+    def __repr__(self):
+        return f'<AIToolInfo {self.tool_name} on Host {self.host_id}>'
 
 
 class Vulnerability(db.Model):

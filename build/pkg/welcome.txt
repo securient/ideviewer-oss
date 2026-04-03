@@ -1,0 +1,15 @@
+Welcome to IDE Viewer Installer
+
+IDE Viewer is a cross-platform daemon that detects installed IDEs and scans their extensions for security analysis.
+
+Features:
+• Detects VS Code, Cursor, JetBrains IDEs, Sublime Text, Vim/Neovim, Xcode
+• Analyzes extension permissions and capabilities
+• Scans for plaintext secrets and vulnerable dependencies
+• Runs as a daemon for continuous monitoring
+
+This installer will install:
+• ideviewer command-line tool to /usr/local/bin
+• LaunchDaemon configuration (optional auto-start)
+
+Click Continue to proceed.

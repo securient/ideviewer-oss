@@ -1,0 +1,18 @@
+aws_region    = "us-east-1"
+project_name  = "ideviewer"
+environment   = "production"
+
+# Optional: Custom domain (requires Route53 hosted zone)
+# custom_domain   = "portal.securient.com"
+# route53_zone_id = "Z1234567890"
+
+# Optional: Google OAuth
+# google_client_id     = "your-client-id.apps.googleusercontent.com"
+# google_client_secret = "your-client-secret"
+
+# ECS scaling
+ecs_min_tasks = 1
+ecs_max_tasks = 4
+
+# RDS
+rds_instance_class = "db.t3.micro"

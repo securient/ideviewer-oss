@@ -765,8 +765,9 @@
             const hasHosts = data.hosts && data.hosts.length > 0;
             const hasExtensions = data.extensions && data.extensions.length > 0;
             const hasPackages = data.packages && data.packages.length > 0;
-            
-            if (!hasHosts && !hasExtensions && !hasPackages) {
+            const hasAI = data.ai_components && data.ai_components.length > 0;
+
+            if (!hasHosts && !hasExtensions && !hasPackages && !hasAI) {
                 searchResults.innerHTML = `<div class="search-no-results">No results for "${query}"</div>`;
                 return;
             }
@@ -851,10 +852,55 @@
                 
                 html += '</div>';
             }
-            
+
+            // AI Components section (MCP servers, skills, integrations)
+            if (hasAI) {
+                html += '<div class="search-section">';
+                html += '<div class="search-section-title"><i class="fas fa-robot"></i> AI Tools & Components</div>';
+
+                const typeIcons = {
+                    'tool': 'fas fa-robot',
+                    'mcp-server': 'fas fa-server',
+                    'cloud-mcp': 'fas fa-cloud',
+                    'skill': 'fas fa-puzzle-piece',
+                    'integration': 'fas fa-plug',
+                    'permission': 'fas fa-shield-alt',
+                };
+                const riskColors = {
+                    'critical': 'badge-critical',
+                    'high': 'badge-high',
+                    'medium': 'badge-medium',
+                    'low': 'badge-low',
+                };
+
+                data.ai_components.forEach(comp => {
+                    const icon = typeIcons[comp.type] || 'fas fa-robot';
+                    const riskBadge = comp.risk && comp.risk !== 'info'
+                        ? `<span class="badge ${riskColors[comp.risk] || ''}" style="font-size: 0.625rem;">${comp.risk}</span>`
+                        : '';
+
+                    html += `
+                        <div class="search-result-item" style="cursor: default;">
+                            <div class="search-result-icon">
+                                <i class="${icon}"></i>
+                            </div>
+                            <div class="search-result-content">
+                                <div class="search-result-title">${escapeHtml(comp.name)}</div>
+                                <div class="search-result-meta">${escapeHtml(comp.type)} • ${escapeHtml(comp.source_tool)} • ${comp.hosts_count} host${comp.hosts_count !== 1 ? 's' : ''}</div>
+                            </div>
+                            <div class="search-result-badge">
+                                ${riskBadge}
+                            </div>
+                        </div>
+                    `;
+                });
+
+                html += '</div>';
+            }
+
             searchResults.innerHTML = html;
         }
-        
+
         function escapeHtml(text) {
             if (!text) return '';
             const div = document.createElement('div');

@@ -1,16 +1,10 @@
-# GitHub Actions workflow to build IDE Viewer
+# GitHub Actions workflow for IDE Viewer (Go)
 #
-# Builds:
-#   - Windows AMD64 (.exe installer)
-#   - Linux AMD64 (.deb package)
-#   - Linux ARM64 (.deb package)
-#   - macOS ARM64 (.pkg installer)
-#   - macOS x64 (.pkg installer)
-#   - Portal Docker image (multi-arch)
-#
-# Note: Windows ARM64 is not built because GitHub-hosted runners are x64-only,
-# and PyInstaller cannot cross-compile to ARM64. This target will be added
-# when GitHub provides ARM64 Windows runners.
+# Architecture:
+#   1. test    — go test + go vet on all platforms
+#   2. build   — cross-compile all binaries on single ubuntu runner
+#   3. package — platform-specific installer packaging
+#   4. release — draft GitHub release on v* tags
 
 name: Build & Release
 
@@ -22,185 +16,388 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# Restrict default permissions — grant per-job as needed
 permissions: read-all
 
 env:
-  PYTHON_VERSION: '3.10'
+  GO_VERSION: '1.25.0'
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}-portal
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   # ===========================================
-  # Read version from pyproject.toml
+  # Test on all platforms
   # ===========================================
-  version:
-    runs-on: ubuntu-latest
-    name: Read Version
-    outputs:
-      app_version: ${{ steps.get_version.outputs.version }}
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    name: Test (${{ matrix.os }})
     steps:
-      - name: Checkout code
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Extract version from pyproject.toml
-        id: get_version
-        run: |
-          VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Detected version: $VERSION"
-
-  # ===========================================
-  # Windows AMD64
-  # ===========================================
-  windows-amd64:
-    needs: [version]
-    runs-on: windows-latest
-    name: Windows AMD64
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Set up Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          architecture: x64
-          cache: 'pip'
+          go-version: ${{ env.GO_VERSION }}
+      - run: go test -race ./...
+      - run: go vet ./...
 
-      - name: Install dependencies
+  # ===========================================
+  # Cross-compile all binaries
+  # ===========================================
+  build:
+    runs-on: ubuntu-latest
+    name: Build Binaries
+    needs: [test]
+    outputs:
+      app_version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Read version
+        id: version
         run: |
-          python -m pip install --upgrade pip
-          pip install -e .
-          pip install pyinstaller pywin32
+          VERSION=$(grep 'var Version' internal/version/version.go | cut -d'"' -f2 | sed 's/-dev$//')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building version: $VERSION"
 
-      - name: Build executable
-        run: pyinstaller --clean --noconfirm ideviewer.spec
+      - name: Build all targets
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          LDFLAGS="-s -w -X github.com/securient/ideviewer-oss/internal/version.Version=${VERSION}"
+          mkdir -p dist
+
+          CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -ldflags "$LDFLAGS" -o dist/ideviewer-linux-amd64     ./cmd/ideviewer/
+          CGO_ENABLED=0 GOOS=linux   GOARCH=arm64 go build -ldflags "$LDFLAGS" -o dist/ideviewer-linux-arm64     ./cmd/ideviewer/
+          CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64 go build -ldflags "$LDFLAGS" -o dist/ideviewer-darwin-arm64    ./cmd/ideviewer/
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "$LDFLAGS" -o dist/ideviewer-windows-amd64.exe ./cmd/ideviewer/
+
+          echo "Build artifacts:"
+          ls -lh dist/
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: binary-linux-amd64
+          path: dist/ideviewer-linux-amd64
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: binary-linux-arm64
+          path: dist/ideviewer-linux-arm64
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: binary-darwin-arm64
+          path: dist/ideviewer-darwin-arm64
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: binary-windows-amd64
+          path: dist/ideviewer-windows-amd64.exe
+
+  # ===========================================
+  # Package: Linux AMD64 .deb
+  # ===========================================
+  package-linux-amd64:
+    needs: [build]
+    runs-on: ubuntu-latest
+    name: Package Linux AMD64
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: binary-linux-amd64
+          path: bin
+
+      - name: Build .deb
+        run: |
+          VERSION="${{ needs.build.outputs.app_version }}"
+          ARCH="amd64"
+          PKG="ideviewer_${VERSION}_${ARCH}"
+
+          mkdir -p "${PKG}/DEBIAN"
+          mkdir -p "${PKG}/usr/local/bin"
+          mkdir -p "${PKG}/etc/ideviewer"
+          mkdir -p "${PKG}/lib/systemd/system"
+
+          cp bin/ideviewer-linux-amd64 "${PKG}/usr/local/bin/ideviewer"
+          chmod 755 "${PKG}/usr/local/bin/ideviewer"
+
+          # DEBIAN/control — no leading whitespace allowed
+          cat > "${PKG}/DEBIAN/control" <<CTRL
+          Package: ideviewer
+          Version: ${VERSION}
+          Section: utils
+          Priority: optional
+          Architecture: ${ARCH}
+          Maintainer: Securient <support@securient.com>
+          Description: Cross-platform IDE and Extension Scanner
+           Scans installed IDEs and extensions for security analysis.
+           Detects VS Code, Cursor, JetBrains, Sublime Text, Vim/Neovim.
+          Homepage: https://github.com/securient/ideviewer-oss
+          CTRL
+          sed -i 's/^          //' "${PKG}/DEBIAN/control"
+
+          echo "/etc/ideviewer/config.json" > "${PKG}/DEBIAN/conffiles"
+
+          cat > "${PKG}/etc/ideviewer/config.json" <<'CFG'
+          {
+            "portal_url": "",
+            "customer_key": "",
+            "scan_interval_minutes": 60
+          }
+          CFG
+          sed -i 's/^          //' "${PKG}/etc/ideviewer/config.json"
+
+          cat > "${PKG}/lib/systemd/system/ideviewer.service" <<'SVC'
+          [Unit]
+          Description=IDE Viewer Daemon
+          Documentation=https://github.com/securient/ideviewer-oss
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          ExecStart=/usr/local/bin/ideviewer daemon --foreground
+          Restart=on-failure
+          RestartSec=30
+          StandardOutput=journal
+          StandardError=journal
+
+          [Install]
+          WantedBy=multi-user.target
+          SVC
+          sed -i 's/^          //' "${PKG}/lib/systemd/system/ideviewer.service"
+
+          # postinst
+          cat > "${PKG}/DEBIAN/postinst" <<'SCRIPT'
+          #!/bin/bash
+          set -e
+          mkdir -p /var/log/ideviewer
+          chmod 755 /var/log/ideviewer
+          systemctl daemon-reload
+          echo ""
+          echo "IDE Viewer installed. Run: ideviewer register --customer-key KEY --portal-url URL"
+          echo ""
+          SCRIPT
+          sed -i 's/^          //' "${PKG}/DEBIAN/postinst"
+          chmod 755 "${PKG}/DEBIAN/postinst"
+
+          # prerm
+          cat > "${PKG}/DEBIAN/prerm" <<'SCRIPT'
+          #!/bin/bash
+          set -e
+          systemctl stop ideviewer 2>/dev/null || true
+          systemctl disable ideviewer 2>/dev/null || true
+          SCRIPT
+          sed -i 's/^          //' "${PKG}/DEBIAN/prerm"
+          chmod 755 "${PKG}/DEBIAN/prerm"
+
+          # postrm
+          cat > "${PKG}/DEBIAN/postrm" <<'SCRIPT'
+          #!/bin/bash
+          set -e
+          systemctl daemon-reload
+          if [ "$1" = "purge" ]; then
+            rm -rf /etc/ideviewer /var/log/ideviewer
+          fi
+          SCRIPT
+          sed -i 's/^          //' "${PKG}/DEBIAN/postrm"
+          chmod 755 "${PKG}/DEBIAN/postrm"
+
+          mkdir -p dist
+          dpkg-deb --build --root-owner-group "${PKG}" "dist/ideviewer_${VERSION}_${ARCH}.deb"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: linux-amd64-installer
+          path: dist/ideviewer_*.deb
+
+  # ===========================================
+  # Package: Linux ARM64 .deb
+  # ===========================================
+  package-linux-arm64:
+    needs: [build]
+    runs-on: ubuntu-latest
+    name: Package Linux ARM64
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: binary-linux-arm64
+          path: bin
+
+      - name: Build .deb
+        run: |
+          VERSION="${{ needs.build.outputs.app_version }}"
+          ARCH="arm64"
+          PKG="ideviewer_${VERSION}_${ARCH}"
+
+          mkdir -p "${PKG}/DEBIAN"
+          mkdir -p "${PKG}/usr/local/bin"
+          mkdir -p "${PKG}/etc/ideviewer"
+          mkdir -p "${PKG}/lib/systemd/system"
+
+          cp bin/ideviewer-linux-arm64 "${PKG}/usr/local/bin/ideviewer"
+          chmod 755 "${PKG}/usr/local/bin/ideviewer"
+
+          cat > "${PKG}/DEBIAN/control" <<CTRL
+          Package: ideviewer
+          Version: ${VERSION}
+          Section: utils
+          Priority: optional
+          Architecture: ${ARCH}
+          Maintainer: Securient <support@securient.com>
+          Description: Cross-platform IDE and Extension Scanner
+           Scans installed IDEs and extensions for security analysis.
+           Detects VS Code, Cursor, JetBrains, Sublime Text, Vim/Neovim.
+          Homepage: https://github.com/securient/ideviewer-oss
+          CTRL
+          sed -i 's/^          //' "${PKG}/DEBIAN/control"
+
+          echo "/etc/ideviewer/config.json" > "${PKG}/DEBIAN/conffiles"
+
+          cat > "${PKG}/etc/ideviewer/config.json" <<'CFG'
+          {
+            "portal_url": "",
+            "customer_key": "",
+            "scan_interval_minutes": 60
+          }
+          CFG
+          sed -i 's/^          //' "${PKG}/etc/ideviewer/config.json"
+
+          cat > "${PKG}/lib/systemd/system/ideviewer.service" <<'SVC'
+          [Unit]
+          Description=IDE Viewer Daemon
+          Documentation=https://github.com/securient/ideviewer-oss
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          ExecStart=/usr/local/bin/ideviewer daemon --foreground
+          Restart=on-failure
+          RestartSec=30
+          StandardOutput=journal
+          StandardError=journal
+
+          [Install]
+          WantedBy=multi-user.target
+          SVC
+          sed -i 's/^          //' "${PKG}/lib/systemd/system/ideviewer.service"
+
+          cat > "${PKG}/DEBIAN/postinst" <<'SCRIPT'
+          #!/bin/bash
+          set -e
+          mkdir -p /var/log/ideviewer
+          chmod 755 /var/log/ideviewer
+          systemctl daemon-reload
+          echo ""
+          echo "IDE Viewer installed. Run: ideviewer register --customer-key KEY --portal-url URL"
+          echo ""
+          SCRIPT
+          sed -i 's/^          //' "${PKG}/DEBIAN/postinst"
+          chmod 755 "${PKG}/DEBIAN/postinst"
+
+          cat > "${PKG}/DEBIAN/prerm" <<'SCRIPT'
+          #!/bin/bash
+          set -e
+          systemctl stop ideviewer 2>/dev/null || true
+          systemctl disable ideviewer 2>/dev/null || true
+          SCRIPT
+          sed -i 's/^          //' "${PKG}/DEBIAN/prerm"
+          chmod 755 "${PKG}/DEBIAN/prerm"
+
+          cat > "${PKG}/DEBIAN/postrm" <<'SCRIPT'
+          #!/bin/bash
+          set -e
+          systemctl daemon-reload
+          if [ "$1" = "purge" ]; then
+            rm -rf /etc/ideviewer /var/log/ideviewer
+          fi
+          SCRIPT
+          sed -i 's/^          //' "${PKG}/DEBIAN/postrm"
+          chmod 755 "${PKG}/DEBIAN/postrm"
+
+          mkdir -p dist
+          dpkg-deb --build --root-owner-group "${PKG}" "dist/ideviewer_${VERSION}_${ARCH}.deb"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: linux-arm64-installer
+          path: dist/ideviewer_*.deb
+
+  # ===========================================
+  # Package: macOS ARM64 .pkg
+  # ===========================================
+  package-macos:
+    needs: [build]
+    runs-on: macos-latest
+    name: Package macOS ARM64
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: binary-darwin-arm64
+          path: dist
+
+      - name: Build .pkg
+        env:
+          APP_VERSION: ${{ needs.build.outputs.app_version }}
+        run: |
+          mv dist/ideviewer-darwin-arm64 dist/ideviewer
+          chmod +x dist/ideviewer
+          chmod +x build_scripts/build_macos.sh
+          ./build_scripts/build_macos.sh
+
+      - name: Rename with architecture
+        run: |
+          VERSION="${{ needs.build.outputs.app_version }}"
+          PKG_FILE=$(ls dist/IDEViewer-*.pkg 2>/dev/null | head -1)
+          if [ -n "$PKG_FILE" ]; then
+            mv "$PKG_FILE" "dist/IDEViewer-${VERSION}-arm64.pkg"
+          else
+            echo "ERROR: No .pkg found" && exit 1
+          fi
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: macos-arm64-installer
+          path: dist/IDEViewer-*.pkg
+
+  # ===========================================
+  # Package: Windows AMD64 .exe installer
+  # ===========================================
+  package-windows:
+    needs: [build]
+    runs-on: windows-latest
+    name: Package Windows AMD64
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: binary-windows-amd64
+          path: dist
+
+      - name: Prepare binary
+        shell: pwsh
+        run: |
+          Rename-Item -Path "dist\ideviewer-windows-amd64.exe" -NewName "ideviewer.exe"
 
       - name: Install Inno Setup
         run: choco install innosetup -y
 
       - name: Build installer
         run: |
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAPP_VERSION=${{ needs.version.outputs.app_version }}" build_scripts\windows_installer.iss
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAPP_VERSION=${{ needs.build.outputs.app_version }}" build_scripts\windows_installer.iss
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-amd64-installer
           path: dist/IDEViewer-Setup-*.exe
-
-  # ===========================================
-  # Linux AMD64
-  # ===========================================
-  linux-amd64:
-    needs: [version]
-    runs-on: ubuntu-latest
-    name: Linux AMD64
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@f7ce87c1d6bead3e36075b2ce75da1f6cc28aaca # v3.9.0
-
-      - name: Build .deb package
-        run: |
-          mkdir -p dist
-          docker buildx build \
-            --platform linux/amd64 \
-            --build-arg APP_VERSION=${{ needs.version.outputs.app_version }} \
-            -f build_scripts/Dockerfile.linux \
-            -t ideviewer-builder-amd64 \
-            --load \
-            .
-          docker run --rm -v $(pwd)/dist:/output ideviewer-builder-amd64
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: linux-amd64-installer
-          path: dist/ideviewer_*_amd64.deb
-
-  # ===========================================
-  # Linux ARM64 (native runner — no QEMU)
-  # ===========================================
-  linux-arm64:
-    needs: [version]
-    runs-on: ubuntu-24.04-arm
-    name: Linux ARM64
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@f7ce87c1d6bead3e36075b2ce75da1f6cc28aaca # v3.9.0
-
-      - name: Build .deb package
-        run: |
-          mkdir -p dist
-          docker buildx build \
-            --platform linux/arm64 \
-            --build-arg APP_VERSION=${{ needs.version.outputs.app_version }} \
-            -f build_scripts/Dockerfile.linux \
-            -t ideviewer-builder-arm64 \
-            --load \
-            .
-          docker run --rm -v $(pwd)/dist:/output ideviewer-builder-arm64
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: linux-arm64-installer
-          path: dist/ideviewer_*_arm64.deb
-
-  # ===========================================
-  # macOS ARM64
-  # ===========================================
-  macos-arm64:
-    needs: [version]
-    runs-on: macos-14  # M1 runner (ARM64)
-    name: macOS ARM64
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Set up Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: 'pip'
-
-      - name: Build .pkg installer
-        run: |
-          chmod +x build_scripts/build_macos.sh
-          APP_VERSION=${{ needs.version.outputs.app_version }} ./build_scripts/build_macos.sh
-
-      - name: Rename with architecture
-        run: |
-          PKG_FILE=$(ls dist/IDEViewer-*.pkg 2>/dev/null | head -1)
-          if [ -n "$PKG_FILE" ]; then
-            mv "$PKG_FILE" "dist/IDEViewer-${{ needs.version.outputs.app_version }}-arm64.pkg"
-          else
-            echo "ERROR: No .pkg file found in dist/"
-            exit 1
-          fi
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: macos-arm64-installer
-          path: dist/IDEViewer-*.pkg
-
-  # ===========================================
-  # NOTE: macOS x64 (Intel) builds are not included because GitHub has
-  # deprecated free Intel macOS runners. Intel Mac users can build from source.
-  # ===========================================
 
   # ===========================================
   # Portal Docker Image (Multi-arch)
@@ -208,32 +405,27 @@ jobs:
   portal-container:
     runs-on: ubuntu-latest
     name: Portal Container
-
     permissions:
       contents: read
       packages: write
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392 # v3
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@f7ce87c1d6bead3e36075b2ce75da1f6cc28aaca # v3.9.0
+      - uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3
 
       - name: Log in to Container Registry
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata for Docker
+      - name: Extract Docker metadata
         id: meta
-        uses: docker/metadata-action@318604b99e75e41977312d83839a89be02ca4893 # v5.9.0
+        uses: docker/metadata-action@902fa8ec7d6ecbf8d84d538b9b233a880e428804 # v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
@@ -244,8 +436,8 @@ jobs:
             type=sha,prefix=
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Build and push Docker image
-        uses: docker/build-push-action@4f58ea79222b3b9dc2c8bbdd6debcef730109a75 # v6.9.0
+      - name: Build and push
+        uses: docker/build-push-action@14487ce63c7a62a4a324b0bfb37086795e31c6c1 # v6
         with:
           context: ./portal
           file: ./portal/Dockerfile
@@ -257,20 +449,16 @@ jobs:
           cache-to: type=gha,mode=max
 
   # ===========================================
-  # Create Release (on tags)
+  # Release (on v* tags only)
   # ===========================================
   release:
-    needs: [windows-amd64, linux-amd64, linux-arm64, macos-arm64, portal-container]
-    # Portal container is best-effort — don't block release if it fails
-    if: ${{ always() && startsWith(github.ref, 'refs/tags/v') && !contains(needs.windows-amd64.result, 'failure') && !contains(needs.linux-amd64.result, 'failure') && !contains(needs.linux-arm64.result, 'failure') && !contains(needs.macos-arm64.result, 'failure') }}
+    needs: [package-linux-amd64, package-linux-arm64, package-macos, package-windows]
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
-
     permissions:
       contents: write
-
     steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: artifacts
 
@@ -278,7 +466,7 @@ jobs:
         run: find artifacts -type f -ls
 
       - name: Create Release
-        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2
+        uses: softprops/action-gh-release@c95fe1489396fe8a9eb87c0abf8aa5b2ef267fda # v2
         with:
           files: |
             artifacts/**/*.exe
@@ -287,9 +475,21 @@ jobs:
           draft: true
           generate_release_notes: true
           body: |
+            ## Installation
+
+            | Platform | File | Install |
+            |----------|------|---------|
+            | macOS ARM64 | `IDEViewer-*-arm64.pkg` | `sudo installer -pkg <file> -target /` |
+            | Linux AMD64 | `ideviewer_*_amd64.deb` | `sudo dpkg -i <file>` |
+            | Linux ARM64 | `ideviewer_*_arm64.deb` | `sudo dpkg -i <file>` |
+            | Windows x64 | `IDEViewer-Setup-*.exe` | Run installer |
+
             ## Portal Container
 
-            Pull the portal container:
             ```bash
             docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
             ```
+
+            ## What's New
+
+            Daemon rewritten in Go for better performance. Single static binary, no runtime dependencies.

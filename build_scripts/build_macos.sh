@@ -3,21 +3,19 @@
 # Build script for macOS .pkg installer
 #
 # Requirements:
-#   - Python 3.8+
-#   - PyInstaller: pip install pyinstaller
 #   - Xcode Command Line Tools (for pkgbuild/productbuild)
+#   - Pre-compiled binary at dist/ideviewer
 #
 # Usage:
-#   ./build_scripts/build_macos.sh
+#   APP_VERSION=0.3.0 ./build_scripts/build_macos.sh
 #
 
 set -e
 
 # Configuration
 APP_NAME="IDEViewer"
-APP_VERSION="${APP_VERSION:-0.1.0}"
+APP_VERSION="${APP_VERSION:-0.3.0}"
 BUNDLE_ID="com.ideviewer.daemon"
-INSTALL_LOCATION="/usr/local/bin"
 
 # Directories
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -31,49 +29,25 @@ echo "=== Building IDE Viewer for macOS ==="
 echo "Version: $APP_VERSION"
 echo ""
 
-# Clean previous build artifacts (but preserve dist/ if executable already exists)
+# Clean previous build artifacts (but preserve dist/ where the Go binary lives)
 echo "Cleaning previous build artifacts..."
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR" "$DIST_DIR" "$PKG_DIR" "$SCRIPTS_DIR"
 
-# Build executable if it doesn't already exist (CI may have built it already)
-if [ -f "$DIST_DIR/ideviewer" ]; then
-    echo "Executable already exists at $DIST_DIR/ideviewer, skipping build..."
-else
-    # Create virtual environment if it doesn't exist
-    if [ ! -d "$PROJECT_DIR/venv" ]; then
-        echo "Creating virtual environment..."
-        python3 -m venv "$PROJECT_DIR/venv"
-    fi
-
-    # Activate virtual environment
-    source "$PROJECT_DIR/venv/bin/activate"
-
-    # Install dependencies
-    echo "Installing dependencies..."
-    pip install --upgrade pip
-    pip install -e "$PROJECT_DIR"
-    pip install pyinstaller
-
-    # Build executable with PyInstaller
-    echo "Building executable with PyInstaller..."
-    cd "$PROJECT_DIR"
-    pyinstaller --clean --noconfirm ideviewer.spec
-
-    # Verify the executable was created
-    if [ ! -f "$DIST_DIR/ideviewer" ]; then
-        echo "ERROR: Executable not found at $DIST_DIR/ideviewer"
-        exit 1
-    fi
-
-    echo "Executable built successfully!"
+# Verify the Go binary exists
+if [ ! -f "$DIST_DIR/ideviewer" ]; then
+    echo "ERROR: Binary not found at $DIST_DIR/ideviewer"
+    echo "Build it first with: make build-darwin-arm64"
+    exit 1
 fi
+
+echo "Using pre-built binary: $DIST_DIR/ideviewer"
 
 # Create package structure
 echo "Creating package structure..."
 PKG_ROOT="$PKG_DIR/root"
 mkdir -p "$PKG_ROOT/usr/local/bin"
-mkdir -p "$PKG_ROOT/Library/LaunchDaemons"
+mkdir -p "$PKG_ROOT/Library/LaunchAgents"
 
 # Copy executable
 cp "$DIST_DIR/ideviewer" "$PKG_ROOT/usr/local/bin/"
@@ -83,8 +57,10 @@ chmod +x "$PKG_ROOT/usr/local/bin/ideviewer"
 cp "$SCRIPT_DIR/uninstall_macos.sh" "$PKG_ROOT/usr/local/bin/ideviewer-uninstall"
 chmod +x "$PKG_ROOT/usr/local/bin/ideviewer-uninstall"
 
-# Create LaunchDaemon plist for auto-start (optional)
-cat > "$PKG_ROOT/Library/LaunchDaemons/com.ideviewer.daemon.plist" << EOF
+# Create LaunchAgent plist — runs as the logged-in user so it can access
+# ~/.vscode/extensions, ~/.claude/settings.json, ~/projects, etc.
+# (LaunchDaemon runs as root where ~ is /var/root — wrong for user-level scanning)
+cat > "$PKG_ROOT/Library/LaunchAgents/com.ideviewer.daemon.plist" << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -96,22 +72,15 @@ cat > "$PKG_ROOT/Library/LaunchDaemons/com.ideviewer.daemon.plist" << EOF
         <string>/usr/local/bin/ideviewer</string>
         <string>daemon</string>
         <string>--foreground</string>
-        <string>--interval</string>
-        <string>60</string>
-        <string>--output</string>
-        <string>/var/log/ideviewer/scan.json</string>
     </array>
     <key>RunAtLoad</key>
-    <false/>
+    <true/>
     <key>KeepAlive</key>
-    <dict>
-        <key>SuccessfulExit</key>
-        <false/>
-    </dict>
+    <true/>
     <key>StandardOutPath</key>
-    <string>/var/log/ideviewer/stdout.log</string>
+    <string>/tmp/ideviewer-daemon.log</string>
     <key>StandardErrorPath</key>
-    <string>/var/log/ideviewer/stderr.log</string>
+    <string>/tmp/ideviewer-daemon.log</string>
 </dict>
 </plist>
 EOF
@@ -124,6 +93,27 @@ cat > "$SCRIPTS_DIR/postinstall" << 'EOF'
 # Create log directory
 mkdir -p /var/log/ideviewer
 chmod 755 /var/log/ideviewer
+
+# Create system-level config directory (daemon runs as root via launchd,
+# so it needs config in a system path, not the user's home directory)
+mkdir -p "/Library/Application Support/IDEViewer"
+chmod 755 "/Library/Application Support/IDEViewer"
+
+# If the user already has a config (from a previous register), copy it to system path
+REAL_HOME=""
+if [ -n "$HOME" ] && [ "$HOME" != "/var/root" ]; then
+    REAL_HOME="$HOME"
+elif [ -n "$USER" ] && [ "$USER" != "root" ]; then
+    REAL_HOME=$(eval echo "~$USER")
+elif [ -n "$SUDO_USER" ]; then
+    REAL_HOME=$(eval echo "~$SUDO_USER")
+fi
+
+if [ -n "$REAL_HOME" ] && [ -f "$REAL_HOME/.ideviewer/config.json" ]; then
+    cp "$REAL_HOME/.ideviewer/config.json" "/Library/Application Support/IDEViewer/config.json"
+    chmod 600 "/Library/Application Support/IDEViewer/config.json"
+    echo "Copied existing config to system path"
+fi
 
 # Make executables accessible
 chmod +x /usr/local/bin/ideviewer
@@ -143,11 +133,13 @@ echo "  ideviewer register \\"
 echo "    --customer-key YOUR_KEY_HERE \\"
 echo "    --portal-url https://your-portal.example.com"
 echo ""
-echo "Step 3: Start the daemon:"
-echo "  ideviewer daemon --foreground"
+echo "The daemon will start automatically after registration."
+echo "Logs: /tmp/ideviewer-daemon.log"
 echo ""
 echo "Other commands:"
 echo "  ideviewer scan          - Scan for IDEs and extensions"
+echo "  ideviewer secrets       - Scan for plaintext secrets"
+echo "  ideviewer packages      - Inventory installed packages"
 echo "  ideviewer stats         - Show statistics"
 echo "  ideviewer dangerous     - List dangerous extensions"
 echo ""
@@ -197,24 +189,24 @@ cat > "$PKG_DIR/distribution.xml" << EOF
     <organization>com.ideviewer</organization>
     <domains enable_localSystem="true"/>
     <options customize="never" require-scripts="true" rootVolumeOnly="true"/>
-    
+
     <welcome file="welcome.txt"/>
     <license file="license.txt"/>
     <conclusion file="conclusion.txt"/>
-    
+
     <pkg-ref id="$BUNDLE_ID"/>
-    
+
     <choices-outline>
         <line choice="default">
             <line choice="$BUNDLE_ID"/>
         </line>
     </choices-outline>
-    
+
     <choice id="default"/>
     <choice id="$BUNDLE_ID" visible="false">
         <pkg-ref id="$BUNDLE_ID"/>
     </choice>
-    
+
     <pkg-ref id="$BUNDLE_ID" version="$APP_VERSION" onConclusion="none">IDEViewer-component.pkg</pkg-ref>
 </installer-gui-script>
 EOF
@@ -228,7 +220,7 @@ IDE Viewer is a cross-platform daemon that detects installed IDEs and scans thei
 Features:
 • Detects VS Code, Cursor, JetBrains IDEs, Sublime Text, Vim/Neovim, Xcode
 • Analyzes extension permissions and capabilities
-• Identifies potentially dangerous extensions
+• Scans for plaintext secrets and vulnerable dependencies
 • Runs as a daemon for continuous monitoring
 
 This installer will install:
@@ -263,22 +255,18 @@ IDE Viewer has been installed successfully!
 
 The ideviewer command is now available in your terminal.
 
-╔════════════════════════════════════════════════════════╗
-║  NEXT STEPS - Registration Required                   ║
-╠════════════════════════════════════════════════════════╣
-║                                                        ║
-║  1. Get your Customer Key from the Portal              ║
-║                                                        ║
-║  2. Register this machine:                             ║
-║                                                        ║
-║     ideviewer register \\                               ║
-║       --customer-key YOUR_KEY \\                        ║
-║       --portal-url https://portal.example.com          ║
-║                                                        ║
-║  3. Start the daemon:                                  ║
-║     ideviewer daemon --foreground                      ║
-║                                                        ║
-╚════════════════════════════════════════════════════════╝
+Next Steps:
+
+  1. Get your Customer Key from the Portal
+
+  2. Register this machine:
+
+     ideviewer register \\
+       --customer-key YOUR_KEY \\
+       --portal-url https://portal.example.com
+
+  3. Start the daemon:
+     ideviewer daemon --foreground
 
 Other Commands:
   ideviewer scan          - Local scan (no portal)

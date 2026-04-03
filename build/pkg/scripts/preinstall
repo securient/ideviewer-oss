@@ -1,0 +1,15 @@
+#!/bin/bash
+# Pre-installation script
+
+# Stop existing daemon if running
+if launchctl list | grep -q "com.ideviewer.daemon"; then
+    echo "Stopping existing IDE Viewer daemon..."
+    sudo launchctl unload /Library/LaunchDaemons/com.ideviewer.daemon.plist 2>/dev/null || true
+fi
+
+# Remove old executable if exists
+if [ -f /usr/local/bin/ideviewer ]; then
+    rm -f /usr/local/bin/ideviewer
+fi
+
+exit 0

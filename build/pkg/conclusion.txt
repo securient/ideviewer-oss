@@ -1,0 +1,24 @@
+IDE Viewer has been installed successfully!
+
+The ideviewer command is now available in your terminal.
+
+Next Steps:
+
+  1. Get your Customer Key from the Portal
+
+  2. Register this machine:
+
+     ideviewer register \
+       --customer-key YOUR_KEY \
+       --portal-url https://portal.example.com
+
+  3. Start the daemon:
+     ideviewer daemon --foreground
+
+Other Commands:
+  ideviewer scan          - Local scan (no portal)
+  ideviewer stats         - Show statistics
+  ideviewer dangerous     - List dangerous extensions
+
+To uninstall:
+  sudo ideviewer-uninstall

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+    <title>IDE Viewer</title>
+    <organization>com.ideviewer</organization>
+    <domains enable_localSystem="true"/>
+    <options customize="never" require-scripts="true" rootVolumeOnly="true"/>
+
+    <welcome file="welcome.txt"/>
+    <license file="license.txt"/>
+    <conclusion file="conclusion.txt"/>
+
+    <pkg-ref id="com.ideviewer.daemon"/>
+
+    <choices-outline>
+        <line choice="default">
+            <line choice="com.ideviewer.daemon"/>
+        </line>
+    </choices-outline>
+
+    <choice id="default"/>
+    <choice id="com.ideviewer.daemon" visible="false">
+        <pkg-ref id="com.ideviewer.daemon"/>
+    </choice>
+
+    <pkg-ref id="com.ideviewer.daemon" version="0.3.0" onConclusion="none">IDEViewer-component.pkg</pkg-ref>
+</installer-gui-script>

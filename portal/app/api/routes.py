@@ -12,7 +12,7 @@ import traceback
 import logging
 
 from app import db
-from app.models import CustomerKey, Host, ScanReport, ExtensionInfo, SecretFinding, PackageInfo, ScanRequest, TamperAlert, Vulnerability, HookBypass
+from app.models import CustomerKey, Host, ScanReport, ExtensionInfo, SecretFinding, PackageInfo, ScanRequest, TamperAlert, Vulnerability, HookBypass, AIToolInfo
 from app.main.routes import calculate_risk_level
 
 vuln_logger = logging.getLogger('ideviewer.vuln_scan')
@@ -318,8 +318,8 @@ def submit_report():
     # Count dangerous extensions
     dangerous_count = 0
     for ide in scan_data.get('ides', []):
-        for ext in ide.get('extensions', []):
-            permissions = ext.get('permissions', [])
+        for ext in (ide.get('extensions') or []):
+            permissions = (ext.get('permissions') or [])
             risk = calculate_risk_level(permissions)
             if risk in ['high', 'critical']:
                 dangerous_count += 1
@@ -406,6 +406,7 @@ def submit_report():
         PackageInfo.query.filter_by(host_id=host.id).delete()
         
         for pkg in deps_data['packages']:
+            source_type = pkg.get('source_type') or pkg.get('install_type', 'project')
             package = PackageInfo(
                 host_id=host.id,
                 scan_report_id=report.id,
@@ -415,10 +416,35 @@ def submit_report():
                 install_type=pkg.get('install_type', 'project'),
                 project_path=pkg.get('project_path'),
                 lifecycle_hooks=pkg.get('lifecycle_hooks'),
+                source_type=source_type,
+                source_extension=pkg.get('source_extension'),
             )
             db.session.add(package)
             packages_count += 1
-    
+
+    # Process AI tools data
+    ai_data = scan_data.get('ai_tools', {})
+    ai_tools_count = 0
+
+    if ai_data and ai_data.get('ai_tools'):
+        # Clear old AI tool info for this host to get fresh data
+        AIToolInfo.query.filter_by(host_id=host.id).delete()
+
+        for tool in ai_data['ai_tools']:
+            ai_tool = AIToolInfo(
+                host_id=host.id,
+                scan_report_id=report.id,
+                tool_name=tool.get('name', 'Unknown'),
+                version=tool.get('version'),
+                is_running=tool.get('is_running', False),
+                config_path=tool.get('config_path'),
+                mcp_servers=tool.get('components'),
+                open_ports=tool.get('open_ports'),
+                redacted_secrets=tool.get('secrets'),
+            )
+            db.session.add(ai_tool)
+            ai_tools_count += 1
+
     # Update key last used
     key.last_used_at = datetime.utcnow()
 
@@ -454,6 +480,7 @@ def submit_report():
             'secrets_found': secrets_count,
             'critical_secrets': critical_secrets,
             'packages_found': packages_count,
+            'ai_tools_found': ai_tools_count,
         }
     })
 
@@ -742,6 +769,153 @@ def receive_alert():
     return jsonify({
         'received': True,
         'alert_id': alert.id,
+    })
+
+
+@api_bp.route('/deregister-host', methods=['POST'])
+def deregister_host():
+    """
+    Deregister a host during uninstallation.
+    Marks the host as inactive so it no longer counts against host limits.
+
+    Request:
+        Headers:
+            X-Customer-Key: <uuid>
+        Body:
+            {
+                "hostname": "machine-name",
+                "reason": "uninstall"
+            }
+
+    Response:
+        {
+            "success": true,
+            "message": "Host deregistered successfully"
+        }
+    """
+    key, error, status = get_customer_key()
+    if error:
+        return jsonify(error), status
+
+    data = request.get_json() or {}
+    hostname = data.get('hostname')
+
+    if not hostname:
+        return jsonify({'error': 'hostname is required'}), 400
+
+    host = Host.query.filter_by(
+        hostname=hostname,
+        customer_key_id=key.id
+    ).first()
+
+    if not host:
+        return jsonify({'error': 'Host not found'}), 404
+
+    # Mark host as inactive rather than deleting — preserves audit trail
+    host.is_active = False
+    host.last_seen_at = datetime.utcnow()
+
+    # Log a tamper alert for the deregistration
+    reason = data.get('reason', 'uninstall')
+    alert = TamperAlert(
+        host_id=host.id,
+        alert_type='host_deregistered',
+        details=f'Host deregistered via API. Reason: {reason}',
+        severity='high',
+    )
+    db.session.add(alert)
+    db.session.commit()
+
+    return jsonify({
+        'success': True,
+        'message': 'Host deregistered successfully'
+    })
+
+
+@api_bp.route('/realtime-event', methods=['POST'])
+def receive_realtime_event():
+    """
+    Receive a real-time filesystem change event from the daemon.
+    Triggered when IDE extension directories change (install/uninstall/update).
+    """
+    key, error, status = get_customer_key()
+    if error:
+        return jsonify(error), status
+
+    data = request.get_json() or {}
+    hostname = data.get('hostname')
+
+    if not hostname:
+        return jsonify({'error': 'hostname is required'}), 400
+
+    host = Host.query.filter_by(
+        hostname=hostname,
+        customer_key_id=key.id
+    ).first()
+
+    if not host:
+        return jsonify({'error': 'Host not found'}), 404
+
+    # Update the host's last realtime event timestamp
+    host.last_realtime_event = datetime.utcnow()
+    host.last_seen_at = datetime.utcnow()
+
+    # Process scan data if included (extension changes trigger a rescan)
+    scan_data = data.get('scan_data')
+    if scan_data:
+        # Update extension info from the rescan
+        total_ides = scan_data.get('total_ides', 0)
+        total_extensions = scan_data.get('total_extensions', 0)
+
+        dangerous_count = 0
+        for ide in scan_data.get('ides', []):
+            for ext in ide.get('extensions', []):
+                permissions = ext.get('permissions', [])
+                risk = calculate_risk_level(permissions)
+                if risk in ['high', 'critical']:
+                    dangerous_count += 1
+
+        # Create a lightweight scan report
+        report = ScanReport(
+            host_id=host.id,
+            scan_data=scan_data,
+            total_ides=total_ides,
+            total_extensions=total_extensions,
+            dangerous_extensions=dangerous_count
+        )
+        db.session.add(report)
+
+    # Process dependency data if included
+    deps_data = data.get('dependencies', {})
+    if deps_data and deps_data.get('packages'):
+        PackageInfo.query.filter_by(host_id=host.id).delete()
+        for pkg in deps_data['packages']:
+            source_type = pkg.get('source_type') or pkg.get('install_type', 'project')
+            package = PackageInfo(
+                host_id=host.id,
+                scan_report_id=report.id if scan_data else host.scan_reports.first().id if host.scan_reports.first() else 1,
+                name=pkg.get('name', 'unknown'),
+                version=pkg.get('version', 'unknown'),
+                package_manager=pkg.get('package_manager', 'unknown'),
+                install_type=pkg.get('install_type', 'project'),
+                project_path=pkg.get('project_path'),
+                lifecycle_hooks=pkg.get('lifecycle_hooks'),
+                source_type=source_type,
+                source_extension=pkg.get('source_extension'),
+            )
+            db.session.add(package)
+
+    key.last_used_at = datetime.utcnow()
+    db.session.commit()
+
+    # Log the event
+    changes = data.get('changes', [])
+    api_logger.info(f"Realtime event from {hostname}: {len(changes)} change(s)")
+
+    return jsonify({
+        'received': True,
+        'changes_processed': len(changes),
+        'timestamp': datetime.utcnow().isoformat()
     })
 
 

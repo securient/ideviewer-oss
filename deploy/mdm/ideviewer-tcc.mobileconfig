@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    IDEViewer — Privacy Preferences Policy Control (PPPC) Profile
+
+    This profile grants the IDEViewer daemon access to protected directories
+    (Documents, Desktop, Downloads, etc.) without user prompts.
+
+    Deployment:
+      - JAMF: Upload as a Configuration Profile
+      - Mosyle/Kandji: Upload as a custom .mobileconfig
+      - Manual: sudo profiles install -path ideviewer-tcc.mobileconfig
+
+    NOTE: For production, replace the CodeRequirement with your code signing
+    identity. The current config uses path-based identification which works
+    for unsigned binaries but is less secure.
+-->
+<plist version="1.0">
+<dict>
+    <key>PayloadContent</key>
+    <array>
+        <dict>
+            <key>PayloadType</key>
+            <string>com.apple.TCC.configuration-profile-policy</string>
+            <key>PayloadDisplayName</key>
+            <string>IDEViewer Privacy Access</string>
+            <key>PayloadIdentifier</key>
+            <string>com.ideviewer.tcc</string>
+            <key>PayloadUUID</key>
+            <string>A1B2C3D4-E5F6-7890-ABCD-EF1234567890</string>
+            <key>PayloadVersion</key>
+            <integer>1</integer>
+            <key>Services</key>
+            <dict>
+                <!-- Full Disk Access — required for scanning IDE extensions,
+                     project directories, config files, and secrets detection -->
+                <key>SystemPolicyAllFiles</key>
+                <array>
+                    <dict>
+                        <key>Identifier</key>
+                        <string>/usr/local/bin/ideviewer</string>
+                        <key>IdentifierType</key>
+                        <string>path</string>
+                        <key>Allowed</key>
+                        <true/>
+                        <key>Comment</key>
+                        <string>IDEViewer daemon needs access to scan IDE extensions, project dependencies, secrets, and AI tool configs across the filesystem.</string>
+                    </dict>
+                </array>
+            </dict>
+        </dict>
+    </array>
+    <key>PayloadDisplayName</key>
+    <string>IDEViewer — Privacy Access</string>
+    <key>PayloadDescription</key>
+    <string>Grants IDEViewer daemon access to scan developer workstation files including IDE extensions, project dependencies, secrets, and AI tool configurations. No file contents are transmitted — only metadata, package names, and redacted secret indicators.</string>
+    <key>PayloadIdentifier</key>
+    <string>com.ideviewer.pppc</string>
+    <key>PayloadOrganization</key>
+    <string>Securient</string>
+    <key>PayloadScope</key>
+    <string>System</string>
+    <key>PayloadType</key>
+    <string>Configuration</string>
+    <key>PayloadUUID</key>
+    <string>F1E2D3C4-B5A6-7890-FEDC-BA0987654321</string>
+    <key>PayloadVersion</key>
+    <integer>1</integer>
+</dict>
+</plist>

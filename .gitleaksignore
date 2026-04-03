@@ -1,0 +1,5 @@
+# Test fixtures — these are fake/dummy secrets used in unit tests
+pkg/secrets/secrets_test.go:generic-api-key:11
+pkg/secrets/secrets_test.go:generic-api-key:25
+pkg/secrets/secrets_test.go:generic-api-key:36
+pkg/secrets/secrets_test.go:generic-api-key:192

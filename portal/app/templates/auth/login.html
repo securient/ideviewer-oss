@@ -165,16 +165,16 @@
             </a>
         </div>
 
-        <div class="divider">or sign in with email</div>
+        <div class="divider">or sign in with username</div>
         {% endif %}
 
         <form method="POST" class="auth-form">
             {{ form.hidden_tag() }}
-            
+
             <div class="form-group">
-                <label class="form-label" for="email">Email</label>
-                {{ form.email(class="form-input", placeholder="you@example.com") }}
-                {% for error in form.email.errors %}
+                <label class="form-label" for="username">Username</label>
+                {{ form.username(class="form-input", placeholder="admin") }}
+                {% for error in form.username.errors %}
                     <p class="field-error">{{ error }}</p>
                 {% endfor %}
             </div>
@@ -196,7 +196,7 @@
         </form>
 
         <div class="auth-footer">
-            Don't have an account? <a href="{{ url_for('auth.register') }}">Create one</a>
+            Default credentials: <strong>admin</strong> / <strong>ideviewer</strong>
         </div>
     </div>
 </div>
