@@ -1,0 +1,31 @@
+title: IDEViewer Documentation
+description: Security scanner for developer workstations
+url: "https://securient.github.io"
+baseurl: "/ideviewer-oss"
+
+remote_theme: just-the-docs/just-the-docs@v0.10.0
+
+color_scheme: dark
+
+# Navigation
+nav_sort: case_insensitive
+nav_enabled: true
+
+# Search
+search_enabled: true
+search.heading_level: 3
+
+# Footer
+gh_edit_link: true
+gh_edit_link_text: "Edit this page on GitHub"
+gh_edit_repository: "https://github.com/securient/ideviewer-oss"
+gh_edit_branch: "main"
+gh_edit_source: docs
+gh_edit_view_mode: "edit"
+
+# Exclude non-doc files
+exclude:
+  - generate_pdf.py
+  - IDEViewer-Whitepaper.pdf
+  - Gemfile
+  - Gemfile.lock
