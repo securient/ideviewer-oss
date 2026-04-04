@@ -27,8 +27,9 @@ IDEViewer is a cross-platform security scanner for developer workstations. It de
 ## Quick Start
 
 ```bash
-# Install (macOS example — see Installation for all platforms)
-brew install securient/tap/ideviewer   # or download from GitHub Releases
+# Install — download from GitHub Releases (see Installation for all platforms)
+# macOS: IDEViewer-*-arm64.pkg | Linux: ideviewer_*_amd64.deb | Windows: IDEViewer-Setup-*.exe
+sudo installer -pkg IDEViewer-*-arm64.pkg -target /   # macOS example
 
 # Scan your machine
 ideviewer scan          # IDEs and extensions
