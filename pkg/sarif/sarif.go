@@ -18,7 +18,7 @@ const (
 	sarifSchema        = "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json"
 	sarifVersion       = "2.1.0"
 	toolName           = "ideviewer"
-	toolInformationURI = "https://github.com/securient/ideviewer"
+	toolInformationURI = "https://github.com/securient/ideviewer-oss"
 )
 
 // severityToSARIFLevel maps IDEViewer severity to SARIF result level.

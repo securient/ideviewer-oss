@@ -190,7 +190,7 @@ def register_host():
             limit = current_app.config.get('FREE_TIER_HOST_LIMIT', 5)
             if key.max_hosts <= limit:
                 return jsonify({
-                    'error': f'Free tier limited to {limit} hosts. Upgrade to IDEViewer Enterprise for unlimited hosts.'
+                    'error': f'Host limit reached ({limit}). Increase FREE_TIER_HOST_LIMIT in your portal configuration.'
                 }), 403
             return jsonify({
                 'error': f'Host limit reached ({key.max_hosts}). Contact your administrator to increase the limit.'
@@ -292,7 +292,7 @@ def submit_report():
             limit = current_app.config.get('FREE_TIER_HOST_LIMIT', 5)
             if key.max_hosts <= limit:
                 return jsonify({
-                    'error': f'Free tier limited to {limit} hosts. Upgrade to IDEViewer Enterprise for unlimited hosts.'
+                    'error': f'Host limit reached ({limit}). Increase FREE_TIER_HOST_LIMIT in your portal configuration.'
                 }), 403
             return jsonify({
                 'error': f'Host limit reached ({key.max_hosts}). Contact your administrator to increase the limit.'
