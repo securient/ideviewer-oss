@@ -39,7 +39,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: ideviewer-portal
+    container_name: ideviewer-oss-portal
     restart: unless-stopped
     depends_on:
       db:

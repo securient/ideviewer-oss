@@ -135,7 +135,7 @@ To reduce costs:
 # Scale manually
 aws ecs update-service \
   --cluster ideviewer-cluster \
-  --service ideviewer-portal \
+  --service ideviewer-oss-portal \
   --desired-count 3
 ```
 

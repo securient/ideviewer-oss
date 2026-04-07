@@ -2,7 +2,7 @@
 
 A cross-platform security tool that scans developer workstations for supply chain threats — risky IDE extensions, vulnerable dependencies, plaintext secrets, insecure AI tool configurations, and MCP server permissions. Built as a single Go binary with an optional self-hosted portal for team-wide visibility.
 
-**[Documentation](https://securient.github.io/ideviewer-oss)** | **[Releases](https://github.com/securient/ideviewer-oss/releases)** | **[Portal Container](https://github.com/securient/ideviewer-oss/pkgs/container/ideviewer-oss-portal)**
+**[Documentation](https://securient.github.io/ideviewer-oss)** | **[Releases](https://github.com/securient/ideviewer-oss/releases)** | **[Portal Container](https://github.com/users/securient/packages/container/package/ideviewer-oss-portal)**
 
 ## Why IDEViewer?
 

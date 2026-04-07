@@ -143,7 +143,7 @@ After code changes:
 ```bash
 aws ecs update-service \
   --cluster ideviewer-cluster \
-  --service ideviewer-portal \
+  --service ideviewer-oss-portal \
   --desired-count 3
 ```
 

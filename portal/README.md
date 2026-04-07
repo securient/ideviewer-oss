@@ -57,7 +57,7 @@ docker run -p 8080:8080 \
   -e SECRET_KEY="$(openssl rand -hex 32)" \
   -e DATABASE_URL="postgresql://user:pass@db:5432/ideviewer" \
   -e FLASK_CONFIG=production \
-  ideviewer-portal
+  ideviewer-oss-portal
 ```
 
 ### Google OAuth (Optional)
@@ -95,12 +95,12 @@ flask db upgrade
 
 ```bash
 # Build and push the container
-docker build -t gcr.io/PROJECT_ID/ideviewer-portal .
-docker push gcr.io/PROJECT_ID/ideviewer-portal
+docker build -t gcr.io/PROJECT_ID/ideviewer-oss-portal .
+docker push gcr.io/PROJECT_ID/ideviewer-oss-portal
 
 # Deploy to Cloud Run
-gcloud run deploy ideviewer-portal \
-  --image gcr.io/PROJECT_ID/ideviewer-portal \
+gcloud run deploy ideviewer-oss-portal \
+  --image gcr.io/PROJECT_ID/ideviewer-oss-portal \
   --platform managed \
   --region us-central1 \
   --allow-unauthenticated \
@@ -122,19 +122,19 @@ aws ecr get-login-password --region us-east-1 | \
   docker login --username AWS --password-stdin ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com
 
 # Create repository (first time only)
-aws ecr create-repository --repository-name ideviewer-portal
+aws ecr create-repository --repository-name ideviewer-oss-portal
 
 # Build, tag, and push
-docker build -t ideviewer-portal .
-docker tag ideviewer-portal:latest ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/ideviewer-portal:latest
-docker push ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/ideviewer-portal:latest
+docker build -t ideviewer-oss-portal .
+docker tag ideviewer-oss-portal:latest ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/ideviewer-oss-portal:latest
+docker push ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/ideviewer-oss-portal:latest
 ```
 
 **2. Create an ECS task definition** (`task-definition.json`):
 
 ```json
 {
-  "family": "ideviewer-portal",
+  "family": "ideviewer-oss-portal",
   "networkMode": "awsvpc",
   "requiresCompatibilities": ["FARGATE"],
   "cpu": "256",
@@ -143,7 +143,7 @@ docker push ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/ideviewer-portal:latest
   "containerDefinitions": [
     {
       "name": "portal",
-      "image": "ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/ideviewer-portal:latest",
+      "image": "ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/ideviewer-oss-portal:latest",
       "portMappings": [{ "containerPort": 8080 }],
       "environment": [
         { "name": "FLASK_CONFIG", "value": "production" },
@@ -156,7 +156,7 @@ docker push ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/ideviewer-portal:latest
       "logConfiguration": {
         "logDriver": "awslogs",
         "options": {
-          "awslogs-group": "/ecs/ideviewer-portal",
+          "awslogs-group": "/ecs/ideviewer-oss-portal",
           "awslogs-region": "us-east-1",
           "awslogs-stream-prefix": "ecs"
         }
@@ -185,8 +185,8 @@ aws ecs register-task-definition --cli-input-json file://task-definition.json
 # Create the service (assumes you have a cluster and VPC configured)
 aws ecs create-service \
   --cluster your-cluster \
-  --service-name ideviewer-portal \
-  --task-definition ideviewer-portal \
+  --service-name ideviewer-oss-portal \
+  --task-definition ideviewer-oss-portal \
   --desired-count 1 \
   --launch-type FARGATE \
   --network-configuration "awsvpcConfiguration={subnets=[subnet-xxx],securityGroups=[sg-xxx],assignPublicIp=ENABLED}"
@@ -197,15 +197,15 @@ You'll need an RDS PostgreSQL instance in the same VPC, and optionally an ALB in
 ### Self-Hosted (Docker)
 
 ```bash
-docker build -t ideviewer-portal .
+docker build -t ideviewer-oss-portal .
 
-docker run -d --name ideviewer-portal \
+docker run -d --name ideviewer-oss-portal \
   -p 8080:8080 \
   -e SECRET_KEY="$(openssl rand -hex 32)" \
   -e DATABASE_URL="postgresql://user:pass@host:5432/ideviewer" \
   -e FLASK_CONFIG=production \
   -e PORTAL_URL="https://your-domain.com" \
-  ideviewer-portal
+  ideviewer-oss-portal
 ```
 
 ## API Endpoints
