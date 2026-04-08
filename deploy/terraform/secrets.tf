@@ -27,15 +27,20 @@ resource "aws_secretsmanager_secret" "app_config" {
   }
 }
 
-resource "aws_secretsmanager_secret_version" "app_config" {
-  secret_id = aws_secretsmanager_secret.app_config.id
-
-  secret_string = jsonencode({
+locals {
+  # Compute secret payload — any change here triggers a new version
+  app_secrets = jsonencode({
     SECRET_KEY           = base64encode(random_password.secret_key.result)
     DATABASE_URL         = "postgresql://${local.rds_username}:${random_password.rds_master_password.result}@${aws_db_instance.main.endpoint}/ideviewer"
     GOOGLE_CLIENT_ID     = var.google_client_id
     GOOGLE_CLIENT_SECRET = var.google_client_secret
+    DISABLE_LOCAL_LOGIN  = var.disable_local_login
   })
+}
+
+resource "aws_secretsmanager_secret_version" "app_config" {
+  secret_id     = aws_secretsmanager_secret.app_config.id
+  secret_string = local.app_secrets
 
   depends_on = [aws_db_instance.main]
 }
