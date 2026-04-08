@@ -729,10 +729,14 @@ def create_key():
     form = CustomerKeyForm()
     
     if form.validate_on_submit():
+        host_limit = current_app.config.get('FREE_TIER_HOST_LIMIT', 5)
         try:
-            max_hosts = min(int(form.max_hosts.data), current_app.config.get('FREE_TIER_HOST_LIMIT', 5))
+            max_hosts = int(form.max_hosts.data)
+            # Cap at global limit unless limit is 0 (unlimited)
+            if host_limit > 0:
+                max_hosts = min(max_hosts, host_limit)
         except (ValueError, TypeError):
-            max_hosts = current_app.config.get('FREE_TIER_HOST_LIMIT', 5)
+            max_hosts = host_limit if host_limit > 0 else 9999
         
         key = CustomerKey(
             key=CustomerKey.generate_key(),

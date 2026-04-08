@@ -178,24 +178,19 @@ def register_host():
     platform = data.get('platform', 'Unknown')
     ip_address = data.get('ip_address') or request.remote_addr
     
-    # Check host limit
-    if key.host_count >= key.max_hosts:
+    # Check host limit (0 = unlimited)
+    if key.max_hosts > 0 and key.host_count >= key.max_hosts:
         # Check if this host already exists
         existing = Host.query.filter_by(
             hostname=hostname,
             customer_key_id=key.id
         ).first()
-        
+
         if not existing:
-            limit = current_app.config.get('FREE_TIER_HOST_LIMIT', 5)
-            if key.max_hosts <= limit:
-                return jsonify({
-                    'error': f'Host limit reached ({limit}). Increase FREE_TIER_HOST_LIMIT in your portal configuration.'
-                }), 403
             return jsonify({
-                'error': f'Host limit reached ({key.max_hosts}). Contact your administrator to increase the limit.'
+                'error': f'Host limit reached ({key.max_hosts}). Increase FREE_TIER_HOST_LIMIT in your portal configuration or set to 0 for unlimited.'
             }), 403
-    
+
     # Find or create host
     host = Host.query.filter_by(
         hostname=hostname,
@@ -287,15 +282,10 @@ def submit_report():
     ).first()
     
     if not host:
-        # Check host limit
-        if key.host_count >= key.max_hosts:
-            limit = current_app.config.get('FREE_TIER_HOST_LIMIT', 5)
-            if key.max_hosts <= limit:
-                return jsonify({
-                    'error': f'Host limit reached ({limit}). Increase FREE_TIER_HOST_LIMIT in your portal configuration.'
-                }), 403
+        # Check host limit (0 = unlimited)
+        if key.max_hosts > 0 and key.host_count >= key.max_hosts:
             return jsonify({
-                'error': f'Host limit reached ({key.max_hosts}). Contact your administrator to increase the limit.'
+                'error': f'Host limit reached ({key.max_hosts}). Increase FREE_TIER_HOST_LIMIT in your portal configuration or set to 0 for unlimited.'
             }), 403
         
         host = Host(
