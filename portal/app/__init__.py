@@ -92,11 +92,21 @@ def create_app(config_name=None):
     @app.context_processor
     def inject_config():
         """Inject configuration into templates."""
+        google_oauth = bool(
+            app.config.get('GOOGLE_CLIENT_ID') and
+            app.config.get('GOOGLE_CLIENT_SECRET')
+        )
+        # Read DISABLE_LOCAL_LOGIN from env at runtime (not cached in config class)
+        disable_mode = os.environ.get('DISABLE_LOCAL_LOGIN', app.config.get('DISABLE_LOCAL_LOGIN', 'false')).lower()
+        local_login = True
+        if disable_mode == 'true':
+            local_login = False
+        elif disable_mode == 'auto' and google_oauth:
+            local_login = False
+
         class TemplateConfig:
-            GOOGLE_OAUTH_ENABLED = bool(
-                app.config.get('GOOGLE_CLIENT_ID') and 
-                app.config.get('GOOGLE_CLIENT_SECRET')
-            )
+            GOOGLE_OAUTH_ENABLED = google_oauth
+            LOCAL_LOGIN_ENABLED = local_login
             PORTAL_NAME = app.config.get('PORTAL_NAME', 'IDE Viewer')
         
         return {'config': TemplateConfig}

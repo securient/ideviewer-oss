@@ -165,9 +165,12 @@
             </a>
         </div>
 
+        {% if config.LOCAL_LOGIN_ENABLED %}
         <div class="divider">or sign in with username</div>
         {% endif %}
+        {% endif %}
 
+        {% if config.LOCAL_LOGIN_ENABLED %}
         <form method="POST" class="auth-form">
             {{ form.hidden_tag() }}
 
@@ -198,6 +201,11 @@
         <div class="auth-footer">
             Default credentials: <strong>admin</strong> / <strong>ideviewer</strong>
         </div>
+        {% elif not config.GOOGLE_OAUTH_ENABLED %}
+        <div class="auth-footer" style="color: var(--danger);">
+            Local login is disabled but Google OAuth is not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to enable login.
+        </div>
+        {% endif %}
     </div>
 </div>
 {% endblock %}

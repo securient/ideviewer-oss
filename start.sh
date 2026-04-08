@@ -71,10 +71,20 @@ SECRET_KEY=$SECRET_KEY
 
 # Google OAuth (optional)
 # 1. Go to https://console.cloud.google.com/apis/credentials
-# 2. Create OAuth 2.0 Client ID (Web application)
-# 3. Set redirect URI to: http://localhost:5000/login/google/callback
+# 2. Create a new project (or select existing)
+# 3. Go to APIs & Services > Credentials
+# 4. Create Credentials > OAuth 2.0 Client ID > Web application
+# 5. Add authorized redirect URI: http://localhost:5000/login/google/callback
+#    (for production: https://your-domain.com/login/google/callback)
+# 6. Copy Client ID and Client Secret below
 # GOOGLE_CLIENT_ID=
 # GOOGLE_CLIENT_SECRET=
+
+# Local login control
+# 'false' = always allow username/password login (default)
+# 'auto'  = disable local login when Google OAuth is configured
+# 'true'  = always disable local login (requires Google OAuth)
+# DISABLE_LOCAL_LOGIN=false
 
 # Portal settings
 # FREE_TIER_HOST_LIMIT=5

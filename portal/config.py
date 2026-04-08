@@ -34,11 +34,12 @@ class Config:
     # Get these from: https://console.cloud.google.com/apis/credentials
     GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID')
     GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET')
-    
-    @property
-    def GOOGLE_OAUTH_ENABLED(self):
-        """Check if Google OAuth is configured."""
-        return bool(self.GOOGLE_CLIENT_ID and self.GOOGLE_CLIENT_SECRET)
+
+    # Local login control
+    # Set to 'true' to disable username/password login entirely
+    # Set to 'auto' to disable local login automatically when Google OAuth is configured
+    # Set to 'false' (default) to always allow local login
+    DISABLE_LOCAL_LOGIN = os.environ.get('DISABLE_LOCAL_LOGIN', 'false').lower()
 
 
 class DevelopmentConfig(Config):

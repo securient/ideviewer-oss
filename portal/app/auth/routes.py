@@ -20,9 +20,27 @@ def login():
     if current_user.is_authenticated:
         return redirect(url_for('main.dashboard'))
 
+    # Compute local login status
+    google_oauth = bool(current_app.config.get('GOOGLE_CLIENT_ID') and current_app.config.get('GOOGLE_CLIENT_SECRET'))
+    disable_mode = current_app.config.get('DISABLE_LOCAL_LOGIN', 'false')
+    local_login_enabled = True
+    if disable_mode == 'true':
+        local_login_enabled = False
+    elif disable_mode == 'auto' and google_oauth:
+        local_login_enabled = False
+
+    # If local login is disabled and Google OAuth is available, redirect straight to Google
+    if not local_login_enabled and google_oauth:
+        return redirect(url_for('auth.google_login'))
+
     form = LoginForm()
 
     if form.validate_on_submit():
+        # Block local login if disabled
+        if not local_login_enabled:
+            flash('Local login is disabled. Please use Google login.', 'error')
+            return redirect(url_for('auth.login'))
+
         identifier = form.username.data.strip()
         # Allow login by username or email
         user = User.query.filter_by(username=identifier).first()
