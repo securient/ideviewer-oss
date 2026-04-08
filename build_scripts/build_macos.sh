@@ -49,9 +49,11 @@ PKG_ROOT="$PKG_DIR/root"
 mkdir -p "$PKG_ROOT/usr/local/bin"
 mkdir -p "$PKG_ROOT/Library/LaunchAgents"
 
-# Copy executable
+# Copy and ad-hoc sign executable (provides stable identifier for JAMF PPPC profiles)
 cp "$DIST_DIR/ideviewer" "$PKG_ROOT/usr/local/bin/"
 chmod +x "$PKG_ROOT/usr/local/bin/ideviewer"
+codesign --sign - --force --identifier com.ideviewer.daemon "$PKG_ROOT/usr/local/bin/ideviewer"
+echo "Binary signed with identifier: com.ideviewer.daemon"
 
 # Copy uninstaller script
 cp "$SCRIPT_DIR/uninstall_macos.sh" "$PKG_ROOT/usr/local/bin/ideviewer-uninstall"
