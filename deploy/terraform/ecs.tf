@@ -122,6 +122,7 @@ resource "aws_ecs_task_definition" "portal" {
         { name = "PORTAL_URL", value = local.portal_url },
         { name = "FREE_TIER_HOST_LIMIT", value = tostring(var.free_tier_host_limit) },
         { name = "DISABLE_LOCAL_LOGIN", value = var.disable_local_login },
+        { name = "FORCE_HTTPS", value = var.custom_domain != "" ? "true" : "false" },
       ]
 
       secrets = [

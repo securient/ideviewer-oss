@@ -48,6 +48,11 @@ def create_app(config_name=None):
     instance_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'instance')
     os.makedirs(instance_path, exist_ok=True)
     
+    # Trust proxy headers when behind ALB/nginx (required for CSRF, OAuth redirects)
+    if config_name == 'production':
+        from werkzeug.middleware.proxy_fix import ProxyFix
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+
     # Initialize extensions
     db.init_app(app)
     migrate.init_app(app, db)
