@@ -103,14 +103,8 @@ cmd_build() {
     echo -e "${CYAN}Logging into ECR...${NC}"
     aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$ECR_URL"
 
-    echo -e "${CYAN}Building Docker image...${NC}"
-    docker build -t ideviewer-oss-portal "$PORTAL_DIR"
-
-    echo -e "${CYAN}Tagging and pushing to ECR...${NC}"
-    docker tag ideviewer-oss-portal:latest "$ECR_URL:latest"
-    docker tag ideviewer-oss-portal:latest "$ECR_URL:$(date +%Y%m%d-%H%M%S)"
-    docker push "$ECR_URL:latest"
-    docker push "$ECR_URL:$(date +%Y%m%d-%H%M%S)"
+    echo -e "${CYAN}Building Docker image (linux/amd64)...${NC}"
+    docker buildx build --platform linux/amd64 -t "$ECR_URL:latest" -t "$ECR_URL:$(date +%Y%m%d-%H%M%S)" --push "$PORTAL_DIR"
 
     echo -e "${GREEN}Image pushed to ECR${NC}"
 }
