@@ -14,9 +14,30 @@ func HomeDir() string {
 }
 
 // ExpandPath expands ~ and environment variables in a path.
+// Handles both Unix ($VAR) and Windows (%VAR%) syntax.
 func ExpandPath(p string) string {
 	if strings.HasPrefix(p, "~/") || p == "~" {
 		p = filepath.Join(HomeDir(), p[1:])
+	}
+	if runtime.GOOS == "windows" && strings.Contains(p, "%") {
+		for {
+			start := strings.Index(p, "%")
+			if start == -1 {
+				break
+			}
+			end := strings.Index(p[start+1:], "%")
+			if end == -1 {
+				break
+			}
+			end += start + 1
+			varName := p[start+1 : end]
+			varValue := os.Getenv(varName)
+			if varValue != "" {
+				p = p[:start] + varValue + p[end+1:]
+			} else {
+				break
+			}
+		}
 	}
 	return os.ExpandEnv(p)
 }
