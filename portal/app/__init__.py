@@ -87,10 +87,14 @@ def create_app(config_name=None):
     # Exempt API blueprint from CSRF (uses API keys instead)
     csrf.exempt(api_bp)
     
-    # Database initialization — skip during migration commands (flask db migrate/upgrade)
-    if not os.environ.get('SKIP_DB_INIT'):
+    # Database initialization — skip during migration commands and when entrypoint already ran migrations
+    if not os.environ.get('SKIP_DB_INIT') and not os.environ.get('MIGRATIONS_DONE'):
         with app.app_context():
             _init_database(db)
+
+    # Default user creation — runs once even after entrypoint migrations (only first worker)
+    if not os.environ.get('SKIP_DB_INIT'):
+        with app.app_context():
             _create_default_user(db)
     
     # Context processor to make config available in templates

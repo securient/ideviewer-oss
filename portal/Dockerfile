@@ -18,8 +18,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     FLASK_CONFIG=production \
     PORT=8080
 
-# Create non-root user for security
-RUN groupadd -r ideviewer && useradd -r -g ideviewer ideviewer
+# Create non-root user for security (with home dir for gunicorn control socket)
+RUN groupadd -r ideviewer && useradd -r -g ideviewer -m -d /home/ideviewer ideviewer
 
 # Set working directory
 WORKDIR /app
