@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 
 	"github.com/securient/ideviewer-oss/internal/config"
@@ -209,7 +210,7 @@ func startDaemonService() bool {
 	logDir := platform.LogDir()
 	_ = os.MkdirAll(logDir, 0755)
 
-	logFile, err := os.OpenFile(logDir+"/daemon.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	logFile, err := os.OpenFile(filepath.Join(logDir, "daemon.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		logFile = nil
 	}

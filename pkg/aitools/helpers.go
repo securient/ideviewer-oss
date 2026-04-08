@@ -4,6 +4,7 @@ import (
 	"context"
 	"os/exec"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -105,11 +106,33 @@ func scanForSecrets(data []byte, source string, tool *AITool) {
 
 // isProcessRunning checks if any of the given process names are running.
 func isProcessRunning(names ...string) bool {
+	if runtime.GOOS == "windows" {
+		return isProcessRunningWindows(names...)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	for _, name := range names {
 		cmd := exec.CommandContext(ctx, "pgrep", "-x", name)
 		if err := cmd.Run(); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// isProcessRunningWindows uses tasklist to check for running processes on Windows.
+func isProcessRunningWindows(names ...string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "tasklist", "/FO", "CSV", "/NH").Output()
+	if err != nil {
+		return false
+	}
+	output := strings.ToLower(string(out))
+	for _, name := range names {
+		// tasklist shows "process.exe" — check with and without .exe
+		lower := strings.ToLower(name)
+		if strings.Contains(output, "\""+lower+"\"") || strings.Contains(output, "\""+lower+".exe\"") {
 			return true
 		}
 	}

@@ -83,19 +83,77 @@ func scanOpenPortsUnix() []OpenPort {
 }
 
 func scanOpenPortsWindows() []OpenPort {
-	// On Windows, use netstat as fallback
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	out, err := exec.CommandContext(ctx, "netstat", "-ano").Output()
+	// Get listening ports with PIDs
+	netstatOut, err := exec.CommandContext(ctx, "netstat", "-ano").Output()
 	if err != nil {
 		return nil
 	}
 
-	// This is a simplified implementation; Windows port scanning
-	// would need tasklist correlation for process names
-	_ = out
-	return nil
+	// Get process list to map PID -> process name
+	tasklistOut, _ := exec.CommandContext(ctx, "tasklist", "/FO", "CSV", "/NH").Output()
+	pidToName := make(map[string]string)
+	for _, line := range strings.Split(string(tasklistOut), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// Format: "process.exe","PID","Session Name","Session#","Mem Usage"
+		fields := strings.Split(line, ",")
+		if len(fields) >= 2 {
+			name := strings.Trim(fields[0], "\"")
+			pid := strings.Trim(fields[1], "\"")
+			pidToName[pid] = name
+		}
+	}
+
+	var ports []OpenPort
+	for _, line := range strings.Split(string(netstatOut), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.Contains(line, "LISTENING") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 5 {
+			continue
+		}
+		// Fields: Proto, Local Address, Foreign Address, State, PID
+		localAddr := fields[1]
+		pid := fields[4]
+
+		// Extract port from address (e.g., "0.0.0.0:3000" or "[::]:3000")
+		lastColon := strings.LastIndex(localAddr, ":")
+		if lastColon == -1 {
+			continue
+		}
+		portStr := localAddr[lastColon+1:]
+		port, err := strconv.Atoi(portStr)
+		if err != nil {
+			continue
+		}
+
+		processName := pidToName[pid]
+		if processName == "" {
+			continue
+		}
+
+		// Filter to AI-related processes
+		nameLower := strings.ToLower(strings.TrimSuffix(processName, ".exe"))
+		if !aiProcessNames[nameLower] {
+			continue
+		}
+
+		proto := strings.ToLower(fields[0])
+		ports = append(ports, OpenPort{
+			Port:    port,
+			Process: processName,
+			Proto:   proto,
+		})
+	}
+
+	return deduplicatePorts(ports)
 }
 
 func deduplicatePorts(ports []OpenPort) []OpenPort {
