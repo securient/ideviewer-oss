@@ -472,7 +472,7 @@ jobs:
             artifacts/**/*.exe
             artifacts/**/*.deb
             artifacts/**/*.pkg
-          draft: true
+          draft: false
           generate_release_notes: true
           body: |
             ## Installation
