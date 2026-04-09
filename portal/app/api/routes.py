@@ -442,8 +442,8 @@ def submit_report():
         # Remove packages no longer present in this scan
         all_host_packages = PackageInfo.query.filter_by(host_id=host.id).all()
         for existing_pkg in all_host_packages:
-            key = f"{existing_pkg.package_manager}:{existing_pkg.name}:{existing_pkg.version}:{existing_pkg.source_type}"
-            if key not in current_pkg_keys:
+            existing_key = f"{existing_pkg.package_manager}:{existing_pkg.name}:{existing_pkg.version}:{existing_pkg.source_type}"
+            if existing_key not in current_pkg_keys:
                 db.session.delete(existing_pkg)
 
     # Process AI tools data — upsert to preserve first_seen_at
