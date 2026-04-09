@@ -859,8 +859,8 @@ def receive_realtime_event():
 
         dangerous_count = 0
         for ide in scan_data.get('ides', []):
-            for ext in ide.get('extensions', []):
-                permissions = ext.get('permissions', [])
+            for ext in (ide.get('extensions') or []):
+                permissions = (ext.get('permissions') or [])
                 risk = calculate_risk_level(permissions)
                 if risk in ['high', 'critical']:
                     dangerous_count += 1
