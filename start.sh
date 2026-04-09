@@ -93,12 +93,14 @@ EOF
         echo -e "${GREEN}Configuration saved to portal/.env${NC}"
     fi
 
-    # Step 5: Load .env
+    # Step 5: Load .env (temporarily disable set -e since .env may have comments/empty lines)
     export FLASK_CONFIG=development
     export FLASK_APP=run.py
+    set +e
     set -a
     source "$ENV_FILE" 2>/dev/null
     set +a
+    set -e
 
     # Step 6: Run migrations
     echo -e "${CYAN}Running database migrations...${NC}"
