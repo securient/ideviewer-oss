@@ -4,6 +4,9 @@
 build/pkg/IDEViewer-component.pkg
 build/pkg/root/usr/local/bin/ideviewer
 
+# Demo (local only — not for public repo)
+/demo/
+
 # Terraform
 *.tfstate
 *.tfstate.backup
