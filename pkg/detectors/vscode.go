@@ -1,6 +1,7 @@
 package detectors
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -234,6 +235,9 @@ func parseVSCodeExtension(dir string, ideType scanner.IDEType) (scanner.Extensio
 	if err != nil {
 		return scanner.Extension{}, false
 	}
+	// Compute content hash for change detection
+	contentHash := fmt.Sprintf("%x", sha256.Sum256(data))
+
 	var pkg vscodePkgJSON
 	if err := json.Unmarshal(data, &pkg); err != nil {
 		return scanner.Extension{}, false
@@ -304,6 +308,7 @@ func parseVSCodeExtension(dir string, ideType scanner.IDEType) (scanner.Extensio
 		MarketplaceURL:   marketplaceURL,
 		ActivationEvents: pkg.ActivationEvents,
 		Capabilities:     pkg.Capabilities,
+		ContentHash:      contentHash,
 	}, true
 }
 

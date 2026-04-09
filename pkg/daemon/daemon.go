@@ -31,6 +31,7 @@ type Daemon struct {
 	scanInterval time.Duration
 	shutdown     chan struct{}
 	lastResult   *scanner.ScanResult
+	hashes       *scanHashes
 }
 
 // New creates a Daemon from the given config. The scanner must be provided
@@ -54,6 +55,7 @@ func New(cfg *config.Config, ideScanner *scanner.Scanner) (*Daemon, error) {
 		aitools:      aitools.NewScanner(),
 		scanInterval: time.Duration(interval) * time.Minute,
 		shutdown:     make(chan struct{}),
+		hashes:       &scanHashes{},
 	}, nil
 }
 
@@ -227,6 +229,24 @@ func (d *Daemon) runScan() {
 	if aiRes != nil && len(aiRes.Tools) > 0 {
 		log.Printf("Found %d AI tool(s)", len(aiRes.Tools))
 	}
+
+	// Check what changed since last scan
+	ideHash := computeHash(ideRes)
+	secHash := computeHash(secRes)
+	depHash := computeHash(depRes)
+	aiHash := computeHash(aiRes)
+
+	ideChanged := d.hashes.hasChanged("ide", ideHash)
+	secChanged := d.hashes.hasChanged("secrets", secHash)
+	depChanged := d.hashes.hasChanged("deps", depHash)
+	aiChanged := d.hashes.hasChanged("aitools", aiHash)
+
+	if !ideChanged && !secChanged && !depChanged && !aiChanged {
+		log.Println("No changes detected since last scan, skipping portal report")
+		return
+	}
+
+	log.Printf("Changes detected — IDE:%v Secrets:%v Deps:%v AI:%v", ideChanged, secChanged, depChanged, aiChanged)
 
 	d.sendToPortal(ideRes, secRes, depRes, aiRes)
 }

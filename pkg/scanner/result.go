@@ -59,6 +59,7 @@ type Extension struct {
 	MarketplaceURL   string            `json:"marketplace_url,omitempty"`
 	ActivationEvents []string          `json:"activation_events"`
 	Capabilities     map[string]any    `json:"capabilities"`
+	ContentHash      string            `json:"content_hash,omitempty"` // SHA-256 of package.json for change detection
 }
 
 // MarshalLastUpdated returns ISO8601 string or nil for JSON.

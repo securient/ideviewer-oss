@@ -1,7 +1,9 @@
 package detectors
 
 import (
+	"crypto/sha256"
 	"encoding/xml"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -417,6 +419,9 @@ func parseJetBrainsPlugin(dir string) scanner.Extension {
 }
 
 func parsePluginXML(data []byte, dir, xmlPath string) (scanner.Extension, bool) {
+	// Compute content hash for change detection
+	contentHash := fmt.Sprintf("%x", sha256.Sum256(data))
+
 	var p pluginXML
 	if err := xml.Unmarshal(data, &p); err != nil {
 		return scanner.Extension{}, false
@@ -464,6 +469,7 @@ func parsePluginXML(data []byte, dir, xmlPath string) (scanner.Extension, bool) 
 		Dependencies: p.Depends,
 		Enabled:      true,
 		LastUpdated:  lastUpdated,
+		ContentHash:  contentHash,
 	}, true
 }
 

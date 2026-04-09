@@ -387,53 +387,110 @@ def submit_report():
             secret.is_resolved = True
             secret.resolved_at = datetime.utcnow()
     
-    # Process dependency data
+    # Process dependency data — upsert to preserve first_seen_at
     deps_data = scan_data.get('dependencies', {})
     packages_count = 0
-    
+
     if deps_data and deps_data.get('packages'):
-        # Clear old package info for this host to get fresh data
-        PackageInfo.query.filter_by(host_id=host.id).delete()
-        
+        # Build a set of current package keys for this scan
+        current_pkg_keys = set()
+
         for pkg in deps_data['packages']:
             source_type = pkg.get('source_type') or pkg.get('install_type', 'project')
-            package = PackageInfo(
+            name = pkg.get('name', 'unknown')
+            version = pkg.get('version', 'unknown')
+            manager = pkg.get('package_manager', 'unknown')
+
+            pkg_key = f"{manager}:{name}:{version}:{source_type}"
+            current_pkg_keys.add(pkg_key)
+
+            # Try to find existing package
+            existing = PackageInfo.query.filter_by(
                 host_id=host.id,
-                scan_report_id=report.id,
-                name=pkg.get('name', 'unknown'),
-                version=pkg.get('version', 'unknown'),
-                package_manager=pkg.get('package_manager', 'unknown'),
-                install_type=pkg.get('install_type', 'project'),
-                project_path=pkg.get('project_path'),
-                lifecycle_hooks=pkg.get('lifecycle_hooks'),
+                name=name,
+                version=version,
+                package_manager=manager,
                 source_type=source_type,
-                source_extension=pkg.get('source_extension'),
-            )
-            db.session.add(package)
+            ).first()
+
+            if existing:
+                # Update — preserve first_seen_at
+                existing.scan_report_id = report.id
+                existing.last_seen_at = datetime.utcnow()
+                existing.install_type = pkg.get('install_type', 'project')
+                existing.project_path = pkg.get('project_path')
+                existing.lifecycle_hooks = pkg.get('lifecycle_hooks')
+                existing.source_extension = pkg.get('source_extension')
+            else:
+                # Insert new
+                package = PackageInfo(
+                    host_id=host.id,
+                    scan_report_id=report.id,
+                    name=name,
+                    version=version,
+                    package_manager=manager,
+                    install_type=pkg.get('install_type', 'project'),
+                    project_path=pkg.get('project_path'),
+                    lifecycle_hooks=pkg.get('lifecycle_hooks'),
+                    source_type=source_type,
+                    source_extension=pkg.get('source_extension'),
+                )
+                db.session.add(package)
+
             packages_count += 1
 
-    # Process AI tools data
+        # Remove packages no longer present in this scan
+        all_host_packages = PackageInfo.query.filter_by(host_id=host.id).all()
+        for existing_pkg in all_host_packages:
+            key = f"{existing_pkg.package_manager}:{existing_pkg.name}:{existing_pkg.version}:{existing_pkg.source_type}"
+            if key not in current_pkg_keys:
+                db.session.delete(existing_pkg)
+
+    # Process AI tools data — upsert to preserve first_seen_at
     ai_data = scan_data.get('ai_tools', {})
     ai_tools_count = 0
 
     if ai_data and ai_data.get('ai_tools'):
-        # Clear old AI tool info for this host to get fresh data
-        AIToolInfo.query.filter_by(host_id=host.id).delete()
+        current_tool_names = set()
 
         for tool in ai_data['ai_tools']:
-            ai_tool = AIToolInfo(
+            tool_name = tool.get('name', 'Unknown')
+            current_tool_names.add(tool_name)
+
+            existing = AIToolInfo.query.filter_by(
                 host_id=host.id,
-                scan_report_id=report.id,
-                tool_name=tool.get('name', 'Unknown'),
-                version=tool.get('version'),
-                is_running=tool.get('is_running', False),
-                config_path=tool.get('config_path'),
-                mcp_servers=tool.get('components'),
-                open_ports=tool.get('open_ports'),
-                redacted_secrets=tool.get('secrets'),
-            )
-            db.session.add(ai_tool)
+                tool_name=tool_name,
+            ).first()
+
+            if existing:
+                existing.scan_report_id = report.id
+                existing.version = tool.get('version')
+                existing.is_running = tool.get('is_running', False)
+                existing.config_path = tool.get('config_path')
+                existing.mcp_servers = tool.get('components')
+                existing.open_ports = tool.get('open_ports')
+                existing.redacted_secrets = tool.get('secrets')
+                existing.last_seen_at = datetime.utcnow()
+            else:
+                ai_tool = AIToolInfo(
+                    host_id=host.id,
+                    scan_report_id=report.id,
+                    tool_name=tool_name,
+                    version=tool.get('version'),
+                    is_running=tool.get('is_running', False),
+                    config_path=tool.get('config_path'),
+                    mcp_servers=tool.get('components'),
+                    open_ports=tool.get('open_ports'),
+                    redacted_secrets=tool.get('secrets'),
+                )
+                db.session.add(ai_tool)
+
             ai_tools_count += 1
+
+        # Remove tools no longer detected
+        for existing_tool in AIToolInfo.query.filter_by(host_id=host.id).all():
+            if existing_tool.tool_name not in current_tool_names:
+                db.session.delete(existing_tool)
 
     # Update key last used
     key.last_used_at = datetime.utcnow()
@@ -875,25 +932,56 @@ def receive_realtime_event():
         )
         db.session.add(report)
 
-    # Process dependency data if included
+    # Process dependency data if included — upsert to preserve first_seen_at
     deps_data = data.get('dependencies', {})
     if deps_data and deps_data.get('packages'):
-        PackageInfo.query.filter_by(host_id=host.id).delete()
+        fallback_report_id = report.id if scan_data else (host.scan_reports.first().id if host.scan_reports.first() else 1)
+        current_pkg_keys = set()
+
         for pkg in deps_data['packages']:
             source_type = pkg.get('source_type') or pkg.get('install_type', 'project')
-            package = PackageInfo(
+            name = pkg.get('name', 'unknown')
+            version = pkg.get('version', 'unknown')
+            manager = pkg.get('package_manager', 'unknown')
+
+            pkg_key = f"{manager}:{name}:{version}:{source_type}"
+            current_pkg_keys.add(pkg_key)
+
+            existing = PackageInfo.query.filter_by(
                 host_id=host.id,
-                scan_report_id=report.id if scan_data else host.scan_reports.first().id if host.scan_reports.first() else 1,
-                name=pkg.get('name', 'unknown'),
-                version=pkg.get('version', 'unknown'),
-                package_manager=pkg.get('package_manager', 'unknown'),
-                install_type=pkg.get('install_type', 'project'),
-                project_path=pkg.get('project_path'),
-                lifecycle_hooks=pkg.get('lifecycle_hooks'),
+                name=name,
+                version=version,
+                package_manager=manager,
                 source_type=source_type,
-                source_extension=pkg.get('source_extension'),
-            )
-            db.session.add(package)
+            ).first()
+
+            if existing:
+                existing.scan_report_id = fallback_report_id
+                existing.last_seen_at = datetime.utcnow()
+                existing.install_type = pkg.get('install_type', 'project')
+                existing.project_path = pkg.get('project_path')
+                existing.lifecycle_hooks = pkg.get('lifecycle_hooks')
+                existing.source_extension = pkg.get('source_extension')
+            else:
+                package = PackageInfo(
+                    host_id=host.id,
+                    scan_report_id=fallback_report_id,
+                    name=name,
+                    version=version,
+                    package_manager=manager,
+                    install_type=pkg.get('install_type', 'project'),
+                    project_path=pkg.get('project_path'),
+                    lifecycle_hooks=pkg.get('lifecycle_hooks'),
+                    source_type=source_type,
+                    source_extension=pkg.get('source_extension'),
+                )
+                db.session.add(package)
+
+        # Remove packages no longer present
+        for existing_pkg in PackageInfo.query.filter_by(host_id=host.id).all():
+            pkg_key = f"{existing_pkg.package_manager}:{existing_pkg.name}:{existing_pkg.version}:{existing_pkg.source_type}"
+            if pkg_key not in current_pkg_keys:
+                db.session.delete(existing_pkg)
 
     key.last_used_at = datetime.utcnow()
     db.session.commit()
