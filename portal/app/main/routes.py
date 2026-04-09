@@ -82,18 +82,23 @@ def dashboard():
                     'count': secret_count
                 })
     
-    # Identify missing hosts (no heartbeat in 2x the expected interval, default 30 min)
+    # Identify missing hosts (no heartbeat in 30+ min)
+    # Grace period: skip missing host alerts for 5 minutes after portal restart
+    # (daemons need time to reconnect and send heartbeats)
+    from app import PORTAL_START_TIME
+    portal_uptime = (datetime.utcnow() - PORTAL_START_TIME).total_seconds()
     missing_hosts = []
-    missing_threshold = datetime.utcnow() - timedelta(minutes=30)
-    for host in hosts:
-        heartbeat_time = host.last_heartbeat_at or host.last_seen_at
-        if heartbeat_time and heartbeat_time < missing_threshold:
-            minutes_ago = int((datetime.utcnow() - heartbeat_time).total_seconds() / 60)
-            missing_hosts.append({
-                'host': host,
-                'last_contact': heartbeat_time,
-                'minutes_ago': minutes_ago,
-            })
+    if portal_uptime > 300:  # 5-minute grace period
+        missing_threshold = datetime.utcnow() - timedelta(minutes=30)
+        for host in hosts:
+            heartbeat_time = host.last_heartbeat_at or host.last_seen_at
+            if heartbeat_time and heartbeat_time < missing_threshold:
+                minutes_ago = int((datetime.utcnow() - heartbeat_time).total_seconds() / 60)
+                missing_hosts.append({
+                    'host': host,
+                    'last_contact': heartbeat_time,
+                    'minutes_ago': minutes_ago,
+                })
     
     # Get unacknowledged tamper alerts
     tamper_alerts = []

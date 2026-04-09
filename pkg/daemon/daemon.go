@@ -92,6 +92,9 @@ func (d *Daemon) Start(runOnce bool) error {
 		}
 	}
 
+	// Send immediate heartbeat so the portal knows we're alive
+	d.sendHeartbeat()
+
 	// Run initial scan.
 	d.runScan()
 

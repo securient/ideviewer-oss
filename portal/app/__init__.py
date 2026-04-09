@@ -3,9 +3,13 @@ IDE Viewer Portal - Flask Application Factory.
 """
 
 import os
+from datetime import datetime
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager
+
+# Track when the portal started — used for missing host grace period
+PORTAL_START_TIME = datetime.utcnow()
 from flask_wtf.csrf import CSRFProtect
 from flask_cors import CORS
 from flask_migrate import Migrate
