@@ -41,6 +41,7 @@ resource "aws_db_instance" "main" {
   skip_final_snapshot       = var.rds_skip_final_snapshot
   final_snapshot_identifier = var.rds_skip_final_snapshot ? null : "${local.name_prefix}-final-snapshot"
 
+  apply_immediately   = true
   deletion_protection = false
 
   tags = {
