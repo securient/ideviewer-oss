@@ -121,6 +121,7 @@ def create_app(config_name=None):
             GOOGLE_OAUTH_ENABLED = google_oauth
             LOCAL_LOGIN_ENABLED = local_login
             PORTAL_NAME = app.config.get('PORTAL_NAME', 'IDE Viewer')
+            FREE_TIER_HOST_LIMIT = app.config.get('FREE_TIER_HOST_LIMIT', 5)
         
         return {'config': TemplateConfig}
     

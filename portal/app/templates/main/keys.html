@@ -113,10 +113,9 @@
 
                 <div class="form-group">
                     <label class="form-label" for="max_hosts">Max Hosts</label>
-                    {{ form.max_hosts(class="form-input", value="5", readonly=true, style="opacity: 0.6; cursor: not-allowed;") }}
+                    {{ form.max_hosts(class="form-input", value=config.FREE_TIER_HOST_LIMIT|default(5, true)) }}
                     <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">
-                        Free tier is limited to 5 hosts per key.
-                        <a href="https://securient.io" target="_blank" style="color: var(--accent-primary);">Upgrade to Enterprise</a> for unlimited hosts.
+                        Maximum hosts per key. Set FREE_TIER_HOST_LIMIT=0 in portal configuration for unlimited.
                     </p>
                 </div>
 
@@ -139,54 +138,39 @@
                 <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem;">
                     <i class="fab fa-apple"></i> macOS
                 </h3>
-                <div class="code-block">
-# Install the package
+                <pre style="background: var(--bg-tertiary); padding: 1rem; border-radius: var(--radius-sm); font-size: 0.8125rem; overflow-x: auto; white-space: pre; line-height: 1.6;"><code># 1. Install the package
 sudo installer -pkg IDEViewer.pkg -target /
 
-# Register with the portal
+# 2. Register with the portal
 ideviewer register \
   --customer-key YOUR_KEY_HERE \
-  --portal-url {{ request.host_url.rstrip('/') }}
-
-# Start the daemon
-ideviewer daemon --foreground
-                </div>
+  --portal-url {{ request.host_url.rstrip('/') }}</code></pre>
             </div>
 
             <div>
                 <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem;">
                     <i class="fab fa-windows"></i> Windows
                 </h3>
-                <div class="code-block">
-# Run the installer
+                <pre style="background: var(--bg-tertiary); padding: 1rem; border-radius: var(--radius-sm); font-size: 0.8125rem; overflow-x: auto; white-space: pre; line-height: 1.6;"><code># 1. Run the installer
 IDEViewer-Setup.exe
 
-# Register with the portal
-ideviewer register ^
-  --customer-key YOUR_KEY_HERE ^
-  --portal-url {{ request.host_url.rstrip('/') }}
-
-# Start the daemon
-ideviewer daemon --foreground
-                </div>
+# 2. Register with the portal
+ideviewer register `
+  --customer-key YOUR_KEY_HERE `
+  --portal-url {{ request.host_url.rstrip('/') }}</code></pre>
             </div>
 
             <div>
                 <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem;">
                     <i class="fab fa-linux"></i> Linux
                 </h3>
-                <div class="code-block">
-# Install the .deb package
+                <pre style="background: var(--bg-tertiary); padding: 1rem; border-radius: var(--radius-sm); font-size: 0.8125rem; overflow-x: auto; white-space: pre; line-height: 1.6;"><code># 1. Install the .deb package
 sudo dpkg -i ideviewer_*.deb
 
-# Register with the portal
+# 2. Register with the portal
 ideviewer register \
   --customer-key YOUR_KEY_HERE \
-  --portal-url {{ request.host_url.rstrip('/') }}
-
-# Start the daemon
-ideviewer daemon --foreground
-                </div>
+  --portal-url {{ request.host_url.rstrip('/') }}</code></pre>
             </div>
         </div>
     </div>
