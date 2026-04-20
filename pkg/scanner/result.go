@@ -11,6 +11,7 @@ const (
 	IDETypeVSCode         IDEType = "vscode"
 	IDETypeCursor         IDEType = "cursor"
 	IDETypeVSCodium       IDEType = "vscodium"
+	IDETypeKiro           IDEType = "kiro"
 	IDETypeJetBrainsIDEA  IDEType = "intellij-idea"
 	IDETypeJetBrainsPyCharm IDEType = "pycharm"
 	IDETypeJetBrainsWebStorm IDEType = "webstorm"

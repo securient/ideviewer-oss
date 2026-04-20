@@ -156,16 +156,19 @@ func extensionDirs() []string {
 			filepath.Join(home, ".vscode", "extensions"),
 			filepath.Join(home, ".cursor", "extensions"),
 			filepath.Join(home, ".vscode-oss", "extensions"),
+			filepath.Join(home, ".kiro", "extensions"),
 		},
 		"linux": {
 			filepath.Join(home, ".vscode", "extensions"),
 			filepath.Join(home, ".cursor", "extensions"),
 			filepath.Join(home, ".vscode-oss", "extensions"),
+			filepath.Join(home, ".kiro", "extensions"),
 		},
 		"windows": {
 			filepath.Join(home, ".vscode", "extensions"),
 			filepath.Join(home, ".cursor", "extensions"),
 			filepath.Join(home, ".vscode-oss", "extensions"),
+			filepath.Join(home, ".kiro", "extensions"),
 		},
 	}
 	dirs = append(dirs, vscodeExts[plat]...)

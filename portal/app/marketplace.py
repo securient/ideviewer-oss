@@ -320,6 +320,7 @@ def get_marketplace_client(marketplace: str) -> Optional[MarketplaceClient]:
     clients = {
         'vscode': VSCodeMarketplace,
         'cursor': VSCodeMarketplace,  # Cursor uses VS Code marketplace
+        'kiro': OpenVSXMarketplace,  # Kiro uses Open VSX (based on Code OSS)
         'vscodium': OpenVSXMarketplace,
         'openvsx': OpenVSXMarketplace,
         'jetbrains': JetBrainsMarketplace,
@@ -345,7 +346,7 @@ def fetch_extension_details(extension_id: str, marketplace: str = 'vscode') -> O
     """
     client = get_marketplace_client(marketplace)
     
-    if marketplace.lower() in ('vscode', 'cursor', 'vscodium', 'openvsx'):
+    if marketplace.lower() in ('vscode', 'cursor', 'kiro', 'vscodium', 'openvsx'):
         # Parse publisher.extension format
         parts = extension_id.split('.', 1)
         if len(parts) != 2:

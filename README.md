@@ -13,7 +13,7 @@ Developer workstations are one of the most privileged and least monitored attack
 | Feature | Description |
 |---------|-------------|
 | **IDE Extension Analysis** | Scans 7+ IDEs, analyzes extension permissions against a 4-tier risk model (Critical/High/Medium/Low) |
-| **AI Tool Detection** | Discovers Claude Code, Cursor, OpenClaw — their skills, MCP servers, cloud integrations, and granted permissions |
+| **AI Tool Detection** | Discovers Claude Code, Cursor, Kiro, OpenClaw — their skills, MCP servers, cloud integrations, and granted permissions |
 | **AI Risk Scoring** | Flags insecure configurations: wildcard bash access, plaintext API keys, autonomous execution, unencrypted transports |
 | **Extension Dependency Scanning** | Inventories packages bundled inside VS Code `node_modules` and JetBrains plugin JARs — invisible to standard SCA |
 | **Secrets Detection** | Finds plaintext credentials in `.env` files and git history. Never transmits actual values — only type and location |
@@ -108,6 +108,7 @@ docker run -p 8080:8080 \
 | VS Code | `~/.vscode/extensions` |
 | Cursor | `~/.cursor/extensions` |
 | VSCodium | `~/.vscode-oss/extensions` |
+| Kiro | `~/.kiro/extensions` |
 | JetBrains (IntelliJ, PyCharm, WebStorm, GoLand, CLion, Rider, PhpStorm, RubyMine, DataGrip) | `~/.config/JetBrains/*/plugins` |
 | Sublime Text | `~/Library/Application Support/Sublime Text/Packages` |
 | Vim / Neovim | `~/.vim`, `~/.config/nvim` |
@@ -132,6 +133,7 @@ docker run -p 8080:8080 \
 |------|----------------|
 | **Claude Code** | Enabled skills/plugins, cloud MCP servers (Gmail, Calendar, etc.), per-project permissions (Bash, Read, Write, MCP tools), API keys (redacted) |
 | **Cursor** | MCP server configs from `mcp.json` and VS Code settings, env vars, permissions |
+| **Kiro** | MCP server configs from `~/.kiro/settings/mcp.json`, remote MCP servers, env vars, auto-approve permissions |
 | **OpenClaw** | LLM providers, Slack/Telegram integrations, bot tokens (redacted), autonomous execution flags, insecure transport |
 
 Each component is classified by type (`skill`, `mcp-server`, `cloud-mcp`, `integration`, `permission`) and assigned a risk score:

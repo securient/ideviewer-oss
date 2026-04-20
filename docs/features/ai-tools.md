@@ -26,6 +26,7 @@ Traditional security tools do not monitor these configurations. IDEViewer does.
 |------|----------------|
 | **Claude Code** | Enabled skills/plugins, cloud MCP servers (Gmail, Calendar, etc.), per-project permissions (Bash, Read, Write, MCP tools), API keys (redacted) |
 | **Cursor** | MCP server configs from `mcp.json` and VS Code settings, environment variables, permissions |
+| **Kiro** | MCP server configs from `~/.kiro/settings/mcp.json`, remote MCP servers (SSE/HTTP), environment variables, auto-approve permissions |
 | **OpenClaw** | LLM providers, Slack/Telegram integrations, bot tokens (redacted), autonomous execution flags, insecure transport |
 
 ## Component Types
@@ -73,6 +74,17 @@ IDEViewer reads MCP configuration from:
 - `~/.cursor/mcp.json` -- Primary MCP config file
 - VS Code settings (`settings.json`) -- MCP servers configured as VS Code settings
 - Environment variables referenced in MCP configs
+
+### Kiro
+
+IDEViewer reads MCP configuration from:
+
+- `~/.kiro/settings/mcp.json` -- Primary MCP config file (global)
+- `.kiro/settings/mcp.json` -- Workspace-level MCP config
+- VS Code settings (`settings.json`) -- MCP servers configured as VS Code settings
+- Environment variables referenced in MCP configs
+
+Kiro supports both local (stdio) and remote (SSE/HTTP) MCP servers. IDEViewer detects both types and flags remote servers using unencrypted HTTP as high risk. Auto-approved MCP tools are also flagged as they execute without user confirmation.
 
 ### OpenClaw
 

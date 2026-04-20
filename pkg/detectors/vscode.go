@@ -127,9 +127,38 @@ var vscodeVariants = []vscodeVariant{
 		},
 		processNames: []string{"VSCodium", "codium", "VSCodium.exe"},
 	},
+	{
+		ideType: scanner.IDETypeKiro,
+		name:    "Kiro",
+		executables: map[string][]string{
+			"darwin": {
+				"/Applications/Kiro.app/Contents/Resources/app/bin/kiro",
+				"/usr/local/bin/kiro",
+			},
+			"linux": {
+				"/usr/bin/kiro",
+				"/opt/Kiro/kiro",
+				"~/.local/bin/kiro",
+			},
+			"windows": {
+				`%LOCALAPPDATA%\Programs\Kiro\Kiro.exe`,
+			},
+		},
+		extensionsPaths: map[string][]string{
+			"darwin":  {"~/.kiro/extensions"},
+			"linux":   {"~/.kiro/extensions"},
+			"windows": {`%USERPROFILE%\.kiro\extensions`},
+		},
+		configPaths: map[string][]string{
+			"darwin":  {"~/Library/Application Support/Kiro"},
+			"linux":   {"~/.config/Kiro"},
+			"windows": {`%APPDATA%\Kiro`},
+		},
+		processNames: []string{"Kiro", "kiro", "Kiro.exe"},
+	},
 }
 
-// VSCodeDetector detects VS Code, Cursor, and VSCodium.
+// VSCodeDetector detects VS Code, Cursor, VSCodium, and Kiro.
 type VSCodeDetector struct{}
 
 func (d *VSCodeDetector) Name() string { return "vscode" }
@@ -263,7 +292,7 @@ func parseVSCodeExtension(dir string, ideType scanner.IDEType) (scanner.Extensio
 	switch ideType {
 	case scanner.IDETypeVSCode:
 		marketplaceURL = "https://marketplace.visualstudio.com/items?itemName=" + extID
-	case scanner.IDETypeVSCodium:
+	case scanner.IDETypeVSCodium, scanner.IDETypeKiro:
 		marketplaceURL = fmt.Sprintf("https://open-vsx.org/extension/%s/%s", pkg.Publisher, pkg.Name)
 	}
 
