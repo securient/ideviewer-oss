@@ -24,6 +24,7 @@ The daemon uses [fsnotify](https://github.com/fsnotify/fsnotify) to watch IDE ex
 | VS Code | `~/.vscode/extensions` |
 | Cursor | `~/.cursor/extensions` |
 | VSCodium | `~/.vscode-oss/extensions` |
+| Kiro | `~/.kiro/extensions` |
 | JetBrains | `~/.config/JetBrains/*/plugins` |
 
 ## 30-Second Debounce

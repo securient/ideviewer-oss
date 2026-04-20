@@ -15,6 +15,7 @@ IDEViewer detects installed IDEs and analyzes their extensions for dangerous per
 | VS Code | `~/.vscode/extensions` | All |
 | Cursor | `~/.cursor/extensions` | All |
 | VSCodium | `~/.vscode-oss/extensions` | All |
+| Kiro | `~/.kiro/extensions` | All |
 | JetBrains (IntelliJ, PyCharm, WebStorm, GoLand, CLion, Rider, PhpStorm, RubyMine, DataGrip) | `~/.config/JetBrains/*/plugins` | All |
 | Sublime Text | `~/Library/Application Support/Sublime Text/Packages` | macOS |
 | Vim / Neovim | `~/.vim`, `~/.config/nvim` | All |

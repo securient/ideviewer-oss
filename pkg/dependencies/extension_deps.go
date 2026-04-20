@@ -42,6 +42,14 @@ var vscodeExtDirs = []extensionDir{
 			"windows": {`%USERPROFILE%\.vscode-oss\extensions`},
 		},
 	},
+	{
+		ideName: "Kiro",
+		paths: map[string][]string{
+			"darwin":  {"~/.kiro/extensions"},
+			"linux":   {"~/.kiro/extensions"},
+			"windows": {`%USERPROFILE%\.kiro\extensions`},
+		},
+	},
 }
 
 // expandPath expands ~ and environment variables.
@@ -81,7 +89,7 @@ func expandPath(p string) string {
 func scanExtensionDependencies(packages *[]Package, seen map[string]bool, errors *[]string, addManager func(string)) {
 	plat := runtime.GOOS
 
-	// Scan VS Code / Cursor / VSCodium extension node_modules
+	// Scan VS Code / Cursor / VSCodium / Kiro extension node_modules
 	for _, ed := range vscodeExtDirs {
 		for _, p := range ed.paths[plat] {
 			dir := expandPath(p)

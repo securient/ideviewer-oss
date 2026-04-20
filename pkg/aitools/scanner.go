@@ -141,6 +141,7 @@ func (s *Scanner) Scan() (*AIToolResult, error) {
 	detectors := []detector{
 		{"Claude Code", detectClaude},
 		{"Cursor", detectCursor},
+		{"Kiro", detectKiro},
 		{"OpenClaw", detectOpenClaw},
 	}
 
