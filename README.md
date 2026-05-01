@@ -132,7 +132,7 @@ docker run -p 8080:8080 \
 | Tool | What's Detected |
 |------|----------------|
 | **Claude Code** | Enabled skills/plugins, cloud MCP servers (Gmail, Calendar, etc.), per-project permissions (Bash, Read, Write, MCP tools), API keys (redacted) |
-| **Cursor** | MCP server configs from `mcp.json` and VS Code settings, env vars, permissions |
+| **Cursor** | MCP server configs from `mcp.json` and VS Code settings, remote MCP servers, env vars, auto-approve permissions |
 | **Kiro** | MCP server configs from `~/.kiro/settings/mcp.json`, remote MCP servers, env vars, auto-approve permissions |
 | **OpenClaw** | LLM providers, Slack/Telegram integrations, bot tokens (redacted), autonomous execution flags, insecure transport |
 
@@ -141,7 +141,7 @@ Each component is classified by type (`skill`, `mcp-server`, `cloud-mcp`, `integ
 | Risk | Examples |
 |------|---------|
 | **Critical** | Wildcard bash access (`Bash(*)`), plaintext API keys |
-| **High** | Autonomous execution enabled, external integrations, insecure HTTP transport |
+| **High** | Autonomous execution enabled, external integrations, insecure HTTP transport, auto-approved MCP tools |
 | **Medium** | Cloud MCP with data access, shell command permissions |
 | **Low** | Skills with network access |
 

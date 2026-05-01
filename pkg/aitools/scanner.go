@@ -68,6 +68,9 @@ func calculateRisk(c *AIComponent) {
 	case c.Type == "integration" && c.Permissions.NetworkAccess:
 		c.Risk = "high"
 		c.RiskReason = "External service integration with network access"
+	case c.Type == "mcp-server" && len(c.Permissions.MCPTools) > 0:
+		c.Risk = "high"
+		c.RiskReason = "MCP server with auto-approved tools (executes without user confirmation)"
 	case c.Type == "cloud-mcp":
 		c.Risk = "medium"
 		c.RiskReason = "Cloud MCP with access to sensitive data"
