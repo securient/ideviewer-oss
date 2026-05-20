@@ -96,12 +96,6 @@ variable "google_client_secret" {
   sensitive   = true
 }
 
-variable "free_tier_host_limit" {
-  description = "Maximum hosts per customer key (0 = unlimited)"
-  type        = number
-  default     = 5
-}
-
 variable "disable_local_login" {
   description = "Disable local username/password login. 'false' = always allow, 'auto' = disable when Google OAuth is configured, 'true' = always disable"
   type        = string

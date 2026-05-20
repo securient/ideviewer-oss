@@ -83,7 +83,6 @@ You'll be prompted to change the password on first login.
 | `ecs_min_tasks` | Minimum ECS tasks | `1` |
 | `ecs_max_tasks` | Maximum ECS tasks | `4` |
 | `rds_instance_class` | RDS instance type | `db.t3.micro` |
-| `free_tier_host_limit` | Max hosts per customer key | `5` |
 
 ### Custom Domain Setup
 

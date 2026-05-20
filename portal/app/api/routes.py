@@ -120,23 +120,21 @@ def validate_key():
         {
             "valid": true,
             "key_name": "My Key",
-            "max_hosts": 10,
             "current_hosts": 3
         }
     """
-    
+
     key, error, status = get_customer_key()
     if error:
         return jsonify({'valid': False, **error}), status
-    
+
     # Update last used
     key.last_used_at = datetime.utcnow()
     db.session.commit()
-    
+
     return jsonify({
         'valid': True,
         'key_name': key.name,
-        'max_hosts': key.max_hosts,
         'current_hosts': key.host_count,
         'portal_url': request.host_url.rstrip('/'),
     })
@@ -177,19 +175,6 @@ def register_host():
     
     platform = data.get('platform', 'Unknown')
     ip_address = data.get('ip_address') or request.remote_addr
-    
-    # Check host limit (0 = unlimited)
-    if key.max_hosts > 0 and key.host_count >= key.max_hosts:
-        # Check if this host already exists
-        existing = Host.query.filter_by(
-            hostname=hostname,
-            customer_key_id=key.id
-        ).first()
-
-        if not existing:
-            return jsonify({
-                'error': f'Host limit reached ({key.max_hosts}). Increase FREE_TIER_HOST_LIMIT in your portal configuration or set to 0 for unlimited.'
-            }), 403
 
     # Find or create host
     host = Host.query.filter_by(
@@ -282,12 +267,6 @@ def submit_report():
     ).first()
     
     if not host:
-        # Check host limit (0 = unlimited)
-        if key.max_hosts > 0 and key.host_count >= key.max_hosts:
-            return jsonify({
-                'error': f'Host limit reached ({key.max_hosts}). Increase FREE_TIER_HOST_LIMIT in your portal configuration or set to 0 for unlimited.'
-            }), 403
-        
         host = Host(
             hostname=hostname,
             ip_address=ip_address,
@@ -823,7 +802,7 @@ def receive_alert():
 def deregister_host():
     """
     Deregister a host during uninstallation.
-    Marks the host as inactive so it no longer counts against host limits.
+    Marks the host as inactive.
 
     Request:
         Headers:

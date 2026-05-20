@@ -49,7 +49,7 @@
                                 </div>
                             </td>
                             <td>
-                                <span class="badge badge-low">{{ key.host_count }} / {{ key.max_hosts }}</span>
+                                <span class="badge badge-low">{{ key.host_count }}</span>
                             </td>
                             <td>
                                 {% if key.is_active %}
@@ -108,14 +108,6 @@
                     {{ form.name(class="form-input", placeholder="e.g., Production Machines") }}
                     <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">
                         A friendly name to identify this key
-                    </p>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label" for="max_hosts">Max Hosts</label>
-                    {{ form.max_hosts(class="form-input", value=config.FREE_TIER_HOST_LIMIT|default(5, true)) }}
-                    <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">
-                        Maximum hosts per key. Set FREE_TIER_HOST_LIMIT=0 in portal configuration for unlimited.
                     </p>
                 </div>
 

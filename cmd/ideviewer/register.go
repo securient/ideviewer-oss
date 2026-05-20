@@ -58,7 +58,9 @@ func runRegister(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid customer key")
 	}
 	colorGreen.Printf("  Key is valid: %v\n", result["key_name"])
-	colorDim.Printf("  Hosts: %v/%v\n", result["current_hosts"], result["max_hosts"])
+	if current, ok := result["current_hosts"]; ok {
+		colorDim.Printf("  Hosts registered: %v\n", current)
+	}
 
 	// Step 2: Register host.
 	fmt.Println()

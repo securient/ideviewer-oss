@@ -43,8 +43,8 @@ class TestValidateKey:
         data = resp.get_json()
         assert data["valid"] is True
         assert data["key_name"] == "Test Key"
-        assert data["max_hosts"] == 5
         assert data["current_hosts"] == 0
+        assert "max_hosts" not in data
 
 
 class TestRegisterHost:
@@ -80,12 +80,12 @@ class TestRegisterHost:
         assert data["success"] is True
         assert "updated" in data["message"].lower()
 
-    def test_host_limit_enforcement(self, portal_app, portal_db, portal_client, test_customer_key):
-        """Free tier should enforce 5-host limit."""
+    def test_no_host_limit(self, portal_app, portal_db, portal_client, test_customer_key):
+        """Hosts per customer key are unlimited."""
         from app.models import Host
         with portal_app.app_context():
-            # Register 5 hosts (the limit)
-            for i in range(5):
+            # Pre-create a large batch of hosts to confirm there is no cap.
+            for i in range(25):
                 host = Host(
                     hostname=f"host-{i}",
                     ip_address=f"10.0.0.{i}",
@@ -95,15 +95,15 @@ class TestRegisterHost:
                 portal_db.session.add(host)
             portal_db.session.commit()
 
-            # The 6th host should be rejected
+            # One more should still register successfully.
             resp = portal_client.post(
                 "/api/register-host",
                 headers={"X-Customer-Key": test_customer_key.key},
                 json={"hostname": "host-overflow", "platform": "Test"},
             )
-            assert resp.status_code == 403
+            assert resp.status_code == 200
             data = resp.get_json()
-            assert "limit" in data["error"].lower() or "free tier" in data["error"].lower()
+            assert data["success"] is True
 
 
 class TestSubmitReport:
