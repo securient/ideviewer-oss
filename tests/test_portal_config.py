@@ -13,7 +13,6 @@ class TestDevelopmentConfig:
         cfg = DevelopmentConfig()
         assert cfg.DEBUG is True
         assert cfg.SQLALCHEMY_TRACK_MODIFICATIONS is False
-        assert cfg.FREE_TIER_HOST_LIMIT == 5
 
     def test_default_secret_key(self):
         from config import DevelopmentConfig

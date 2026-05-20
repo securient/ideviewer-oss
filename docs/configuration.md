@@ -38,7 +38,6 @@ Set these in `portal/.env` (local) or via your deployment platform:
 | `DATABASE_URL` | Yes (prod) | SQLite | PostgreSQL connection string |
 | `FLASK_CONFIG` | No | `development` | `development`, `production`, or `testing` |
 | `PORTAL_URL` | No | `http://localhost:5000` | Public URL (used for OAuth redirects) |
-| `FREE_TIER_HOST_LIMIT` | No | `5` | Maximum hosts per customer key |
 | `GOOGLE_CLIENT_ID` | No | -- | Google OAuth client ID |
 | `GOOGLE_CLIENT_SECRET` | No | -- | Google OAuth client secret |
 
@@ -84,10 +83,6 @@ export GOOGLE_CLIENT_SECRET="your-client-secret"
 ```
 
 The Google login button appears automatically when both variables are set. If they are not set, only email/password login is shown.
-
-## Host Limit Configuration
-
-The `FREE_TIER_HOST_LIMIT` variable controls how many machines can register under a single customer key. The default is 5. Set to `0` for unlimited.
 
 ## Database Options
 

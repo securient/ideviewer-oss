@@ -71,7 +71,6 @@ def test_customer_key(portal_app, portal_db, test_user):
             key=str(uuid.uuid4()),
             name="Test Key",
             user_id=test_user.id,
-            max_hosts=5,
         )
         portal_db.session.add(key)
         portal_db.session.commit()

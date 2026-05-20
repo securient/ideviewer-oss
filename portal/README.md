@@ -33,7 +33,6 @@ Access at http://localhost:8080
 | `DATABASE_URL` | Yes (prod) | SQLite | PostgreSQL connection string |
 | `FLASK_CONFIG` | No | `development` | `development`, `production`, or `testing` |
 | `PORTAL_URL` | No | `http://localhost:5000` | Public URL (used for OAuth redirects) |
-| `FREE_TIER_HOST_LIMIT` | No | `5` | Max hosts per customer key |
 | `GOOGLE_CLIENT_ID` | No | — | Google OAuth client ID |
 | `GOOGLE_CLIENT_SECRET` | No | — | Google OAuth client secret |
 

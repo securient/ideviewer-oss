@@ -87,7 +87,6 @@ SECRET_KEY=$SECRET_KEY
 # DISABLE_LOCAL_LOGIN=false
 
 # Portal settings
-# FREE_TIER_HOST_LIMIT=5
 # PORTAL_URL=http://localhost:5000
 EOF
         echo -e "${GREEN}Configuration saved to portal/.env${NC}"

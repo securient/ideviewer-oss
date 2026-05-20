@@ -40,5 +40,4 @@ class CustomerKeyForm(FlaskForm):
         DataRequired(),
         Length(min=1, max=100, message='Name must be between 1 and 100 characters')
     ])
-    max_hosts = StringField('Max Hosts', default='5')
     submit = SubmitField('Generate Key')
