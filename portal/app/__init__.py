@@ -63,6 +63,13 @@ def create_app(config_name=None):
     login_manager.init_app(app)
     csrf.init_app(app)
     oauth.init_app(app)
+
+    # Initialise background job queue.
+    # In testing mode we hard-skip even if a stray REDIS_URL is set in the
+    # environment, unless PORTAL_TEST_USE_REDIS opts in explicitly.
+    if config_name != "testing" or os.environ.get("PORTAL_TEST_USE_REDIS"):
+        from app.queue import init_queue
+        init_queue(app)
     
     # Register Google OAuth if configured
     if app.config.get('GOOGLE_CLIENT_ID') and app.config.get('GOOGLE_CLIENT_SECRET'):

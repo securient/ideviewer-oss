@@ -60,6 +60,9 @@ class TestRegisterHost:
         data = resp.get_json()
         assert data["success"] is True
         assert "host_id" in data
+        # Phase 2 (T1.3): register-host now issues an enrollment token.
+        assert "host_token" in data
+        assert isinstance(data["host_token"], str) and len(data["host_token"]) == 43
 
     def test_register_missing_hostname(self, portal_client, test_customer_key):
         resp = portal_client.post(

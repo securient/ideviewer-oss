@@ -23,6 +23,8 @@ def portal_app():
     os.environ.pop("FLASK_CONFIG", None)
     os.environ.pop("DATABASE_URL", None)
     os.environ.pop("SECRET_KEY", None)
+    # Skip the Alembic upgrade path in create_app — tests use create_all().
+    os.environ.setdefault("SKIP_DB_INIT", "1")
 
     from app import create_app, db as _db
     app = create_app("testing")
@@ -140,3 +142,15 @@ def logged_in_client(portal_app, portal_client, test_user):
         with portal_client.session_transaction() as sess:
             sess["_user_id"] = str(test_user.id)
         yield portal_client
+
+
+@pytest.fixture
+def test_host_with_token(portal_app, portal_db, test_host):
+    """Yield (host, plaintext_token) — a host with an issued enrollment token."""
+    with portal_app.app_context():
+        from app.models import Host
+        host = Host.query.filter_by(id=test_host.id).first()
+        plaintext = host.issue_token()
+        portal_db.session.commit()
+        host = Host.query.filter_by(id=test_host.id).first()
+        yield host, plaintext

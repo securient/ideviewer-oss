@@ -291,11 +291,36 @@
                     • <i class="fas fa-bolt" style="color: #22c55e; font-size: 0.75rem;"></i> Last live update: <span class="local-time" data-utc="{{ host.last_realtime_event.isoformat() + 'Z' }}">{{ host.last_realtime_event.strftime('%Y-%m-%d %H:%M') }}</span>
                     {% endif %}
                 </p>
+                <p style="color: var(--text-secondary); font-size: 0.8125rem; margin-top: 0.25rem;">
+                    <i class="fas fa-key" style="font-size: 0.75rem;"></i>
+                    Token:
+                    {% if host.token_hash and not host.token_revoked_at %}
+                        <span style="color: var(--success); font-weight: 500;">Issued</span>
+                        {% if host.token_issued_at %}
+                            • <span class="local-time" data-utc="{{ host.token_issued_at.isoformat() + 'Z' }}">{{ host.token_issued_at.strftime('%Y-%m-%d %H:%M') }}</span>
+                        {% endif %}
+                    {% elif host.token_revoked_at %}
+                        <span style="color: var(--danger); font-weight: 500;">Revoked</span>
+                        • Re-issue on next check-in
+                    {% else %}
+                        <span style="color: var(--text-muted);">Never issued</span>
+                    {% endif %}
+                </p>
             </div>
             <div style="display: flex; gap: 0.5rem;">
                 <button id="triggerScanBtn" onclick="triggerOnDemandScan()" class="btn btn-primary" style="white-space: nowrap;">
                     <i class="fas fa-sync-alt"></i> Trigger Scan
                 </button>
+                {% if host.token_hash and not host.token_revoked_at %}
+                <form method="POST" action="{{ url_for('main.revoke_host_token', host_id=host.public_id) }}"
+                      onsubmit="return confirm('Revoke this host''s token? The daemon will need to re-enroll on next check-in to receive a fresh token.');"
+                      style="display: inline;">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit" class="btn btn-secondary" style="white-space: nowrap; color: var(--warning);" title="Revoke this host's token">
+                        <i class="fas fa-key"></i> Revoke Token
+                    </button>
+                </form>
+                {% endif %}
                 <form method="POST" action="{{ url_for('main.delete_host', host_id=host.public_id) }}"
                       onsubmit="return confirm('Are you sure you want to delete this host? All scan data, extensions, packages, and secrets for this host will be permanently removed.');"
                       style="display: inline;">
