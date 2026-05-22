@@ -35,6 +35,12 @@ Access at http://localhost:8080
 | `PORTAL_URL` | No | `http://localhost:5000` | Public URL (used for OAuth redirects) |
 | `GOOGLE_CLIENT_ID` | No | — | Google OAuth client ID |
 | `GOOGLE_CLIENT_SECRET` | No | — | Google OAuth client secret |
+| `GUNICORN_WORKERS` | No | `4` | Number of gunicorn worker processes |
+| `GUNICORN_THREADS` | No | `2` | Threads per gunicorn worker |
+| `GUNICORN_TIMEOUT` | No | `120` | Gunicorn worker timeout in seconds |
+| `DB_POOL_SIZE` | No | `5` | SQLAlchemy connection pool size (prod only) |
+| `DB_MAX_OVERFLOW` | No | `5` | SQLAlchemy pool overflow (prod only) |
+| `DB_POOL_RECYCLE` | No | `1800` | Connection recycle interval, seconds |
 
 ### Setting Environment Variables
 

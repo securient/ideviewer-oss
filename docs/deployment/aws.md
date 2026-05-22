@@ -87,6 +87,25 @@ The deployment script prints the portal URL. Default credentials:
 | `ecs_max_tasks` | Maximum ECS tasks | `4` |
 | `rds_instance_class` | RDS instance type | `db.t3.micro` |
 
+## Container Environment Variables
+
+These are set on the ECS task definition (or via Secrets Manager) and read by the portal container at runtime.
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `SECRET_KEY` | Yes | -- | Flask secret key for session signing |
+| `DATABASE_URL` | Yes | -- | PostgreSQL connection string |
+| `FLASK_CONFIG` | No | `production` | `development`, `production`, or `testing` |
+| `PORTAL_URL` | No | ALB URL | Public URL (used for OAuth redirects) |
+| `GOOGLE_CLIENT_ID` | No | -- | Google OAuth client ID |
+| `GOOGLE_CLIENT_SECRET` | No | -- | Google OAuth client secret |
+| `GUNICORN_WORKERS` | No | `4` | Number of gunicorn worker processes |
+| `GUNICORN_THREADS` | No | `2` | Threads per gunicorn worker |
+| `GUNICORN_TIMEOUT` | No | `120` | Gunicorn worker timeout in seconds |
+| `DB_POOL_SIZE` | No | `5` | SQLAlchemy connection pool size (prod only) |
+| `DB_MAX_OVERFLOW` | No | `5` | SQLAlchemy pool overflow (prod only) |
+| `DB_POOL_RECYCLE` | No | `1800` | Connection recycle interval, seconds |
+
 ## Custom Domain Setup
 
 1. Create a Route53 hosted zone for your domain
