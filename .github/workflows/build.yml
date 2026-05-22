@@ -43,12 +43,61 @@ jobs:
       - run: go vet ./...
 
   # ===========================================
+  # Portal Python tests (pytest)
+  # ===========================================
+  portal-test:
+    runs-on: ubuntu-latest
+    name: Portal Test
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_USER: test
+          POSTGRES_DB: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U test"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r portal/requirements.txt pytest pytest-cov
+
+      - name: Run pytest
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/test
+          REDIS_URL: redis://localhost:6379/0
+          SECRET_KEY: ci-test-key
+          FLASK_CONFIG: testing
+          SKIP_DB_INIT: '1'
+          PYTHONPATH: portal
+        run: pytest tests/ -v
+
+  # ===========================================
   # Cross-compile all binaries
   # ===========================================
   build:
     runs-on: ubuntu-latest
     name: Build Binaries
-    needs: [test]
+    needs: [test, portal-test]
     outputs:
       app_version: ${{ steps.version.outputs.version }}
     steps:
