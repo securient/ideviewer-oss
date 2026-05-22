@@ -46,6 +46,7 @@ Set these in `portal/.env` (local) or via your deployment platform:
 | `DB_POOL_SIZE` | No | `5` | SQLAlchemy connection pool size (prod only) |
 | `DB_MAX_OVERFLOW` | No | `5` | SQLAlchemy pool overflow (prod only) |
 | `DB_POOL_RECYCLE` | No | `1800` | Connection recycle interval, seconds |
+| `REDIS_URL` | No | -- | Redis connection URL (e.g. `redis://localhost:6379/0`). When set, vulnerability scans run async via RQ; when unset, they run inline. |
 
 ### Setting Environment Variables
 

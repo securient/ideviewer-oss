@@ -169,6 +169,8 @@ Each component is classified by type (`skill`, `mcp-server`, `cloud-mcp`, `integ
 - **CSV Export** — export any data view
 - **Google OAuth** — optional SSO alongside username/password
 - **Database Migrations** — Alembic-managed schema for safe upgrades
+- **Per-Host Token Auth** — daemons enroll with a customer key, then authenticate with a per-host token; revocable from the host detail page
+- **Background Job Queue** — vulnerability lookups dispatched to an RQ worker when Redis is available; falls back to inline scans otherwise
 
 ## Deployment
 

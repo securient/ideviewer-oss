@@ -36,12 +36,14 @@ The portal is available at `http://localhost:8080`.
 
 ## What Gets Created
 
-The `docker-compose.yml` starts two containers:
+The `docker-compose.yml` starts four containers:
 
 | Service | Image | Port | Purpose |
 |---------|-------|------|---------|
 | `portal` | Built from `portal/Dockerfile` | 8080 | Flask web application |
 | `db` | `postgres:15` | 5432 | PostgreSQL database |
+| `redis` | `redis:7` | 6379 | RQ job queue backend |
+| `worker` | Built from `portal/Dockerfile` | -- | RQ worker for async vulnerability scans |
 
 ## Container Image
 

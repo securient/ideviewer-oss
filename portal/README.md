@@ -41,6 +41,7 @@ Access at http://localhost:8080
 | `DB_POOL_SIZE` | No | `5` | SQLAlchemy connection pool size (prod only) |
 | `DB_MAX_OVERFLOW` | No | `5` | SQLAlchemy pool overflow (prod only) |
 | `DB_POOL_RECYCLE` | No | `1800` | Connection recycle interval, seconds |
+| `REDIS_URL` | No | — | Redis connection URL (e.g. `redis://localhost:6379/0`). When set, vulnerability scans run async via RQ; when unset, they run inline. |
 
 ### Setting Environment Variables
 
@@ -93,6 +94,23 @@ flask db init        # First time only
 flask db migrate -m "Description"
 flask db upgrade
 ```
+
+## Job queue and worker
+
+Vulnerability lookups against OSV.dev are dispatched to an RQ worker when `REDIS_URL` is set, so report ingestion stays fast under load. The worker runs as a separate process (`docker-compose.yml` includes a `worker` service; production uses a dedicated `portal-worker` ECS service in `deploy/terraform/`). When `REDIS_URL` is unset or Redis is unreachable, the portal falls back to running scans inline — useful for local development.
+
+To run the worker manually: `rq worker default --url $REDIS_URL`.
+
+## Host enrollment and tokens
+
+The daemon authenticates to the portal in two stages:
+
+1. **Enrollment** — On first run, the daemon sends its customer key (`X-Customer-Key`) to `POST /api/register-host`. The portal responds with a per-host token (`host_token`, 32-byte base64url) returned **once** in the JSON body. The daemon persists it to `~/.ideviewer/config.json` with mode `0600`.
+2. **Steady state** — Every subsequent call uses `X-Host-Token`. The customer key is no longer needed for that host.
+
+Admins can revoke a host's token from the host detail page in the portal UI. On the next call, the daemon detects the 401, re-enrolls via the customer key, persists a fresh token, and retries — no manual intervention required.
+
+Daemons built before this change use the customer key indefinitely and continue working without modification.
 
 ## Production Deployment
 
@@ -219,15 +237,16 @@ docker run -d --name ideviewer-oss-portal \
 |--------|------|------|-------------|
 | GET | `/api/health` | None | Health check |
 | POST | `/api/validate-key` | Customer Key | Validate customer key |
-| POST | `/api/register-host` | Customer Key | Register a host |
-| POST | `/api/report` | Customer Key | Submit scan report |
+| POST | `/api/register-host` | Customer Key | Register a host, issues a per-host token |
+| POST | `/api/host-token/rotate` | Host Token | Rotate the host token proactively |
+| POST | `/api/report` | Host Token or Customer Key | Submit scan report |
 | GET | `/api/hosts` | Customer Key | List hosts for key |
-| POST | `/api/heartbeat` | Customer Key | Daemon heartbeat |
-| POST | `/api/alert` | Customer Key | Tamper/integrity alert |
-| GET | `/api/scan-requests/pending` | Customer Key | Check for on-demand scans |
-| POST | `/api/scan-requests/<id>/update` | Customer Key | Update scan progress |
+| POST | `/api/heartbeat` | Host Token or Customer Key | Daemon heartbeat |
+| POST | `/api/alert` | Host Token or Customer Key | Tamper/integrity alert |
+| GET | `/api/scan-requests/pending` | Host Token or Customer Key | Check for on-demand scans |
+| POST | `/api/scan-requests/<id>/update` | Host Token or Customer Key | Update scan progress |
 
-All authenticated endpoints require the `X-Customer-Key` header with a valid UUID key.
+Authenticated endpoints accept either `X-Host-Token` (preferred, issued during enrollment) or `X-Customer-Key` (UUID, used for enrollment and legacy daemons). When a request is authenticated by a host token, the body's `hostname` must match the host's enrolled hostname.
 
 ## License
 

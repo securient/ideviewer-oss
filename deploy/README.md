@@ -83,6 +83,10 @@ You'll be prompted to change the password on first login.
 | `ecs_min_tasks` | Minimum ECS tasks | `1` |
 | `ecs_max_tasks` | Maximum ECS tasks | `4` |
 | `rds_instance_class` | RDS instance type | `db.t3.micro` |
+| `redis_node_type` | ElastiCache Redis node type | `cache.t4g.micro` |
+| `worker_cpu` | RQ worker task CPU (1024 = 1 vCPU) | `512` |
+| `worker_memory` | RQ worker task memory (MB) | `1024` |
+| `worker_min_tasks` | Minimum worker tasks | `1` |
 
 ### Custom Domain Setup
 

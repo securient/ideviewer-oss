@@ -26,6 +26,8 @@ Internet
                     Google OAuth (optional)
 ```
 
+The same Terraform apply also provisions an ElastiCache Redis cluster (default `cache.t4g.micro`, configurable via `redis_node_type`) and a dedicated `portal-worker` ECS service that runs the RQ worker for asynchronous vulnerability scans. The worker starts at `worker_min_tasks` (default `1`) with CPU and memory controlled by `worker_cpu` and `worker_memory`. The portal connects to Redis via the `REDIS_URL` env var injected from Terraform outputs.
+
 ## Prerequisites
 
 - [AWS CLI v2](https://aws.amazon.com/cli/) configured with appropriate credentials
@@ -86,6 +88,10 @@ The deployment script prints the portal URL. Default credentials:
 | `ecs_min_tasks` | Minimum ECS tasks | `1` |
 | `ecs_max_tasks` | Maximum ECS tasks | `4` |
 | `rds_instance_class` | RDS instance type | `db.t3.micro` |
+| `redis_node_type` | ElastiCache Redis node type | `cache.t4g.micro` |
+| `worker_cpu` | RQ worker task CPU (1024 = 1 vCPU) | `512` |
+| `worker_memory` | RQ worker task memory (MB) | `1024` |
+| `worker_min_tasks` | Minimum worker tasks | `1` |
 
 ## Container Environment Variables
 
@@ -105,6 +111,7 @@ These are set on the ECS task definition (or via Secrets Manager) and read by th
 | `DB_POOL_SIZE` | No | `5` | SQLAlchemy connection pool size (prod only) |
 | `DB_MAX_OVERFLOW` | No | `5` | SQLAlchemy pool overflow (prod only) |
 | `DB_POOL_RECYCLE` | No | `1800` | Connection recycle interval, seconds |
+| `REDIS_URL` | No | -- | Redis connection URL (e.g. `redis://localhost:6379/0`). When set, vulnerability scans run async via RQ; when unset, they run inline. |
 
 ## Custom Domain Setup
 
