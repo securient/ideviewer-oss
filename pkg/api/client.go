@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,10 +14,16 @@ import (
 	"github.com/securient/ideviewer-oss/internal/version"
 )
 
+// ErrTokenRevoked is returned when the portal rejects an X-Host-Token
+// authenticated request with a 401. Callers can detect this via
+// errors.Is(err, ErrTokenRevoked) and trigger re-enrollment.
+var ErrTokenRevoked = errors.New("host token revoked or invalid")
+
 // Client communicates with the IDEViewer portal API.
 type Client struct {
 	PortalURL   string
 	CustomerKey string
+	HostToken   string // preferred over CustomerKey when non-empty
 	HTTPClient  *http.Client
 	hostname    string
 	platform    string
@@ -55,6 +62,21 @@ func NewClient(portalURL, customerKey string) *Client {
 	}
 }
 
+// NewClientWithToken creates a new API client that prefers the per-host
+// token for authentication. When hostToken is empty the client falls back
+// to the customer key.
+func NewClientWithToken(portalURL, customerKey, hostToken string) *Client {
+	c := NewClient(portalURL, customerKey)
+	c.HostToken = hostToken
+	return c
+}
+
+// SetHostToken updates (or clears) the per-host token used for
+// authentication on subsequent requests.
+func (c *Client) SetHostToken(token string) {
+	c.HostToken = token
+}
+
 // doRequest executes an HTTP request with standard headers.
 func (c *Client) doRequest(method, path string, body any) (map[string]any, error) {
 	var bodyReader io.Reader
@@ -72,7 +94,12 @@ func (c *Client) doRequest(method, path string, body any) (map[string]any, error
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 
-	req.Header.Set("X-Customer-Key", c.CustomerKey)
+	usedToken := c.HostToken != ""
+	if usedToken {
+		req.Header.Set("X-Host-Token", c.HostToken)
+	} else {
+		req.Header.Set("X-Customer-Key", c.CustomerKey)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "IDEViewer-Daemon/"+version.Version)
 
@@ -98,6 +125,9 @@ func (c *Client) doRequest(method, path string, body any) (map[string]any, error
 		msg := "unknown error"
 		if e, ok := result["error"].(string); ok {
 			msg = e
+		}
+		if resp.StatusCode == http.StatusUnauthorized && usedToken {
+			return nil, fmt.Errorf("%w: %s", ErrTokenRevoked, msg)
 		}
 		return nil, &APIError{StatusCode: resp.StatusCode, Message: msg}
 	}

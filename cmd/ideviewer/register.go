@@ -76,12 +76,23 @@ func runRegister(cmd *cobra.Command, args []string) error {
 		colorGreen.Println("  Host registered")
 	}
 
+	// Capture per-host token if the portal issued one.
+	var hostToken string
+	if tokRaw, ok := regResult["host_token"]; ok {
+		if tok, ok := tokRaw.(string); ok && tok != "" {
+			hostToken = tok
+			client.SetHostToken(hostToken)
+			colorDim.Println("  Host token issued")
+		}
+	}
+
 	// Step 3: Save configuration.
 	fmt.Println()
 	colorCyan.Println("Step 3: Saving configuration...")
 	cfg := &config.Config{
 		PortalURL:           portalURL,
 		CustomerKey:         customerKey,
+		HostToken:           hostToken,
 		ScanIntervalMinutes: interval,
 	}
 	// Save to user-level config dir (daemon runs as user via LaunchAgent)

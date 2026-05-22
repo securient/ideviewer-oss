@@ -77,7 +77,11 @@ func (d *Daemon) sendTamperAlert(alertType, details string) {
 	if d.apiClient == nil {
 		return
 	}
-	if _, err := d.apiClient.SendTamperAlert(alertType, details); err != nil {
+	err := d.withReauth(func() error {
+		_, callErr := d.apiClient.SendTamperAlert(alertType, details)
+		return callErr
+	})
+	if err != nil {
 		log.Printf("Failed to send tamper alert: %v", err)
 	}
 }

@@ -58,7 +58,7 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 	if customerKey != "" && portalURL != "" {
 		// New configuration provided via flags.
 		fmt.Println("Validating customer key...")
-		client := api.NewClient(portalURL, customerKey)
+		client := api.NewClientWithToken(portalURL, customerKey, "")
 		result, err := client.ValidateKey()
 		if err != nil {
 			return fmt.Errorf("failed to validate key: %w", err)

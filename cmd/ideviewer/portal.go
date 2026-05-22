@@ -83,7 +83,7 @@ func portalClient() (*config.Config, *api.Client, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("no portal configuration found. Run 'ideviewer register' first")
 	}
-	client := api.NewClient(cfg.PortalURL, cfg.CustomerKey)
+	client := api.NewClientWithToken(cfg.PortalURL, cfg.CustomerKey, cfg.HostToken)
 	return cfg, client, nil
 }
 

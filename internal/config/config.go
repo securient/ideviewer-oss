@@ -19,6 +19,7 @@ import (
 type Config struct {
 	PortalURL           string `json:"portal_url"`
 	CustomerKey         string `json:"customer_key"`
+	HostToken           string `json:"host_token,omitempty"`
 	ScanIntervalMinutes int    `json:"scan_interval_minutes"`
 	HostID              string `json:"host_id,omitempty"`
 	Signature           string `json:"signature,omitempty"`
@@ -111,11 +112,59 @@ func saveToPath(cfg *Config, path string) error {
 		return err
 	}
 
-	if err := os.WriteFile(path, data, 0600); err != nil {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+
+	// Ensure mode is 0600 even when the file already existed with different bits.
+	if err := os.Chmod(path, 0600); err != nil {
 		return err
 	}
 
 	return nil
+}
+
+// SaveToPath writes the config (with HMAC signature) to an explicit path.
+// Intended for tests; production code should use Save / SaveSystem.
+func SaveToPath(cfg *Config, path string) error {
+	return saveToPath(cfg, path)
+}
+
+// LoadFromPath reads and HMAC-verifies a config from an explicit path.
+// Intended for tests; production code should use Load.
+func LoadFromPath(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("config not found at %s: %w", path, err)
+	}
+
+	var cfg Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("invalid config: %w", err)
+	}
+
+	if cfg.Signature != "" {
+		sig := cfg.Signature
+		cfg.Signature = ""
+		expected, err := computeSignature(&cfg)
+		if err != nil {
+			return nil, fmt.Errorf("config verification failed: %w", err)
+		}
+		if !hmac.Equal([]byte(sig), []byte(expected)) {
+			return nil, fmt.Errorf("config signature invalid — file may have been tampered with")
+		}
+		cfg.Signature = sig
+	}
+
+	return &cfg, nil
 }
 
 // Path returns the config file path.
