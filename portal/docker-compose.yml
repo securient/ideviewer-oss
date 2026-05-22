@@ -34,6 +34,19 @@ services:
       timeout: 5s
       retries: 5
 
+  # Redis (RQ job queue)
+  redis:
+    image: redis:7-alpine
+    container_name: ideviewer-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
   # IDE Viewer Portal
   portal:
     build:
@@ -44,17 +57,22 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       # Flask config
       FLASK_CONFIG: production
       SECRET_KEY: dev-secret-key-change-in-production
-      
+
       # Database connection
       DATABASE_URL: postgresql://ideviewer:ideviewer_dev_password@db:5432/ideviewer
-      
+
+      # Job queue
+      REDIS_URL: redis://redis:6379/0
+
       # Portal settings
       PORTAL_URL: http://localhost:8080
-      
+
       # Google OAuth (optional - uncomment and fill in)
       # GOOGLE_CLIENT_ID: your-client-id.apps.googleusercontent.com
       # GOOGLE_CLIENT_SECRET: your-client-secret
@@ -66,6 +84,36 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
+
+  # RQ worker (background job processor)
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ideviewer-worker
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # Flask config
+      FLASK_CONFIG: production
+      SECRET_KEY: dev-secret-key-change-in-production
+
+      # Database connection
+      DATABASE_URL: postgresql://ideviewer:ideviewer_dev_password@db:5432/ideviewer
+
+      # Job queue
+      REDIS_URL: redis://redis:6379/0
+
+      # Portal settings
+      PORTAL_URL: http://localhost:8080
+
+      # Skip migrations — portal service handles them
+      SKIP_DB_INIT: "1"
+    command: ["rq", "worker", "default", "--url", "redis://redis:6379/0"]
 
 volumes:
   postgres_data:
