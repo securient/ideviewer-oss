@@ -639,17 +639,23 @@ def get_pending_scan_requests():
     """
     Get pending scan requests for hosts belonging to this customer key.
     Called by the daemon to check for on-demand scan requests.
+
+    Accepts X-Host-Token (post-enrollment daemons) or X-Customer-Key
+    (legacy daemons). With token auth the result is scoped to just
+    the authenticated host.
     """
-    key, error, status = get_customer_key()
+    key, host_from_token, error, status = authenticate_request()
     if error:
         return jsonify(error), status
-    
-    # Find pending requests for any hosts belonging to this key
-    pending = ScanRequest.query.join(Host).filter(
+
+    q = ScanRequest.query.join(Host).filter(
         Host.customer_key_id == key.id,
         ScanRequest.status == 'pending'
-    ).all()
-    
+    )
+    if host_from_token is not None:
+        q = q.filter(Host.id == host_from_token.id)
+    pending = q.all()
+
     return jsonify({
         'requests': [r.to_dict() for r in pending]
     })
@@ -660,17 +666,25 @@ def update_scan_request(request_id):
     """
     Update the status/progress of an on-demand scan request.
     Called by the daemon to report progress.
+
+    Accepts X-Host-Token (post-enrollment daemons) or X-Customer-Key
+    (legacy daemons). With token auth the request_id must belong to
+    the authenticated host.
     """
-    key, error, status = get_customer_key()
+    key, host_from_token, error, status = authenticate_request()
     if error:
         return jsonify(error), status
-    
+
     scan_req = ScanRequest.query.get_or_404(request_id)
-    
+
     # Verify the scan request belongs to this key's host
     host = Host.query.get(scan_req.host_id)
     if not host or host.customer_key_id != key.id:
         return jsonify({'error': 'Access denied'}), 403
+
+    # Token auth pins the request to one host -- refuse cross-host updates.
+    if host_from_token is not None and host.id != host_from_token.id:
+        return jsonify({'error': 'Scan request does not belong to this host'}), 403
     
     # If scan was cancelled by user, tell the daemon to stop
     if scan_req.status == 'cancelled':

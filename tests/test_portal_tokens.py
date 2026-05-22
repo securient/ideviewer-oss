@@ -183,3 +183,113 @@ class TestReRegisterRefreshesToken:
         )
         t2 = r2.get_json()["host_token"]
         assert t1 != t2
+
+
+class TestScanRequestsAcceptHostToken:
+    """Regression: daemons polling on-demand scan requests use X-Host-Token,
+    not X-Customer-Key, after enrollment. If these endpoints reject the
+    token the daemon falls into a re-enroll loop and rewrites its config
+    file every poll, which trips tamper detection."""
+
+    def test_pending_scan_requests_accepts_token(
+        self, portal_client, test_host_with_token
+    ):
+        host, token = test_host_with_token
+        resp = portal_client.get(
+            "/api/scan-requests/pending",
+            headers={"X-Host-Token": token},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "requests" in data
+
+    def test_pending_scan_requests_rejects_invalid_token(self, portal_client):
+        resp = portal_client.get(
+            "/api/scan-requests/pending",
+            headers={"X-Host-Token": "garbage-token"},
+        )
+        assert resp.status_code == 401
+
+    def test_pending_scan_requests_still_works_with_customer_key(
+        self, portal_client, test_customer_key, test_host
+    ):
+        resp = portal_client.get(
+            "/api/scan-requests/pending",
+            headers={"X-Customer-Key": test_customer_key.key},
+        )
+        assert resp.status_code == 200
+
+    def test_pending_scoped_to_authenticated_host(
+        self,
+        portal_app,
+        portal_db,
+        portal_client,
+        test_customer_key,
+        test_host_with_token,
+    ):
+        """When token auth is used, only this host's pending requests should
+        come back -- not requests for sibling hosts under the same customer."""
+        from app.models import Host, ScanRequest
+        host, token = test_host_with_token
+        with portal_app.app_context():
+            sibling = Host(
+                hostname="sibling-host",
+                ip_address="10.0.0.99",
+                platform="Linux",
+                customer_key_id=test_customer_key.id,
+            )
+            portal_db.session.add(sibling)
+            portal_db.session.flush()
+            user_id = test_customer_key.user_id
+            mine = ScanRequest(host_id=host.id, status="pending", requested_by=user_id)
+            theirs = ScanRequest(host_id=sibling.id, status="pending", requested_by=user_id)
+            portal_db.session.add_all([mine, theirs])
+            portal_db.session.commit()
+            mine_id = mine.id
+            theirs_id = theirs.id
+
+        resp = portal_client.get(
+            "/api/scan-requests/pending",
+            headers={"X-Host-Token": token},
+        )
+        assert resp.status_code == 200
+        ids = {r["id"] for r in resp.get_json()["requests"]}
+        assert mine_id in ids
+        assert theirs_id not in ids
+
+    def test_update_cross_host_with_token_403(
+        self,
+        portal_app,
+        portal_db,
+        portal_client,
+        test_customer_key,
+        test_host_with_token,
+    ):
+        """A token bound to host A must not be able to update a scan
+        request that belongs to host B (same customer)."""
+        from app.models import Host, ScanRequest
+        host, token = test_host_with_token
+        with portal_app.app_context():
+            sibling = Host(
+                hostname="other-host",
+                ip_address="10.0.0.42",
+                platform="Linux",
+                customer_key_id=test_customer_key.id,
+            )
+            portal_db.session.add(sibling)
+            portal_db.session.flush()
+            sibling_req = ScanRequest(
+                host_id=sibling.id,
+                status="pending",
+                requested_by=test_customer_key.user_id,
+            )
+            portal_db.session.add(sibling_req)
+            portal_db.session.commit()
+            sibling_req_id = sibling_req.id
+
+        resp = portal_client.post(
+            f"/api/scan-requests/{sibling_req_id}/update",
+            headers={"X-Host-Token": token},
+            json={"status": "scanning_ides"},
+        )
+        assert resp.status_code == 403
