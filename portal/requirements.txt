@@ -25,3 +25,7 @@ flask-cors>=4.0.0
 
 # Production server
 gunicorn>=21.0.0
+
+# Background job queue
+redis>=5.0.0
+rq>=1.16.0

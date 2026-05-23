@@ -107,3 +107,27 @@ variable "rds_skip_final_snapshot" {
   type        = bool
   default     = true
 }
+
+variable "redis_node_type" {
+  description = "ElastiCache Redis node type"
+  type        = string
+  default     = "cache.t4g.micro"
+}
+
+variable "worker_cpu" {
+  description = "CPU units for the RQ worker task (1024 = 1 vCPU)"
+  type        = number
+  default     = 512
+}
+
+variable "worker_memory" {
+  description = "Memory (MiB) for the RQ worker task"
+  type        = number
+  default     = 1024
+}
+
+variable "worker_min_tasks" {
+  description = "Desired number of RQ worker tasks"
+  type        = number
+  default     = 1
+}

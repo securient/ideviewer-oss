@@ -55,6 +55,7 @@
                         <th style="text-align: center; padding: 0.75rem; color: var(--text-muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;">Packages</th>
                         <th style="text-align: center; padding: 0.75rem; color: var(--text-muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;">Vulns</th>
                         <th style="text-align: center; padding: 0.75rem; color: var(--text-muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;">Secrets</th>
+                        <th style="text-align: center; padding: 0.75rem; color: var(--text-muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;">Token</th>
                     </tr>
                 </thead>
                 <tbody id="hostTableBody">
@@ -97,6 +98,15 @@
                         </td>
                         <td style="padding: 0.75rem; text-align: center;">
                             <span style="color: {% if item.secret_count > 0 %}var(--danger){% else %}var(--text-secondary){% endif %}; font-weight: {% if item.secret_count > 0 %}600{% else %}400{% endif %};">{{ item.secret_count }}</span>
+                        </td>
+                        <td style="padding: 0.75rem; text-align: center; font-size: 0.75rem;">
+                            {% if item.host.token_hash and not item.host.token_revoked_at %}
+                                <span style="color: var(--success);" title="Token issued">Issued</span>
+                            {% elif item.host.token_revoked_at %}
+                                <span style="color: var(--danger);" title="Token revoked">Revoked</span>
+                            {% else %}
+                                <span style="color: var(--text-muted);" title="No token yet">Never</span>
+                            {% endif %}
                         </td>
                     </tr>
                     {% endfor %}

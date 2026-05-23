@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -48,7 +49,7 @@ func New(cfg *config.Config, ideScanner *scanner.Scanner) (*Daemon, error) {
 
 	return &Daemon{
 		config:       cfg,
-		apiClient:    api.NewClient(cfg.PortalURL, cfg.CustomerKey),
+		apiClient:    api.NewClientWithToken(cfg.PortalURL, cfg.CustomerKey, cfg.HostToken),
 		scanner:      ideScanner,
 		secrets:      secrets.NewScanner(),
 		dependencies: dependencies.NewScanner(),
@@ -269,12 +270,50 @@ func (d *Daemon) sendToPortal(ideRes *scanner.ScanResult, secRes *secrets.Secret
 		scanData["ai_tools"] = structToMap(aiRes)
 	}
 
-	resp, err := d.apiClient.SubmitReport(scanData)
+	var resp map[string]any
+	err := d.withReauth(func() error {
+		var callErr error
+		resp, callErr = d.apiClient.SubmitReport(scanData)
+		return callErr
+	})
 	if err != nil {
 		log.Printf("Failed to submit report to portal: %v", err)
 		return
 	}
 	log.Printf("Report submitted to portal: %v", resp["stats"])
+}
+
+// withReauth runs the given API call and, if it fails with
+// api.ErrTokenRevoked, clears the saved token, re-registers the host to
+// obtain a fresh one, persists the new token to disk, and retries the
+// original call once. Errors from re-enrollment are returned wrapped.
+func (d *Daemon) withReauth(call func() error) error {
+	err := call()
+	if !errors.Is(err, api.ErrTokenRevoked) {
+		return err
+	}
+
+	log.Println("host token revoked; re-enrolling")
+	d.apiClient.SetHostToken("")
+
+	regResult, regErr := d.apiClient.RegisterHost()
+	if regErr != nil {
+		return fmt.Errorf("re-enrollment after revoked token failed: %w", regErr)
+	}
+
+	if tokRaw, ok := regResult["host_token"]; ok {
+		if tok, ok := tokRaw.(string); ok && tok != "" {
+			d.apiClient.SetHostToken(tok)
+			if d.config != nil {
+				d.config.HostToken = tok
+				if saveErr := config.Save(d.config); saveErr != nil {
+					log.Printf("warn: could not persist new host token: %v", saveErr)
+				}
+			}
+		}
+	}
+
+	return call()
 }
 
 // structToMap converts a struct to map[string]any via JSON round-trip.

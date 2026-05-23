@@ -11,6 +11,15 @@ resource "aws_cloudwatch_log_group" "portal" {
   }
 }
 
+resource "aws_cloudwatch_log_group" "portal_worker" {
+  name              = "/ecs/${local.name_prefix}-portal-worker"
+  retention_in_days = 30
+
+  tags = {
+    Name = "${local.name_prefix}-portal-worker-logs"
+  }
+}
+
 # -----------------------------------------------------------------------------
 # ECS Cluster
 # -----------------------------------------------------------------------------
@@ -122,6 +131,7 @@ resource "aws_ecs_task_definition" "portal" {
         { name = "PORTAL_URL", value = local.portal_url },
         { name = "DISABLE_LOCAL_LOGIN", value = var.disable_local_login },
         { name = "FORCE_HTTPS", value = var.custom_domain != "" ? "true" : "false" },
+        { name = "REDIS_URL", value = "redis://${aws_elasticache_cluster.main.cache_nodes[0].address}:6379/0" },
       ]
 
       secrets = [
@@ -223,5 +233,102 @@ resource "aws_appautoscaling_policy" "ecs_cpu" {
     target_value       = 70.0
     scale_in_cooldown  = 300
     scale_out_cooldown = 60
+  }
+}
+
+# -----------------------------------------------------------------------------
+# RQ Worker Task Definition (background job processor)
+# -----------------------------------------------------------------------------
+
+resource "aws_ecs_task_definition" "portal_worker" {
+  family                   = "${local.name_prefix}-portal-worker"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = var.worker_cpu
+  memory                   = var.worker_memory
+  execution_role_arn       = aws_iam_role.ecs_execution.arn
+  task_role_arn            = aws_iam_role.ecs_task.arn
+
+  container_definitions = jsonencode([
+    {
+      name      = "portal-worker"
+      image     = "${aws_ecr_repository.portal.repository_url}:latest"
+      essential = true
+
+      command = ["sh", "-c", "rq worker default --url $REDIS_URL"]
+
+      environment = [
+        { name = "FLASK_CONFIG", value = "production" },
+        { name = "PORTAL_URL", value = local.portal_url },
+        { name = "DISABLE_LOCAL_LOGIN", value = var.disable_local_login },
+        { name = "FORCE_HTTPS", value = var.custom_domain != "" ? "true" : "false" },
+        { name = "REDIS_URL", value = "redis://${aws_elasticache_cluster.main.cache_nodes[0].address}:6379/0" },
+        { name = "SKIP_DB_INIT", value = "1" },
+      ]
+
+      secrets = [
+        {
+          name      = "SECRET_KEY"
+          valueFrom = "${aws_secretsmanager_secret.app_config.arn}:SECRET_KEY::"
+        },
+        {
+          name      = "DATABASE_URL"
+          valueFrom = "${aws_secretsmanager_secret.app_config.arn}:DATABASE_URL::"
+        },
+        {
+          name      = "GOOGLE_CLIENT_ID"
+          valueFrom = "${aws_secretsmanager_secret.app_config.arn}:GOOGLE_CLIENT_ID::"
+        },
+        {
+          name      = "GOOGLE_CLIENT_SECRET"
+          valueFrom = "${aws_secretsmanager_secret.app_config.arn}:GOOGLE_CLIENT_SECRET::"
+        },
+      ]
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = aws_cloudwatch_log_group.portal_worker.name
+          "awslogs-region"        = var.aws_region
+          "awslogs-stream-prefix" = "worker"
+        }
+      }
+    }
+  ])
+
+  tags = {
+    Name = "${local.name_prefix}-portal-worker"
+  }
+}
+
+# -----------------------------------------------------------------------------
+# RQ Worker ECS Service (internal — no load balancer)
+# -----------------------------------------------------------------------------
+
+resource "aws_ecs_service" "portal_worker" {
+  name            = "${local.name_prefix}-portal-worker"
+  cluster         = aws_ecs_cluster.main.id
+  task_definition = aws_ecs_task_definition.portal_worker.arn
+  desired_count   = var.worker_min_tasks
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = aws_subnet.private[*].id
+    security_groups  = [aws_security_group.ecs.id]
+    assign_public_ip = false
+  }
+
+  depends_on = [
+    aws_db_instance.main,
+    aws_secretsmanager_secret_version.app_config,
+    aws_elasticache_cluster.main,
+  ]
+
+  lifecycle {
+    ignore_changes = [desired_count]
+  }
+
+  tags = {
+    Name = "${local.name_prefix}-portal-worker"
   }
 }

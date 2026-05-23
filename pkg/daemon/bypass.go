@@ -43,7 +43,11 @@ func (d *Daemon) checkHookBypasses() {
 			continue
 		}
 
-		if _, err := d.apiClient.SendHookBypass(bypassData); err != nil {
+		err := d.withReauth(func() error {
+			_, callErr := d.apiClient.SendHookBypass(bypassData)
+			return callErr
+		})
+		if err != nil {
 			log.Printf("Failed to report hook bypass: %v", err)
 			continue
 		}

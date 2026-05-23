@@ -14,7 +14,12 @@ func (d *Daemon) checkOnDemandScans() {
 		return
 	}
 
-	pending, err := d.apiClient.GetPendingScanRequests()
+	var pending []map[string]any
+	err := d.withReauth(func() error {
+		var callErr error
+		pending, callErr = d.apiClient.GetPendingScanRequests()
+		return callErr
+	})
 	if err != nil {
 		log.Printf("Error checking on-demand scans: %v", err)
 		return
@@ -35,8 +40,10 @@ func (d *Daemon) checkOnDemandScans() {
 // the portal for the given request ID.
 func (d *Daemon) executeOnDemandScan(requestID int) {
 	update := func(params map[string]any) error {
-		_, err := d.apiClient.UpdateScanRequest(requestID, params)
-		return err
+		return d.withReauth(func() error {
+			_, err := d.apiClient.UpdateScanRequest(requestID, params)
+			return err
+		})
 	}
 
 	// progress sends a status update; if the scan was cancelled it panics

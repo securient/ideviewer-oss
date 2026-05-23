@@ -53,7 +53,12 @@ func (d *Daemon) handleRealtimeEvents(events []watcher.ChangeEvent) {
 
 	// Submit to realtime endpoint
 	if d.apiClient != nil {
-		resp, err := d.apiClient.SubmitRealtimeEvent(eventData)
+		var resp map[string]any
+		err := d.withReauth(func() error {
+			var callErr error
+			resp, callErr = d.apiClient.SubmitRealtimeEvent(eventData)
+			return callErr
+		})
 		if err != nil {
 			log.Printf("Failed to submit realtime event: %v", err)
 		} else {

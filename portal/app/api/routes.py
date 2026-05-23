@@ -6,6 +6,7 @@ All API endpoints require a valid customer key in the X-Customer-Key header.
 
 from flask import Blueprint, request, jsonify, current_app
 from datetime import datetime
+import hashlib
 import socket
 import traceback
 
@@ -14,6 +15,8 @@ import logging
 from app import db
 from app.models import CustomerKey, Host, ScanReport, ExtensionInfo, SecretFinding, PackageInfo, ScanRequest, TamperAlert, Vulnerability, HookBypass, AIToolInfo
 from app.main.routes import calculate_risk_level
+from app.queue import is_async, enqueue
+from app.jobs.vuln_scan import scan_host_vulnerabilities
 
 vuln_logger = logging.getLogger('ideviewer.vuln_scan')
 
@@ -69,7 +72,7 @@ def log_request():
     """Log incoming API requests for debugging (with sensitive data redacted)."""
     # Redact sensitive headers
     safe_headers = {}
-    sensitive_headers = {'x-customer-key', 'authorization', 'x-api-key', 'cookie'}
+    sensitive_headers = {'x-customer-key', 'x-host-token', 'authorization', 'x-api-key', 'cookie'}
     
     for key, value in request.headers:
         if key.lower() in sensitive_headers:
@@ -86,18 +89,57 @@ def log_request():
 
 def get_customer_key():
     """Extract and validate customer key from request."""
-    
+
     key_value = request.headers.get('X-Customer-Key')
-    
+
     if not key_value:
         return None, {'error': 'Missing X-Customer-Key header'}, 401
-    
+
     key = CustomerKey.query.filter_by(key=key_value, is_active=True).first()
-    
+
     if not key:
         return None, {'error': 'Invalid or inactive customer key'}, 401
-    
+
     return key, None, None
+
+
+def authenticate_request():
+    """Resolve the requester's CustomerKey (and Host if token-auth).
+
+    Returns ``(key, host, err, status)``. ``host`` is None for
+    customer-key auth (enrollment / legacy daemons) and an active Host
+    when a valid X-Host-Token header was presented.
+
+    Resolution order:
+      1. If X-Host-Token is set, look up Host by sha256(token).
+         - Not found, revoked, or inactive -> 401.
+         - Valid -> return (host.customer_key, host, None, None).
+      2. Else fall back to X-Customer-Key.
+    """
+    token = request.headers.get('X-Host-Token')
+    if token:
+        h = hashlib.sha256(token.encode('ascii')).hexdigest()
+        host = Host.query.filter_by(token_hash=h, is_active=True).first()
+        if host is None or host.token_revoked_at is not None:
+            return None, None, {'error': 'Invalid or revoked host token'}, 401
+        host.customer_key.last_used_at = datetime.utcnow()
+        return host.customer_key, host, None, None
+    key, err, status = get_customer_key()
+    if err:
+        return None, None, err, status
+    return key, None, None, None
+
+
+def _enforce_hostname_binding(host, body_hostname):
+    """If token-auth, body hostname must match host.hostname.
+
+    Returns an error tuple (response_dict, status) on mismatch, else None.
+    """
+    if host is None:
+        return None
+    if body_hostname and body_hostname != host.hostname:
+        return {'error': 'Hostname does not match token binding'}, 403
+    return None
 
 
 @api_bp.route('/validate-key', methods=['POST'])
@@ -158,30 +200,38 @@ def register_host():
     Response:
         {
             "success": true,
-            "host_id": 1,
+            "host_id": "<public_id>",
+            "host_token": "<base64url, ~43 chars>",
             "message": "Host registered successfully"
         }
     """
-    
-    key, error, status = get_customer_key()
+
+    key, host_from_token, error, status = authenticate_request()
     if error:
         return jsonify(error), status
-    
+
     data = request.get_json() or {}
-    
+
     hostname = data.get('hostname')
     if not hostname:
         return jsonify({'error': 'hostname is required'}), 400
-    
+
+    # Token auth pins this request to a specific host — refuse hostname spoof.
+    err = _enforce_hostname_binding(host_from_token, hostname)
+    if err:
+        return jsonify(err[0]), err[1]
+
     platform = data.get('platform', 'Unknown')
     ip_address = data.get('ip_address') or request.remote_addr
 
-    # Find or create host
-    host = Host.query.filter_by(
-        hostname=hostname,
-        customer_key_id=key.id
-    ).first()
-    
+    # If we already authenticated by token, prefer that host record.
+    host = host_from_token
+    if host is None:
+        host = Host.query.filter_by(
+            hostname=hostname,
+            customer_key_id=key.id
+        ).first()
+
     if host:
         # Update existing host
         host.ip_address = ip_address
@@ -199,15 +249,37 @@ def register_host():
         )
         db.session.add(host)
         message = 'Host registered successfully'
-    
+
+    # Issue (or rotate) the per-host enrollment token. Plaintext is returned
+    # exactly once — the daemon persists it to its 0600 config file.
+    plaintext = host.issue_token()
+
     key.last_used_at = datetime.utcnow()
     db.session.commit()
-    
+
     return jsonify({
         'success': True,
         'host_id': host.public_id,
-        'message': message
+        'host_token': plaintext,
+        'message': message,
     })
+
+
+@api_bp.route('/host-token/rotate', methods=['POST'])
+def rotate_host_token():
+    """Rotate the current host token.
+
+    Authenticated by X-Host-Token only; the old hash is replaced atomically
+    so the previous plaintext stops working as soon as this returns.
+    """
+    key, host, error, status = authenticate_request()
+    if error:
+        return jsonify(error), status
+    if host is None:
+        return jsonify({'error': 'Token authentication required'}), 401
+    plaintext = host.issue_token()
+    db.session.commit()
+    return jsonify({'success': True, 'host_token': plaintext}), 200
 
 
 @api_bp.route('/report', methods=['POST'])
@@ -240,32 +312,38 @@ def submit_report():
         }
     """
     
-    key, error, status = get_customer_key()
+    key, host_from_token, error, status = authenticate_request()
     if error:
         return jsonify(error), status
-    
+
     data = request.get_json()
-    
+
     if not data:
         return jsonify({'error': 'Request body is required'}), 400
-    
+
     hostname = data.get('hostname')
     if not hostname:
         return jsonify({'error': 'hostname is required'}), 400
-    
+
+    err = _enforce_hostname_binding(host_from_token, hostname)
+    if err:
+        return jsonify(err[0]), err[1]
+
     scan_data = data.get('scan_data')
     if not scan_data:
         return jsonify({'error': 'scan_data is required'}), 400
-    
+
     platform = data.get('platform', 'Unknown')
     ip_address = data.get('ip_address') or request.remote_addr
-    
-    # Find or create host
-    host = Host.query.filter_by(
-        hostname=hostname,
-        customer_key_id=key.id
-    ).first()
-    
+
+    # Token-auth pins the request to a specific host record.
+    host = host_from_token
+    if host is None:
+        host = Host.query.filter_by(
+            hostname=hostname,
+            customer_key_id=key.id
+        ).first()
+
     if not host:
         host = Host(
             hostname=hostname,
@@ -477,25 +555,21 @@ def submit_report():
     # Commit everything first so the daemon gets a fast response
     db.session.commit()
 
-    # Run vulnerability scan in a background thread so it doesn't block the API
-    import threading
+    # Run vulnerability enrichment. Async path uses RQ; sync fallback runs
+    # inline so first-run UX is preserved when Redis is unavailable.
     host_id_for_vuln = host.id
-    app = current_app._get_current_object()
+    job_id = None
+    if is_async():
+        job = enqueue(scan_host_vulnerabilities, host_id_for_vuln)
+        if job is not None:
+            job_id = job.id
+    else:
+        try:
+            scan_host_vulnerabilities(host_id_for_vuln)
+        except Exception as e:
+            current_app.logger.error("inline vuln scan failed: %s", e)
 
-    def _background_vuln_scan():
-        with app.app_context():
-            try:
-                _scan_vulnerabilities(Host.query.get(host_id_for_vuln))
-                db.session.commit()
-                vuln_logger.info(f"Background vulnerability scan completed for host {host_id_for_vuln}")
-            except Exception as e:
-                db.session.rollback()
-                vuln_logger.error(f"Background vulnerability scan failed: {e}")
-
-    thread = threading.Thread(target=_background_vuln_scan, daemon=True)
-    thread.start()
-
-    return jsonify({
+    response_payload = {
         'success': True,
         'report_id': report.id,
         'message': 'Report submitted successfully',
@@ -507,97 +581,11 @@ def submit_report():
             'critical_secrets': critical_secrets,
             'packages_found': packages_count,
             'ai_tools_found': ai_tools_count,
-        }
-    })
-
-
-def _scan_vulnerabilities(host):
-    """Scan a host's packages against OSV.dev and update the Vulnerability table."""
-    from app.osv_client import query_packages_batch, get_ecosystem
-
-    packages = PackageInfo.query.filter_by(host_id=host.id).all()
-    if not packages:
-        return 0
-
-    # Build batch query — only packages with a supported ecosystem
-    batch = []
-    pkg_map = {}  # (name, version, ecosystem) -> PackageInfo
-    for pkg in packages:
-        ecosystem = get_ecosystem(pkg.package_manager)
-        if not ecosystem:
-            continue
-        key = (pkg.name, pkg.version or '', ecosystem)
-        if key not in pkg_map:
-            batch.append({'name': pkg.name, 'version': pkg.version or '', 'ecosystem': ecosystem})
-            pkg_map[key] = pkg
-
-    if not batch:
-        return 0
-
-    vuln_logger.info(f"Querying OSV.dev for {len(batch)} packages on host {host.hostname}")
-
-    results = query_packages_batch(batch)
-
-    # Track which vulns we found in this scan
-    found_vuln_keys = set()
-    vuln_count = 0
-
-    for (name, version, ecosystem), vulns in results.items():
-        pkg = pkg_map.get((name, version, ecosystem))
-        if not pkg:
-            continue
-
-        for v in vulns:
-            vuln_id = v.get('vuln_id', '')
-            if not vuln_id:
-                continue
-
-            found_vuln_keys.add((vuln_id, name, version, pkg.package_manager))
-
-            # Check if this vulnerability already exists for this host
-            existing = Vulnerability.query.filter_by(
-                host_id=host.id,
-                vuln_id=vuln_id,
-                package_name=name,
-                package_version=version,
-            ).first()
-
-            if existing:
-                existing.last_seen_at = datetime.utcnow()
-                existing.is_resolved = False
-                existing.package_info_id = pkg.id
-            else:
-                vuln = Vulnerability(
-                    host_id=host.id,
-                    package_info_id=pkg.id,
-                    package_name=name,
-                    package_version=version,
-                    package_manager=pkg.package_manager,
-                    ecosystem=ecosystem,
-                    vuln_id=vuln_id,
-                    summary=v.get('summary', ''),
-                    severity_label=v.get('severity_label', 'UNKNOWN'),
-                    cvss_score=v.get('cvss_score'),
-                    affected_versions=v.get('affected_versions', ''),
-                    fixed_version=v.get('fixed_version'),
-                    references=v.get('references', []),
-                )
-                db.session.add(vuln)
-                vuln_count += 1
-
-    # Mark vulns no longer present as resolved
-    existing_vulns = Vulnerability.query.filter_by(
-        host_id=host.id,
-        is_resolved=False
-    ).all()
-
-    for ev in existing_vulns:
-        key = (ev.vuln_id, ev.package_name, ev.package_version, ev.package_manager)
-        if key not in found_vuln_keys:
-            ev.is_resolved = True
-
-    vuln_logger.info(f"Found {vuln_count} new vulnerabilities for host {host.hostname}")
-    return vuln_count
+        },
+    }
+    if job_id:
+        response_payload['job_id'] = job_id
+    return jsonify(response_payload)
 
 
 @api_bp.route('/hosts', methods=['GET'])
@@ -651,17 +639,23 @@ def get_pending_scan_requests():
     """
     Get pending scan requests for hosts belonging to this customer key.
     Called by the daemon to check for on-demand scan requests.
+
+    Accepts X-Host-Token (post-enrollment daemons) or X-Customer-Key
+    (legacy daemons). With token auth the result is scoped to just
+    the authenticated host.
     """
-    key, error, status = get_customer_key()
+    key, host_from_token, error, status = authenticate_request()
     if error:
         return jsonify(error), status
-    
-    # Find pending requests for any hosts belonging to this key
-    pending = ScanRequest.query.join(Host).filter(
+
+    q = ScanRequest.query.join(Host).filter(
         Host.customer_key_id == key.id,
         ScanRequest.status == 'pending'
-    ).all()
-    
+    )
+    if host_from_token is not None:
+        q = q.filter(Host.id == host_from_token.id)
+    pending = q.all()
+
     return jsonify({
         'requests': [r.to_dict() for r in pending]
     })
@@ -672,17 +666,25 @@ def update_scan_request(request_id):
     """
     Update the status/progress of an on-demand scan request.
     Called by the daemon to report progress.
+
+    Accepts X-Host-Token (post-enrollment daemons) or X-Customer-Key
+    (legacy daemons). With token auth the request_id must belong to
+    the authenticated host.
     """
-    key, error, status = get_customer_key()
+    key, host_from_token, error, status = authenticate_request()
     if error:
         return jsonify(error), status
-    
+
     scan_req = ScanRequest.query.get_or_404(request_id)
-    
+
     # Verify the scan request belongs to this key's host
     host = Host.query.get(scan_req.host_id)
     if not host or host.customer_key_id != key.id:
         return jsonify({'error': 'Access denied'}), 403
+
+    # Token auth pins the request to one host -- refuse cross-host updates.
+    if host_from_token is not None and host.id != host_from_token.id:
+        return jsonify({'error': 'Scan request does not belong to this host'}), 403
     
     # If scan was cancelled by user, tell the daemon to stop
     if scan_req.status == 'cancelled':
@@ -722,27 +724,33 @@ def heartbeat():
     Receive heartbeat from daemon to confirm it's alive.
     Updates the host's last_heartbeat_at timestamp.
     """
-    key, error, status = get_customer_key()
+    key, host_from_token, error, status = authenticate_request()
     if error:
         return jsonify(error), status
-    
+
     data = request.get_json() or {}
     hostname = data.get('hostname')
-    
+
     if not hostname:
         return jsonify({'error': 'hostname is required'}), 400
-    
-    host = Host.query.filter_by(
-        hostname=hostname,
-        customer_key_id=key.id
-    ).first()
-    
+
+    err = _enforce_hostname_binding(host_from_token, hostname)
+    if err:
+        return jsonify(err[0]), err[1]
+
+    host = host_from_token
+    if host is None:
+        host = Host.query.filter_by(
+            hostname=hostname,
+            customer_key_id=key.id
+        ).first()
+
     if host:
         host.last_heartbeat_at = datetime.utcnow()
         host.daemon_version = data.get('daemon_version')
         key.last_used_at = datetime.utcnow()
         db.session.commit()
-    
+
     return jsonify({
         'acknowledged': True,
         'timestamp': datetime.utcnow().isoformat()
@@ -755,23 +763,29 @@ def receive_alert():
     Receive tamper/integrity alert from daemon.
     Alert types: file_deleted, file_modified, daemon_stopping, uninstall_attempt
     """
-    key, error, status = get_customer_key()
+    key, host_from_token, error, status = authenticate_request()
     if error:
         return jsonify(error), status
-    
+
     data = request.get_json() or {}
     hostname = data.get('hostname')
     alert_type = data.get('alert_type')
     details = data.get('details', '')
-    
+
     if not hostname or not alert_type:
         return jsonify({'error': 'hostname and alert_type are required'}), 400
-    
-    host = Host.query.filter_by(
-        hostname=hostname,
-        customer_key_id=key.id
-    ).first()
-    
+
+    err = _enforce_hostname_binding(host_from_token, hostname)
+    if err:
+        return jsonify(err[0]), err[1]
+
+    host = host_from_token
+    if host is None:
+        host = Host.query.filter_by(
+            hostname=hostname,
+            customer_key_id=key.id
+        ).first()
+
     if not host:
         return jsonify({'error': 'Host not found'}), 404
     
@@ -819,7 +833,7 @@ def deregister_host():
             "message": "Host deregistered successfully"
         }
     """
-    key, error, status = get_customer_key()
+    key, host_from_token, error, status = authenticate_request()
     if error:
         return jsonify(error), status
 
@@ -829,10 +843,16 @@ def deregister_host():
     if not hostname:
         return jsonify({'error': 'hostname is required'}), 400
 
-    host = Host.query.filter_by(
-        hostname=hostname,
-        customer_key_id=key.id
-    ).first()
+    err = _enforce_hostname_binding(host_from_token, hostname)
+    if err:
+        return jsonify(err[0]), err[1]
+
+    host = host_from_token
+    if host is None:
+        host = Host.query.filter_by(
+            hostname=hostname,
+            customer_key_id=key.id
+        ).first()
 
     if not host:
         return jsonify({'error': 'Host not found'}), 404
@@ -864,7 +884,7 @@ def receive_realtime_event():
     Receive a real-time filesystem change event from the daemon.
     Triggered when IDE extension directories change (install/uninstall/update).
     """
-    key, error, status = get_customer_key()
+    key, host_from_token, error, status = authenticate_request()
     if error:
         return jsonify(error), status
 
@@ -874,10 +894,16 @@ def receive_realtime_event():
     if not hostname:
         return jsonify({'error': 'hostname is required'}), 400
 
-    host = Host.query.filter_by(
-        hostname=hostname,
-        customer_key_id=key.id
-    ).first()
+    err = _enforce_hostname_binding(host_from_token, hostname)
+    if err:
+        return jsonify(err[0]), err[1]
+
+    host = host_from_token
+    if host is None:
+        host = Host.query.filter_by(
+            hostname=hostname,
+            customer_key_id=key.id
+        ).first()
 
     if not host:
         return jsonify({'error': 'Host not found'}), 404
@@ -982,7 +1008,7 @@ def receive_hook_bypass():
     Receive a hook bypass event from the daemon.
     This is triggered when a developer uses --no-verify to skip the pre-commit hook.
     """
-    key, error, status = get_customer_key()
+    key, host_from_token, error, status = authenticate_request()
     if error:
         return jsonify(error), status
 
@@ -992,10 +1018,16 @@ def receive_hook_bypass():
     if not hostname:
         return jsonify({'error': 'hostname is required'}), 400
 
-    host = Host.query.filter_by(
-        hostname=hostname,
-        customer_key_id=key.id
-    ).first()
+    err = _enforce_hostname_binding(host_from_token, hostname)
+    if err:
+        return jsonify(err[0]), err[1]
+
+    host = host_from_token
+    if host is None:
+        host = Host.query.filter_by(
+            hostname=hostname,
+            customer_key_id=key.id
+        ).first()
 
     if not host:
         return jsonify({'error': 'Host not found'}), 404

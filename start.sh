@@ -105,6 +105,43 @@ EOF
     echo -e "${CYAN}Running database migrations...${NC}"
     flask db upgrade 2>&1 | grep -E "Running upgrade|No upgrade" || true
 
+    # Step 6.5: Optional Redis + RQ worker (zero-config: skip silently if unavailable)
+    REDIS_READY=0
+    if command -v nc &>/dev/null && nc -z 127.0.0.1 6379 2>/dev/null; then
+        export REDIS_URL="redis://127.0.0.1:6379/0"
+        REDIS_READY=1
+        echo -e "${GREEN}Redis detected on 127.0.0.1:6379 — async job queue enabled${NC}"
+    elif command -v docker &>/dev/null && docker info &>/dev/null; then
+        echo -e "${CYAN}Starting temporary Redis container (ideviewer-redis)...${NC}"
+        docker rm -f ideviewer-redis &>/dev/null || true
+        if docker run -d --rm --name ideviewer-redis -p 6379:6379 redis:7-alpine &>/dev/null; then
+            # Wait briefly for Redis to accept connections
+            for _ in 1 2 3 4 5; do
+                if command -v nc &>/dev/null && nc -z 127.0.0.1 6379 2>/dev/null; then
+                    break
+                fi
+                sleep 1
+            done
+            export REDIS_URL="redis://127.0.0.1:6379/0"
+            REDIS_READY=1
+            trap 'docker stop ideviewer-redis &>/dev/null || true' EXIT
+            echo -e "${GREEN}Redis container started — async job queue enabled${NC}"
+        else
+            echo -e "${YELLOW}Could not start Redis container — portal will run synchronously${NC}"
+        fi
+    else
+        echo -e "${YELLOW}Redis not available (no listener on :6379 and no Docker) — portal will run synchronously${NC}"
+    fi
+
+    # Start RQ worker in the background if Redis is up
+    if [ "$REDIS_READY" = "1" ]; then
+        rq worker default --url "$REDIS_URL" >/tmp/ideviewer-rq-worker.log 2>&1 &
+        WORKER_PID=$!
+        # Compose trap: kill worker AND stop docker container (if any) on exit
+        trap 'kill $WORKER_PID 2>/dev/null || true; docker stop ideviewer-redis &>/dev/null || true' EXIT
+        echo -e "${GREEN}Started RQ worker (PID $WORKER_PID)${NC}"
+    fi
+
     # Step 7: Start
     echo ""
     echo -e "${GREEN}════════════════════════════════════════${NC}"

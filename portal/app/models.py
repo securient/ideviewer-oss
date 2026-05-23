@@ -134,25 +134,72 @@ class Host(db.Model):
     is_active = db.Column(db.Boolean, default=True)
     last_realtime_event = db.Column(db.DateTime)  # Last real-time filesystem change event
 
+    # Per-host enrollment token (T1.3). Only the sha256 hex digest is stored;
+    # plaintext is returned exactly once at issue time.
+    token_hash = db.Column(db.String(64), nullable=True, index=True)
+    token_issued_at = db.Column(db.DateTime, nullable=True)
+    token_revoked_at = db.Column(db.DateTime, nullable=True)
+
     # Unique constraint on hostname + customer_key
     __table_args__ = (
         db.UniqueConstraint('hostname', 'customer_key_id', name='unique_host_per_key'),
     )
-    
+
     # Relationships
     scan_reports = db.relationship('ScanReport', backref='host', lazy='dynamic',
                                    order_by='desc(ScanReport.created_at)')
-    
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         if not self.public_id:
             self.public_id = str(uuid.uuid4())
-    
+
     @property
     def latest_report(self):
         """Get the most recent scan report."""
         return self.scan_reports.first()
-    
+
+    # ────────────────────────────────────────────────────────────────
+    # Per-host enrollment-token helpers
+    # ────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def generate_host_token():
+        """Return ``(plaintext, sha256_hex)``. Plaintext is base64url, ~43 chars."""
+        import base64
+        import hashlib
+        import secrets
+        raw = secrets.token_bytes(32)
+        plaintext = base64.urlsafe_b64encode(raw).rstrip(b'=').decode('ascii')
+        sha = hashlib.sha256(plaintext.encode('ascii')).hexdigest()
+        return plaintext, sha
+
+    @staticmethod
+    def hash_token(plaintext: str) -> str:
+        """Return the sha256 hex digest of a token string."""
+        import hashlib
+        return hashlib.sha256(plaintext.encode('ascii')).hexdigest()
+
+    def issue_token(self) -> str:
+        """Issue a fresh token, store its hash, return plaintext."""
+        plaintext, h = self.generate_host_token()
+        self.token_hash = h
+        self.token_issued_at = datetime.utcnow()
+        self.token_revoked_at = None
+        return plaintext
+
+    def revoke_token(self) -> None:
+        """Mark the current token as revoked."""
+        self.token_revoked_at = datetime.utcnow()
+
+    def token_is_valid(self) -> bool:
+        """True iff the host has an active, unrevoked token and is itself active."""
+        return (
+            self.token_hash is not None
+            and self.token_revoked_at is None
+            and self.is_active
+        )
+
     def __repr__(self):
         return f'<Host {self.hostname}>'
 

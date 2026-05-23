@@ -86,6 +86,8 @@ cd portal && python3 -m pytest ../tests/ -v
 make build-all
 ```
 
+CI runs the Go tests in the `test` job and the portal tests in the `portal-test` job (with Postgres and Redis service containers); both must pass before the `build` job runs.
+
 ## Pull Request Guidelines
 
 1. **Create a feature branch** from `main`:

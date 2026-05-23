@@ -891,6 +891,21 @@ def cancel_scan(host_id):
     })
 
 
+@main_bp.route('/host/<host_id>/revoke-token', methods=['POST'])
+@login_required
+def revoke_host_token(host_id):
+    """Revoke the per-host enrollment token. The daemon will re-enroll on
+    next check-in and receive a fresh token."""
+    host = Host.query.filter_by(public_id=host_id).first_or_404()
+    if host.customer_key.user_id != current_user.id:
+        flash('Access denied', 'error')
+        return redirect(url_for('main.all_hosts'))
+    host.revoke_token()
+    db.session.commit()
+    flash(f'Host token revoked for {host.hostname}. The daemon will be re-issued a token on next check-in.', 'success')
+    return redirect(request.referrer or url_for('main.host_detail', host_id=host.public_id))
+
+
 @main_bp.route('/host/<host_id>/delete', methods=['POST'])
 @login_required
 def delete_host(host_id):

@@ -55,6 +55,15 @@ class ProductionConfig(Config):
     if SQLALCHEMY_DATABASE_URI and SQLALCHEMY_DATABASE_URI.startswith('postgres://'):
         SQLALCHEMY_DATABASE_URI = SQLALCHEMY_DATABASE_URI.replace('postgres://', 'postgresql://', 1)
 
+    # SQLAlchemy engine options tuned for RDS db.t3.micro (~100 max_connections).
+    # Conservative per-process pool keeps headroom for multiple ECS tasks * gunicorn workers.
+    SQLALCHEMY_ENGINE_OPTIONS = {
+        "pool_size": int(os.environ.get("DB_POOL_SIZE", "5")),
+        "max_overflow": int(os.environ.get("DB_MAX_OVERFLOW", "5")),
+        "pool_pre_ping": True,
+        "pool_recycle": int(os.environ.get("DB_POOL_RECYCLE", "1800")),
+    }
+
     # Session security — SECURE cookies only when HTTPS is available
     # Set FORCE_HTTPS=true when you have a custom domain with SSL
     SESSION_COOKIE_SECURE = os.environ.get('FORCE_HTTPS', 'false').lower() == 'true'

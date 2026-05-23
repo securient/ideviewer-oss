@@ -7,7 +7,10 @@ func (d *Daemon) sendHeartbeat() {
 	if d.apiClient == nil {
 		return
 	}
-	_, err := d.apiClient.SendHeartbeat()
+	err := d.withReauth(func() error {
+		_, callErr := d.apiClient.SendHeartbeat()
+		return callErr
+	})
 	if err != nil {
 		log.Printf("Heartbeat failed: %v", err)
 		return

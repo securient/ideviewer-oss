@@ -28,6 +28,8 @@ This automatically:
 5. Runs database migrations (creates SQLite database)
 6. Starts the Flask server on `http://localhost:5000`
 
+The background job queue is auto-detected: if Redis is reachable (or Docker is available to start a local Redis instance), vulnerability scans run on an RQ worker. Otherwise, the portal runs scans synchronously inline — no configuration required.
+
 ## Manual Start
 
 ```bash
