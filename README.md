@@ -171,6 +171,7 @@ Each component is classified by type (`skill`, `mcp-server`, `cloud-mcp`, `integ
 - **Database Migrations** — Alembic-managed schema for safe upgrades
 - **Per-Host Token Auth** — daemons enroll with a customer key, then authenticate with a per-host token; revocable from the host detail page
 - **Background Job Queue** — vulnerability lookups dispatched to an RQ worker when Redis is available; falls back to inline scans otherwise
+- **Outbound Webhooks** — push events (`tamper_alert.created`, `extension.high_risk_detected`, `hook_bypass.detected`, `policy.violation`) to any HTTP endpoint with HMAC-signed payloads and automatic retry
 
 ## Deployment
 

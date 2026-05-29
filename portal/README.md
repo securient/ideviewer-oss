@@ -112,6 +112,77 @@ Admins can revoke a host's token from the host detail page in the portal UI. On 
 
 Daemons built before this change use the customer key indefinitely and continue working without modification.
 
+## Outbound webhooks
+
+The portal can push events to any HTTP endpoint as they happen. Manage subscriptions at `/webhooks`. Each subscription has a URL, an event filter (one or more of the event types below, or `*` for all), and an HMAC signing secret that's shown exactly once on creation.
+
+### Event types
+
+| Event | Fired when |
+|---|---|
+| `tamper_alert.created` | The daemon reports a tamper event (`/api/alert`) or a host deregisters (`/api/deregister-host`) |
+| `extension.high_risk_detected` | A scan or realtime rescan surfaces an extension with `risk_level` of `high` or `critical` |
+| `hook_bypass.detected` | A developer commits with `--no-verify` and the daemon reports it (`/api/hook-bypass`) |
+| `policy.violation` | Reserved for the policy engine (T2.2) |
+
+### Payload format
+
+Every delivery is a `POST` with `Content-Type: application/json` and the body:
+
+```json
+{
+  "id": "evt_5a3c…",
+  "type": "tamper_alert.created",
+  "created_at": "2026-05-29T18:42:01.123456Z",
+  "data": { … event-specific fields … }
+}
+```
+
+Headers:
+
+| Header | Value |
+|---|---|
+| `X-IDEViewer-Signature` | `t=<unix-seconds>,v1=<hex>` — Stripe-style |
+| `X-IDEViewer-Event-Type` | The event type (same as `type` in the body) |
+| `X-IDEViewer-Event-Id` | The event id (same as `id` in the body) |
+| `User-Agent` | `IDEViewer-Webhook/1.0` |
+
+### Verifying signatures
+
+The signed payload is `f"{t}.{raw_body}"` (literal `.` between the timestamp and the raw request body) HMAC-SHA256'd with the subscription's secret. Reject any request where the timestamp is more than five minutes off from your clock — that defeats replay.
+
+Python receiver example:
+
+```python
+import hmac, hashlib, time
+from flask import request, abort
+
+SECRET = "whsec_…"  # the value shown once on creation
+
+@app.post("/webhook")
+def handle():
+    sig = request.headers.get("X-IDEViewer-Signature", "")
+    parts = dict(p.split("=", 1) for p in sig.split(",") if "=" in p)
+    t, v1 = parts.get("t"), parts.get("v1")
+    if not t or not v1 or abs(time.time() - int(t)) > 300:
+        abort(401)
+    expected = hmac.new(
+        SECRET.encode(), f"{t}.{request.get_data(as_text=True)}".encode(), hashlib.sha256
+    ).hexdigest()
+    if not hmac.compare_digest(expected, v1):
+        abort(401)
+    # ... process request.json ...
+    return "", 204
+```
+
+### Retries and health
+
+Failed deliveries retry on a fixed schedule: 30 seconds, 2 minutes, 10 minutes, 1 hour, 6 hours (six attempts total, ~7.5h window). Each subscription's `consecutive_failures` counter increments per terminal failure and resets on the next success — at 25 consecutive failures the subscription auto-pauses to stop hammering a dead endpoint. You can replay any past delivery (succeeded or failed) from the subscription detail page.
+
+### Async vs sync
+
+When `REDIS_URL` is set, deliveries run on the RQ worker and benefit from the full retry schedule. When unset, the portal attempts a single inline POST and gives up if it fails — the same degradation pattern as the OSV.dev vuln scan.
+
 ## Production Deployment
 
 ### Google Cloud Run
