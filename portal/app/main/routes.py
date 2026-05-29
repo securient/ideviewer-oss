@@ -8,8 +8,12 @@ from datetime import datetime, timedelta
 from sqlalchemy import or_
 
 from app import db
-from app.models import CustomerKey, Host, ScanReport, ExtensionInfo, SecretFinding, PackageInfo, ScanRequest, TamperAlert, Vulnerability, HookBypass, AIToolInfo
-from app.auth.forms import CustomerKeyForm
+from app.models import (
+    CustomerKey, Host, ScanReport, ExtensionInfo, SecretFinding, PackageInfo,
+    ScanRequest, TamperAlert, Vulnerability, HookBypass, AIToolInfo,
+    WebhookSubscription, WebhookDelivery,
+)
+from app.auth.forms import CustomerKeyForm, WebhookSubscriptionForm
 from app.marketplace import fetch_extension_details
 
 main_bp = Blueprint('main', __name__)
@@ -791,10 +795,160 @@ def delete_key(key_id):
     
     db.session.delete(key)
     db.session.commit()
-    
+
     flash(f'Key {key.name} has been deleted', 'success')
-    
+
     return redirect(url_for('main.keys'))
+
+
+def _user_subscription_or_404(public_id):
+    sub = WebhookSubscription.query.filter_by(public_id=public_id).first_or_404()
+    if sub.customer_key.user_id != current_user.id:
+        flash('Access denied', 'error')
+        return None
+    return sub
+
+
+@main_bp.route('/webhooks')
+@login_required
+def webhooks():
+    """List outbound webhook subscriptions for the user's customer keys."""
+    key_ids = [k.id for k in current_user.customer_keys]
+    subs = (
+        WebhookSubscription.query
+        .filter(WebhookSubscription.customer_key_id.in_(key_ids))
+        .order_by(WebhookSubscription.created_at.desc())
+        .all()
+    )
+    form = WebhookSubscriptionForm()
+    form.customer_key_id.choices = [
+        (k.id, k.name) for k in current_user.customer_keys.filter_by(is_active=True)
+    ]
+    revealed_secret = request.args.get('reveal')  # public_id of just-created sub
+    return render_template(
+        'main/webhooks.html',
+        subscriptions=subs,
+        form=form,
+        revealed_secret=revealed_secret,
+    )
+
+
+@main_bp.route('/webhooks/create', methods=['POST'])
+@login_required
+def create_webhook():
+    form = WebhookSubscriptionForm()
+    form.customer_key_id.choices = [
+        (k.id, k.name) for k in current_user.customer_keys.filter_by(is_active=True)
+    ]
+    if not form.validate_on_submit():
+        for field, errors in form.errors.items():
+            for err in errors:
+                flash(f'{field}: {err}', 'error')
+        return redirect(url_for('main.webhooks'))
+
+    key = CustomerKey.query.get_or_404(form.customer_key_id.data)
+    if key.user_id != current_user.id:
+        flash('Access denied', 'error')
+        return redirect(url_for('main.webhooks'))
+
+    sub = WebhookSubscription(
+        customer_key_id=key.id,
+        name=form.name.data,
+        url=form.url.data,
+        event_types=form.event_types.data,
+        created_by_user_id=current_user.id,
+    )
+    db.session.add(sub)
+    db.session.commit()
+    flash(f'Webhook "{sub.name}" created. Copy the secret below — it will not be shown again.', 'success')
+    return redirect(url_for('main.webhooks', reveal=sub.public_id))
+
+
+@main_bp.route('/webhooks/<public_id>')
+@login_required
+def webhook_detail(public_id):
+    sub = _user_subscription_or_404(public_id)
+    if sub is None:
+        return redirect(url_for('main.webhooks'))
+    deliveries = (
+        WebhookDelivery.query
+        .filter_by(subscription_id=sub.id)
+        .order_by(WebhookDelivery.created_at.desc())
+        .limit(50)
+        .all()
+    )
+    return render_template(
+        'main/webhook_detail.html',
+        subscription=sub,
+        deliveries=deliveries,
+    )
+
+
+@main_bp.route('/webhooks/<public_id>/toggle', methods=['POST'])
+@login_required
+def toggle_webhook(public_id):
+    sub = _user_subscription_or_404(public_id)
+    if sub is None:
+        return redirect(url_for('main.webhooks'))
+    sub.is_active = not sub.is_active
+    if sub.is_active:
+        sub.consecutive_failures = 0
+    db.session.commit()
+    flash(f'Webhook {sub.name} is now {"active" if sub.is_active else "paused"}', 'success')
+    return redirect(url_for('main.webhooks'))
+
+
+@main_bp.route('/webhooks/<public_id>/rotate-secret', methods=['POST'])
+@login_required
+def rotate_webhook_secret(public_id):
+    sub = _user_subscription_or_404(public_id)
+    if sub is None:
+        return redirect(url_for('main.webhooks'))
+    sub.secret = WebhookSubscription.generate_secret()
+    db.session.commit()
+    flash('Secret rotated. Copy the new value below — it will not be shown again.', 'success')
+    return redirect(url_for('main.webhooks', reveal=sub.public_id))
+
+
+@main_bp.route('/webhooks/<public_id>/delete', methods=['POST'])
+@login_required
+def delete_webhook(public_id):
+    sub = _user_subscription_or_404(public_id)
+    if sub is None:
+        return redirect(url_for('main.webhooks'))
+    name = sub.name
+    db.session.delete(sub)
+    db.session.commit()
+    flash(f'Webhook "{name}" deleted', 'success')
+    return redirect(url_for('main.webhooks'))
+
+
+@main_bp.route('/webhooks/<public_id>/deliveries/<int:delivery_id>/replay', methods=['POST'])
+@login_required
+def replay_webhook_delivery(public_id, delivery_id):
+    sub = _user_subscription_or_404(public_id)
+    if sub is None:
+        return redirect(url_for('main.webhooks'))
+    delivery = WebhookDelivery.query.filter_by(id=delivery_id, subscription_id=sub.id).first_or_404()
+
+    # Reset state and re-enqueue.
+    delivery.status = WebhookDelivery.STATUS_PENDING
+    delivery.attempt_count = 0
+    delivery.last_error = None
+    delivery.completed_at = None
+    db.session.commit()
+
+    from app.queue import enqueue
+    from app.jobs.webhook_delivery import deliver_webhook
+    job = enqueue(deliver_webhook, delivery.id, retry_max=0)
+    if job is None:
+        try:
+            deliver_webhook(delivery.id)
+        except Exception:
+            current_app.logger.exception('inline replay failed')
+
+    flash('Delivery re-queued', 'success')
+    return redirect(url_for('main.webhook_detail', public_id=sub.public_id))
 
 
 @main_bp.route('/alert/<int:alert_id>/acknowledge', methods=['POST'])
