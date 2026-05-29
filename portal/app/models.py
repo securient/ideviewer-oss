@@ -637,3 +637,165 @@ class Vulnerability(db.Model):
 
     def __repr__(self):
         return f'<Vulnerability {self.vuln_id} for {self.package_name}@{self.package_version}>'
+
+
+class WebhookSubscription(db.Model):
+    """Outbound webhook endpoint registered by a customer.
+
+    The HMAC secret is stored in plaintext because the portal needs it to
+    sign every outgoing delivery; the receiver needs the same plaintext to
+    verify. Show it once in the UI on creation and only on explicit reveal
+    after that.
+    """
+
+    __tablename__ = 'webhook_subscriptions'
+
+    id = db.Column(db.Integer, primary_key=True)
+    public_id = db.Column(db.String(36), unique=True, nullable=False, index=True)
+    customer_key_id = db.Column(db.Integer, db.ForeignKey('customer_keys.id'), nullable=False, index=True)
+
+    name = db.Column(db.String(100), nullable=False)
+    url = db.Column(db.String(500), nullable=False)
+
+    # JSON array of event-type strings; ["*"] subscribes to all.
+    event_types = db.Column(db.JSON, nullable=False)
+
+    # Plaintext HMAC secret, format "whsec_<43 base64url chars>".
+    secret = db.Column(db.String(64), nullable=False)
+
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+
+    # Health tracking — drives auto-disable after CONSECUTIVE_FAILURE_LIMIT.
+    consecutive_failures = db.Column(db.Integer, default=0, nullable=False)
+    last_success_at = db.Column(db.DateTime, nullable=True)
+    last_failure_at = db.Column(db.DateTime, nullable=True)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+
+    customer_key = db.relationship(
+        'CustomerKey',
+        backref=db.backref('webhook_subscriptions', lazy='dynamic'),
+    )
+    creator = db.relationship('User')
+
+    CONSECUTIVE_FAILURE_LIMIT = 25  # auto-deactivate after this many
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        if not self.public_id:
+            self.public_id = str(uuid.uuid4())
+        if not self.secret:
+            self.secret = self.generate_secret()
+
+    @staticmethod
+    def generate_secret():
+        """Return a fresh secret like ``whsec_<43-char base64url>``."""
+        import base64
+        import secrets
+        raw = secrets.token_bytes(32)
+        return 'whsec_' + base64.urlsafe_b64encode(raw).rstrip(b'=').decode('ascii')
+
+    def matches_event(self, event_type: str) -> bool:
+        if not self.is_active:
+            return False
+        types = self.event_types or []
+        return '*' in types or event_type in types
+
+    def record_success(self):
+        self.consecutive_failures = 0
+        self.last_success_at = datetime.utcnow()
+
+    def record_failure(self):
+        self.consecutive_failures = (self.consecutive_failures or 0) + 1
+        self.last_failure_at = datetime.utcnow()
+        if self.consecutive_failures >= self.CONSECUTIVE_FAILURE_LIMIT:
+            self.is_active = False
+
+    def to_dict(self, *, reveal_secret: bool = False):
+        return {
+            'id': self.public_id,
+            'name': self.name,
+            'url': self.url,
+            'event_types': self.event_types or [],
+            'secret': self.secret if reveal_secret else None,
+            'is_active': self.is_active,
+            'consecutive_failures': self.consecutive_failures,
+            'last_success_at': self.last_success_at.isoformat() if self.last_success_at else None,
+            'last_failure_at': self.last_failure_at.isoformat() if self.last_failure_at else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+    def __repr__(self):
+        return f'<WebhookSubscription {self.public_id} -> {self.url}>'
+
+
+class WebhookDelivery(db.Model):
+    """One delivery attempt of one event to one subscription.
+
+    Persisted before the first attempt and updated in place across retries.
+    Keeping every attempt's outcome (status, response_code, error) lets us
+    expose a deliveries timeline in the portal and replay failures.
+    """
+
+    __tablename__ = 'webhook_deliveries'
+
+    # status values: pending, succeeded, failed, retrying
+    STATUS_PENDING = 'pending'
+    STATUS_RETRYING = 'retrying'
+    STATUS_SUCCEEDED = 'succeeded'
+    STATUS_FAILED = 'failed'
+
+    id = db.Column(db.Integer, primary_key=True)
+    subscription_id = db.Column(
+        db.Integer,
+        db.ForeignKey('webhook_subscriptions.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+
+    event_id = db.Column(db.String(36), nullable=False, index=True)
+    event_type = db.Column(db.String(100), nullable=False, index=True)
+    payload = db.Column(db.JSON, nullable=False)
+
+    status = db.Column(db.String(20), default=STATUS_PENDING, nullable=False)
+    attempt_count = db.Column(db.Integer, default=0, nullable=False)
+
+    last_attempt_at = db.Column(db.DateTime, nullable=True)
+    response_code = db.Column(db.Integer, nullable=True)
+    response_body = db.Column(db.Text, nullable=True)
+    last_error = db.Column(db.Text, nullable=True)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+    completed_at = db.Column(db.DateTime, nullable=True)
+
+    subscription = db.relationship(
+        'WebhookSubscription',
+        backref=db.backref(
+            'deliveries',
+            lazy='dynamic',
+            cascade='all, delete-orphan',
+            order_by='desc(WebhookDelivery.created_at)',
+        ),
+    )
+
+    __table_args__ = (
+        db.Index('idx_delivery_sub_status', 'subscription_id', 'status'),
+    )
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'event_id': self.event_id,
+            'event_type': self.event_type,
+            'status': self.status,
+            'attempt_count': self.attempt_count,
+            'last_attempt_at': self.last_attempt_at.isoformat() if self.last_attempt_at else None,
+            'response_code': self.response_code,
+            'last_error': self.last_error,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'completed_at': self.completed_at.isoformat() if self.completed_at else None,
+        }
+
+    def __repr__(self):
+        return f'<WebhookDelivery {self.id} {self.event_type} [{self.status}]>'
