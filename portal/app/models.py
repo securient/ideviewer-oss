@@ -799,3 +799,134 @@ class WebhookDelivery(db.Model):
 
     def __repr__(self):
         return f'<WebhookDelivery {self.id} {self.event_type} [{self.status}]>'
+
+
+class ExtensionPolicy(db.Model):
+    """Per-customer rule matching extensions and assigning an action.
+
+    Matching: each match_* field is optional; populated criteria are ANDed.
+    Glob fields use fnmatch (so ``ms-*`` matches ``ms-python``). risk_level
+    is treated as a minimum threshold (``low`` <= ``medium`` <= ``high`` <=
+    ``critical``).
+
+    Resolution: policies are evaluated in priority order (lower = first)
+    and the first match wins per extension. Putting an ``allow`` policy
+    above a broader ``block-alert`` whitelists specific extensions.
+    """
+
+    __tablename__ = 'extension_policies'
+
+    ACTION_ALLOW = 'allow'
+    ACTION_WARN = 'warn'
+    ACTION_BLOCK_ALERT = 'block-alert'
+    VALID_ACTIONS = (ACTION_ALLOW, ACTION_WARN, ACTION_BLOCK_ALERT)
+
+    id = db.Column(db.Integer, primary_key=True)
+    public_id = db.Column(db.String(36), unique=True, nullable=False, index=True)
+    customer_key_id = db.Column(db.Integer, db.ForeignKey('customer_keys.id'), nullable=False, index=True)
+
+    name = db.Column(db.String(100), nullable=False)
+    priority = db.Column(db.Integer, nullable=False, default=100)
+    action = db.Column(db.String(20), nullable=False)
+
+    match_publisher = db.Column(db.String(200), nullable=True)
+    match_extension_id = db.Column(db.String(200), nullable=True)
+    match_permission_glob = db.Column(db.String(200), nullable=True)
+    match_risk_level = db.Column(db.String(20), nullable=True)  # min threshold
+
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+
+    customer_key = db.relationship(
+        'CustomerKey',
+        backref=db.backref('extension_policies', lazy='dynamic'),
+    )
+    creator = db.relationship('User')
+
+    __table_args__ = (
+        db.Index('idx_policy_customer_active', 'customer_key_id', 'is_active'),
+    )
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        if not self.public_id:
+            self.public_id = str(uuid.uuid4())
+
+    def to_dict(self):
+        return {
+            'id': self.public_id,
+            'name': self.name,
+            'priority': self.priority,
+            'action': self.action,
+            'match_publisher': self.match_publisher,
+            'match_extension_id': self.match_extension_id,
+            'match_permission_glob': self.match_permission_glob,
+            'match_risk_level': self.match_risk_level,
+            'is_active': self.is_active,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+    def __repr__(self):
+        return f'<ExtensionPolicy {self.name} [{self.action}]>'
+
+
+class PolicyViolation(db.Model):
+    """One (host, policy, extension, extension_version) match.
+
+    Upserted on rescan: re-detecting the same violation refreshes
+    last_seen_at instead of inserting a duplicate row. Resolved by admin
+    or auto-cleared when the offending extension goes away.
+    """
+
+    __tablename__ = 'policy_violations'
+
+    id = db.Column(db.Integer, primary_key=True)
+    host_id = db.Column(db.Integer, db.ForeignKey('hosts.id'), nullable=False)
+    policy_id = db.Column(db.Integer, db.ForeignKey('extension_policies.id'), nullable=False)
+
+    extension_id = db.Column(db.String(200), nullable=False)
+    extension_name = db.Column(db.String(200), nullable=True)
+    extension_version = db.Column(db.String(50), nullable=True)
+    publisher = db.Column(db.String(200), nullable=True)
+    risk_level = db.Column(db.String(20), nullable=True)
+    action_taken = db.Column(db.String(20), nullable=False)  # snapshot of policy.action at detection
+
+    first_detected_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    last_seen_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    is_resolved = db.Column(db.Boolean, default=False, nullable=False)
+    resolved_at = db.Column(db.DateTime, nullable=True)
+    resolved_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+
+    host = db.relationship('Host', backref=db.backref('policy_violations', lazy='dynamic'))
+    policy = db.relationship('ExtensionPolicy', backref=db.backref('violations', lazy='dynamic'))
+    resolver = db.relationship('User')
+
+    __table_args__ = (
+        db.Index('idx_violation_host_resolved', 'host_id', 'is_resolved'),
+        db.Index('idx_violation_policy', 'policy_id'),
+        db.UniqueConstraint(
+            'host_id', 'policy_id', 'extension_id', 'extension_version',
+            name='uq_policy_violation_per_ext_version',
+        ),
+    )
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'host_id': self.host_id,
+            'policy_id': self.policy_id,
+            'extension_id': self.extension_id,
+            'extension_name': self.extension_name,
+            'extension_version': self.extension_version,
+            'publisher': self.publisher,
+            'risk_level': self.risk_level,
+            'action_taken': self.action_taken,
+            'first_detected_at': self.first_detected_at.isoformat() if self.first_detected_at else None,
+            'last_seen_at': self.last_seen_at.isoformat() if self.last_seen_at else None,
+            'is_resolved': self.is_resolved,
+            'resolved_at': self.resolved_at.isoformat() if self.resolved_at else None,
+        }
+
+    def __repr__(self):
+        return f'<PolicyViolation host={self.host_id} ext={self.extension_id}@{self.extension_version}>'
