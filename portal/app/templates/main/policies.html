@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+
+{% block title %}Policies - IDE Viewer{% endblock %}
+
+{% block content %}
+<div class="fade-in">
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 2rem;">
+        <div>
+            <h1 style="font-size: 1.75rem; font-weight: 700; margin-bottom: 0.25rem;">Extension Policies</h1>
+            <p style="color: var(--text-secondary);">Define which extensions to allow, warn on, or block. First match wins by priority.</p>
+        </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: 1fr 360px; gap: 2rem;">
+        <div class="card">
+            <div class="card-header">
+                <h2 class="card-title">
+                    <i class="fas fa-gavel" style="color: var(--accent-primary);"></i>
+                    Active rules
+                </h2>
+            </div>
+
+            {% if policies %}
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Name</th>
+                            <th>Match</th>
+                            <th>Action</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for p in policies %}
+                        <tr>
+                            <td><code class="mono">{{ p.priority }}</code></td>
+                            <td style="font-weight: 500;">{{ p.name }}</td>
+                            <td style="font-size: 0.8125rem;">
+                                {% if p.match_publisher %}<div><span style="color: var(--text-muted);">publisher:</span> <code class="mono">{{ p.match_publisher }}</code></div>{% endif %}
+                                {% if p.match_extension_id %}<div><span style="color: var(--text-muted);">ext:</span> <code class="mono">{{ p.match_extension_id }}</code></div>{% endif %}
+                                {% if p.match_permission_glob %}<div><span style="color: var(--text-muted);">perm:</span> <code class="mono">{{ p.match_permission_glob }}</code></div>{% endif %}
+                                {% if p.match_risk_level %}<div><span style="color: var(--text-muted);">risk &ge;</span> <code class="mono">{{ p.match_risk_level }}</code></div>{% endif %}
+                            </td>
+                            <td>
+                                {% if p.action == 'allow' %}
+                                    <span class="badge badge-low">allow</span>
+                                {% elif p.action == 'warn' %}
+                                    <span class="badge badge-medium">warn</span>
+                                {% else %}
+                                    <span class="badge badge-critical">block-alert</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if p.is_active %}
+                                <span class="badge badge-low"><i class="fas fa-check"></i> Active</span>
+                                {% else %}
+                                <span class="badge badge-high"><i class="fas fa-pause"></i> Paused</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <div style="display: flex; gap: 0.5rem;">
+                                    <form method="POST" action="{{ url_for('main.toggle_policy', public_id=p.public_id) }}" style="display: inline;">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                        <button type="submit" class="btn btn-sm btn-secondary" title="{{ 'Pause' if p.is_active else 'Resume' }}">
+                                            <i class="fas {{ 'fa-pause' if p.is_active else 'fa-play' }}"></i>
+                                        </button>
+                                    </form>
+                                    <form method="POST" action="{{ url_for('main.delete_policy', public_id=p.public_id) }}" style="display: inline;" onsubmit="return confirm('Delete this policy? All associated violations will be removed.');">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                        <button type="submit" class="btn btn-sm btn-danger" title="Delete">
+                                            <i class="fas fa-trash"></i>
+                                        </button>
+                                    </form>
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="empty-state">
+                <i class="fas fa-gavel"></i>
+                <h3 style="margin-bottom: 0.5rem;">No policies yet</h3>
+                <p>Create one to start matching extensions against custom rules.</p>
+            </div>
+            {% endif %}
+        </div>
+
+        <div class="card" style="height: fit-content;">
+            <div class="card-header">
+                <h2 class="card-title">
+                    <i class="fas fa-plus-circle" style="color: var(--success);"></i>
+                    New Policy
+                </h2>
+            </div>
+
+            <form method="POST" action="{{ url_for('main.create_policy') }}">
+                {{ form.hidden_tag() }}
+                <div class="form-group">
+                    <label class="form-label">Name</label>
+                    {{ form.name(class="form-input", placeholder="e.g., Block evil publishers") }}
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Customer key</label>
+                    {{ form.customer_key_id(class="form-input") }}
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Priority <span style="color: var(--text-muted); font-weight: normal;">(lower wins)</span></label>
+                    {{ form.priority(class="form-input") }}
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Action</label>
+                    {{ form.action(class="form-input") }}
+                </div>
+                <p style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.75rem;">At least one match criterion is required. Globs use <code>*</code> and <code>?</code>.</p>
+                <div class="form-group">
+                    <label class="form-label">Publisher glob</label>
+                    {{ form.match_publisher(class="form-input", placeholder="e.g., evil-* or specific-publisher") }}
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Extension ID glob</label>
+                    {{ form.match_extension_id(class="form-input", placeholder="e.g., evil-pub.*") }}
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Permission glob</label>
+                    {{ form.match_permission_glob(class="form-input", placeholder="e.g., fileSystem or network*") }}
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Risk level threshold</label>
+                    {{ form.match_risk_level(class="form-input") }}
+                </div>
+                {{ form.submit(class="btn btn-primary", style="width: 100%;") }}
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

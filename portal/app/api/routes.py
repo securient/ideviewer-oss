@@ -16,6 +16,7 @@ from app import db
 from app.models import CustomerKey, Host, ScanReport, ExtensionInfo, SecretFinding, PackageInfo, ScanRequest, TamperAlert, Vulnerability, HookBypass, AIToolInfo
 from app.main.routes import calculate_risk_level
 from app.events import emit_event
+from app.policy.runner import evaluate_and_record, build_extensions_from_scan
 from app.queue import is_async, enqueue
 from app.jobs.vuln_scan import scan_host_vulnerabilities
 
@@ -591,6 +592,12 @@ def submit_report():
             },
         )
 
+    evaluate_and_record(
+        host,
+        customer_key_id=key.id,
+        extensions=build_extensions_from_scan(scan_data, calculate_risk_level),
+    )
+
     response_payload = {
         'success': True,
         'report_id': report.id,
@@ -1064,6 +1071,13 @@ def receive_realtime_event():
                 'extension': ext_data,
                 'source': 'realtime_event',
             },
+        )
+
+    if scan_data:
+        evaluate_and_record(
+            host,
+            customer_key_id=key.id,
+            extensions=build_extensions_from_scan(scan_data, calculate_risk_level),
         )
 
     # Log the event
