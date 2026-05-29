@@ -172,6 +172,7 @@ Each component is classified by type (`skill`, `mcp-server`, `cloud-mcp`, `integ
 - **Per-Host Token Auth** — daemons enroll with a customer key, then authenticate with a per-host token; revocable from the host detail page
 - **Background Job Queue** — vulnerability lookups dispatched to an RQ worker when Redis is available; falls back to inline scans otherwise
 - **Outbound Webhooks** — push events (`tamper_alert.created`, `extension.high_risk_detected`, `hook_bypass.detected`, `policy.violation`) to any HTTP endpoint with HMAC-signed payloads and automatic retry
+- **Extension Policies** — per-customer allow/warn/block rules matching publisher, extension ID, permission, or risk-level; matches surface as `PolicyViolation` rows, critical tamper alerts (for block), and `policy.violation` webhooks
 
 ## Deployment
 

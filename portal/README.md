@@ -183,6 +183,51 @@ Failed deliveries retry on a fixed schedule: 30 seconds, 2 minutes, 10 minutes, 
 
 When `REDIS_URL` is set, deliveries run on the RQ worker and benefit from the full retry schedule. When unset, the portal attempts a single inline POST and gives up if it fails — the same degradation pattern as the OSV.dev vuln scan.
 
+## Extension policies
+
+Manage rules at `/policies`. Each policy combines a set of match criteria with an action that fires when an extension matches. Policies are evaluated in **priority order** (lower number wins) and **first-match-wins** per extension — put a tight `allow` policy above a broad `block-alert` to whitelist specific extensions from a wider block.
+
+### Match criteria
+
+Every populated criterion is ANDed. A policy with zero criteria never matches.
+
+| Field | Type | Notes |
+|---|---|---|
+| `match_publisher` | glob (fnmatch) | e.g., `evil-*` matches `evil-corp` but not `goodcorp` |
+| `match_extension_id` | glob | e.g., `*.banned-*` |
+| `match_permission_glob` | glob | matches any of the extension's permission names; e.g., `network*` |
+| `match_risk_level` | minimum threshold | `low` < `medium` < `high` < `critical` |
+
+### Actions
+
+| Action | What fires |
+|---|---|
+| `allow` | Nothing. Acts as an explicit whitelist override — useful for exempting specific extensions from a broader block. |
+| `warn` | Inserts a `PolicyViolation` row; fires `policy.violation` webhook with `action=warn`. |
+| `block-alert` | Inserts a `PolicyViolation` row; inserts a `TamperAlert` at `critical` severity (same red surface as tamper alerts on the dashboard); fires `policy.violation` webhook with `action=block-alert`. The daemon does not currently enforce — this is detect-and-notify only. |
+
+### Violations
+
+`/violations` lists every active match across all your hosts. Each row is unique per `(host, policy, extension, extension_version)` — rescanning the same extension refreshes `last_seen_at` rather than inserting duplicates. Resolved violations stay in the table for audit; toggle the view to see them.
+
+### Examples
+
+```text
+# Block all extensions from publisher "evil-corp"
+match_publisher: evil-corp
+action: block-alert
+
+# Warn on anything that asks for network permissions and is high-risk
+match_permission_glob: network*
+match_risk_level: high
+action: warn
+
+# Whitelist one specific extension from being flagged
+match_extension_id: trusted-publisher.essential-tool
+action: allow
+priority: 1                  # higher priority (lower number) than the broader block below
+```
+
 ## Production Deployment
 
 ### Google Cloud Run
