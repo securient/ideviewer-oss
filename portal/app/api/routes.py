@@ -15,6 +15,7 @@ import logging
 from app import db
 from app.models import CustomerKey, Host, ScanReport, ExtensionInfo, SecretFinding, PackageInfo, ScanRequest, TamperAlert, Vulnerability, HookBypass, AIToolInfo
 from app.main.routes import calculate_risk_level
+from app.events import emit_event
 from app.queue import is_async, enqueue
 from app.jobs.vuln_scan import scan_host_vulnerabilities
 
@@ -364,13 +365,23 @@ def submit_report():
     
     # Count dangerous extensions
     dangerous_count = 0
+    high_risk_extensions = []
     for ide in scan_data.get('ides', []):
         for ext in (ide.get('extensions') or []):
             permissions = (ext.get('permissions') or [])
             risk = calculate_risk_level(permissions)
             if risk in ['high', 'critical']:
                 dangerous_count += 1
-    
+                high_risk_extensions.append({
+                    'extension_id': ext.get('id') or ext.get('extension_id'),
+                    'name': ext.get('name'),
+                    'version': ext.get('version'),
+                    'publisher': ext.get('publisher'),
+                    'ide': ide.get('name'),
+                    'risk_level': risk,
+                    'permissions': permissions,
+                })
+
     # Create scan report
     report = ScanReport(
         host_id=host.id,
@@ -568,6 +579,17 @@ def submit_report():
             scan_host_vulnerabilities(host_id_for_vuln)
         except Exception as e:
             current_app.logger.error("inline vuln scan failed: %s", e)
+
+    for ext_data in high_risk_extensions:
+        emit_event(
+            'extension.high_risk_detected',
+            customer_key_id=key.id,
+            data={
+                'host': {'id': host.public_id, 'hostname': host.hostname},
+                'extension': ext_data,
+                'scan_report_id': report.id,
+            },
+        )
 
     response_payload = {
         'success': True,
@@ -806,6 +828,22 @@ def receive_alert():
     db.session.add(alert)
     db.session.commit()
 
+    emit_event(
+        'tamper_alert.created',
+        customer_key_id=key.id,
+        data={
+            'alert_id': alert.id,
+            'alert_type': alert.alert_type,
+            'severity': alert.severity,
+            'details': alert.details,
+            'host': {
+                'id': host.public_id,
+                'hostname': host.hostname,
+            },
+            'created_at': alert.created_at.isoformat() + 'Z' if alert.created_at else None,
+        },
+    )
+
     return jsonify({
         'received': True,
         'alert_id': alert.id,
@@ -872,6 +910,22 @@ def deregister_host():
     db.session.add(alert)
     db.session.commit()
 
+    emit_event(
+        'tamper_alert.created',
+        customer_key_id=key.id,
+        data={
+            'alert_id': alert.id,
+            'alert_type': alert.alert_type,
+            'severity': alert.severity,
+            'details': alert.details,
+            'host': {
+                'id': host.public_id,
+                'hostname': host.hostname,
+            },
+            'created_at': alert.created_at.isoformat() + 'Z' if alert.created_at else None,
+        },
+    )
+
     return jsonify({
         'success': True,
         'message': 'Host deregistered successfully'
@@ -914,6 +968,7 @@ def receive_realtime_event():
 
     # Process scan data if included (extension changes trigger a rescan)
     scan_data = data.get('scan_data')
+    high_risk_extensions = []
     if scan_data:
         # Update extension info from the rescan
         total_ides = scan_data.get('total_ides', 0)
@@ -926,6 +981,15 @@ def receive_realtime_event():
                 risk = calculate_risk_level(permissions)
                 if risk in ['high', 'critical']:
                     dangerous_count += 1
+                    high_risk_extensions.append({
+                        'extension_id': ext.get('id') or ext.get('extension_id'),
+                        'name': ext.get('name'),
+                        'version': ext.get('version'),
+                        'publisher': ext.get('publisher'),
+                        'ide': ide.get('name'),
+                        'risk_level': risk,
+                        'permissions': permissions,
+                    })
 
         # Create a lightweight scan report
         report = ScanReport(
@@ -991,6 +1055,17 @@ def receive_realtime_event():
     key.last_used_at = datetime.utcnow()
     db.session.commit()
 
+    for ext_data in high_risk_extensions:
+        emit_event(
+            'extension.high_risk_detected',
+            customer_key_id=key.id,
+            data={
+                'host': {'id': host.public_id, 'hostname': host.hostname},
+                'extension': ext_data,
+                'source': 'realtime_event',
+            },
+        )
+
     # Log the event
     changes = data.get('changes', [])
     api_logger.info(f"Realtime event from {hostname}: {len(changes)} change(s)")
@@ -1041,6 +1116,23 @@ def receive_hook_bypass():
     )
     db.session.add(bypass)
     db.session.commit()
+
+    emit_event(
+        'hook_bypass.detected',
+        customer_key_id=key.id,
+        data={
+            'bypass_id': bypass.id,
+            'commit_hash': bypass.commit_hash,
+            'commit_message': bypass.commit_message,
+            'commit_author': bypass.commit_author,
+            'repo_path': bypass.repo_path,
+            'host': {
+                'id': host.public_id,
+                'hostname': host.hostname,
+            },
+            'detected_at': bypass.detected_at.isoformat() + 'Z' if bypass.detected_at else None,
+        },
+    )
 
     return jsonify({
         'received': True,
