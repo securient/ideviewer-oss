@@ -637,3 +637,296 @@ class Vulnerability(db.Model):
 
     def __repr__(self):
         return f'<Vulnerability {self.vuln_id} for {self.package_name}@{self.package_version}>'
+
+
+class WebhookSubscription(db.Model):
+    """Outbound webhook endpoint registered by a customer.
+
+    The HMAC secret is stored in plaintext because the portal needs it to
+    sign every outgoing delivery; the receiver needs the same plaintext to
+    verify. Show it once in the UI on creation and only on explicit reveal
+    after that.
+    """
+
+    __tablename__ = 'webhook_subscriptions'
+
+    id = db.Column(db.Integer, primary_key=True)
+    public_id = db.Column(db.String(36), unique=True, nullable=False, index=True)
+    customer_key_id = db.Column(db.Integer, db.ForeignKey('customer_keys.id'), nullable=False, index=True)
+
+    name = db.Column(db.String(100), nullable=False)
+    url = db.Column(db.String(500), nullable=False)
+
+    # JSON array of event-type strings; ["*"] subscribes to all.
+    event_types = db.Column(db.JSON, nullable=False)
+
+    # Plaintext HMAC secret, format "whsec_<43 base64url chars>".
+    secret = db.Column(db.String(64), nullable=False)
+
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+
+    # Health tracking — drives auto-disable after CONSECUTIVE_FAILURE_LIMIT.
+    consecutive_failures = db.Column(db.Integer, default=0, nullable=False)
+    last_success_at = db.Column(db.DateTime, nullable=True)
+    last_failure_at = db.Column(db.DateTime, nullable=True)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+
+    customer_key = db.relationship(
+        'CustomerKey',
+        backref=db.backref('webhook_subscriptions', lazy='dynamic'),
+    )
+    creator = db.relationship('User')
+
+    CONSECUTIVE_FAILURE_LIMIT = 25  # auto-deactivate after this many
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        if not self.public_id:
+            self.public_id = str(uuid.uuid4())
+        if not self.secret:
+            self.secret = self.generate_secret()
+
+    @staticmethod
+    def generate_secret():
+        """Return a fresh secret like ``whsec_<43-char base64url>``."""
+        import base64
+        import secrets
+        raw = secrets.token_bytes(32)
+        return 'whsec_' + base64.urlsafe_b64encode(raw).rstrip(b'=').decode('ascii')
+
+    def matches_event(self, event_type: str) -> bool:
+        if not self.is_active:
+            return False
+        types = self.event_types or []
+        return '*' in types or event_type in types
+
+    def record_success(self):
+        self.consecutive_failures = 0
+        self.last_success_at = datetime.utcnow()
+
+    def record_failure(self):
+        self.consecutive_failures = (self.consecutive_failures or 0) + 1
+        self.last_failure_at = datetime.utcnow()
+        if self.consecutive_failures >= self.CONSECUTIVE_FAILURE_LIMIT:
+            self.is_active = False
+
+    def to_dict(self, *, reveal_secret: bool = False):
+        return {
+            'id': self.public_id,
+            'name': self.name,
+            'url': self.url,
+            'event_types': self.event_types or [],
+            'secret': self.secret if reveal_secret else None,
+            'is_active': self.is_active,
+            'consecutive_failures': self.consecutive_failures,
+            'last_success_at': self.last_success_at.isoformat() if self.last_success_at else None,
+            'last_failure_at': self.last_failure_at.isoformat() if self.last_failure_at else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+    def __repr__(self):
+        return f'<WebhookSubscription {self.public_id} -> {self.url}>'
+
+
+class WebhookDelivery(db.Model):
+    """One delivery attempt of one event to one subscription.
+
+    Persisted before the first attempt and updated in place across retries.
+    Keeping every attempt's outcome (status, response_code, error) lets us
+    expose a deliveries timeline in the portal and replay failures.
+    """
+
+    __tablename__ = 'webhook_deliveries'
+
+    # status values: pending, succeeded, failed, retrying
+    STATUS_PENDING = 'pending'
+    STATUS_RETRYING = 'retrying'
+    STATUS_SUCCEEDED = 'succeeded'
+    STATUS_FAILED = 'failed'
+
+    id = db.Column(db.Integer, primary_key=True)
+    subscription_id = db.Column(
+        db.Integer,
+        db.ForeignKey('webhook_subscriptions.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+
+    event_id = db.Column(db.String(36), nullable=False, index=True)
+    event_type = db.Column(db.String(100), nullable=False, index=True)
+    payload = db.Column(db.JSON, nullable=False)
+
+    status = db.Column(db.String(20), default=STATUS_PENDING, nullable=False)
+    attempt_count = db.Column(db.Integer, default=0, nullable=False)
+
+    last_attempt_at = db.Column(db.DateTime, nullable=True)
+    response_code = db.Column(db.Integer, nullable=True)
+    response_body = db.Column(db.Text, nullable=True)
+    last_error = db.Column(db.Text, nullable=True)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+    completed_at = db.Column(db.DateTime, nullable=True)
+
+    subscription = db.relationship(
+        'WebhookSubscription',
+        backref=db.backref(
+            'deliveries',
+            lazy='dynamic',
+            cascade='all, delete-orphan',
+            order_by='desc(WebhookDelivery.created_at)',
+        ),
+    )
+
+    __table_args__ = (
+        db.Index('idx_delivery_sub_status', 'subscription_id', 'status'),
+    )
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'event_id': self.event_id,
+            'event_type': self.event_type,
+            'status': self.status,
+            'attempt_count': self.attempt_count,
+            'last_attempt_at': self.last_attempt_at.isoformat() if self.last_attempt_at else None,
+            'response_code': self.response_code,
+            'last_error': self.last_error,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'completed_at': self.completed_at.isoformat() if self.completed_at else None,
+        }
+
+    def __repr__(self):
+        return f'<WebhookDelivery {self.id} {self.event_type} [{self.status}]>'
+
+
+class ExtensionPolicy(db.Model):
+    """Per-customer rule matching extensions and assigning an action.
+
+    Matching: each match_* field is optional; populated criteria are ANDed.
+    Glob fields use fnmatch (so ``ms-*`` matches ``ms-python``). risk_level
+    is treated as a minimum threshold (``low`` <= ``medium`` <= ``high`` <=
+    ``critical``).
+
+    Resolution: policies are evaluated in priority order (lower = first)
+    and the first match wins per extension. Putting an ``allow`` policy
+    above a broader ``block-alert`` whitelists specific extensions.
+    """
+
+    __tablename__ = 'extension_policies'
+
+    ACTION_ALLOW = 'allow'
+    ACTION_WARN = 'warn'
+    ACTION_BLOCK_ALERT = 'block-alert'
+    VALID_ACTIONS = (ACTION_ALLOW, ACTION_WARN, ACTION_BLOCK_ALERT)
+
+    id = db.Column(db.Integer, primary_key=True)
+    public_id = db.Column(db.String(36), unique=True, nullable=False, index=True)
+    customer_key_id = db.Column(db.Integer, db.ForeignKey('customer_keys.id'), nullable=False, index=True)
+
+    name = db.Column(db.String(100), nullable=False)
+    priority = db.Column(db.Integer, nullable=False, default=100)
+    action = db.Column(db.String(20), nullable=False)
+
+    match_publisher = db.Column(db.String(200), nullable=True)
+    match_extension_id = db.Column(db.String(200), nullable=True)
+    match_permission_glob = db.Column(db.String(200), nullable=True)
+    match_risk_level = db.Column(db.String(20), nullable=True)  # min threshold
+
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+
+    customer_key = db.relationship(
+        'CustomerKey',
+        backref=db.backref('extension_policies', lazy='dynamic'),
+    )
+    creator = db.relationship('User')
+
+    __table_args__ = (
+        db.Index('idx_policy_customer_active', 'customer_key_id', 'is_active'),
+    )
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        if not self.public_id:
+            self.public_id = str(uuid.uuid4())
+
+    def to_dict(self):
+        return {
+            'id': self.public_id,
+            'name': self.name,
+            'priority': self.priority,
+            'action': self.action,
+            'match_publisher': self.match_publisher,
+            'match_extension_id': self.match_extension_id,
+            'match_permission_glob': self.match_permission_glob,
+            'match_risk_level': self.match_risk_level,
+            'is_active': self.is_active,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+    def __repr__(self):
+        return f'<ExtensionPolicy {self.name} [{self.action}]>'
+
+
+class PolicyViolation(db.Model):
+    """One (host, policy, extension, extension_version) match.
+
+    Upserted on rescan: re-detecting the same violation refreshes
+    last_seen_at instead of inserting a duplicate row. Resolved by admin
+    or auto-cleared when the offending extension goes away.
+    """
+
+    __tablename__ = 'policy_violations'
+
+    id = db.Column(db.Integer, primary_key=True)
+    host_id = db.Column(db.Integer, db.ForeignKey('hosts.id'), nullable=False)
+    policy_id = db.Column(db.Integer, db.ForeignKey('extension_policies.id'), nullable=False)
+
+    extension_id = db.Column(db.String(200), nullable=False)
+    extension_name = db.Column(db.String(200), nullable=True)
+    extension_version = db.Column(db.String(50), nullable=True)
+    publisher = db.Column(db.String(200), nullable=True)
+    risk_level = db.Column(db.String(20), nullable=True)
+    action_taken = db.Column(db.String(20), nullable=False)  # snapshot of policy.action at detection
+
+    first_detected_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    last_seen_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    is_resolved = db.Column(db.Boolean, default=False, nullable=False)
+    resolved_at = db.Column(db.DateTime, nullable=True)
+    resolved_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+
+    host = db.relationship('Host', backref=db.backref('policy_violations', lazy='dynamic'))
+    policy = db.relationship('ExtensionPolicy', backref=db.backref('violations', lazy='dynamic'))
+    resolver = db.relationship('User')
+
+    __table_args__ = (
+        db.Index('idx_violation_host_resolved', 'host_id', 'is_resolved'),
+        db.Index('idx_violation_policy', 'policy_id'),
+        db.UniqueConstraint(
+            'host_id', 'policy_id', 'extension_id', 'extension_version',
+            name='uq_policy_violation_per_ext_version',
+        ),
+    )
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'host_id': self.host_id,
+            'policy_id': self.policy_id,
+            'extension_id': self.extension_id,
+            'extension_name': self.extension_name,
+            'extension_version': self.extension_version,
+            'publisher': self.publisher,
+            'risk_level': self.risk_level,
+            'action_taken': self.action_taken,
+            'first_detected_at': self.first_detected_at.isoformat() if self.first_detected_at else None,
+            'last_seen_at': self.last_seen_at.isoformat() if self.last_seen_at else None,
+            'is_resolved': self.is_resolved,
+            'resolved_at': self.resolved_at.isoformat() if self.resolved_at else None,
+        }
+
+    def __repr__(self):
+        return f'<PolicyViolation host={self.host_id} ext={self.extension_id}@{self.extension_version}>'

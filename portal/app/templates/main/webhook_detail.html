@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+
+{% block title %}{{ subscription.name }} - Webhook - IDE Viewer{% endblock %}
+
+{% block content %}
+<div class="fade-in">
+    <div style="margin-bottom: 1rem;">
+        <a href="{{ url_for('main.webhooks') }}" style="color: var(--text-secondary); font-size: 0.875rem;">
+            <i class="fas fa-arrow-left"></i> Back to webhooks
+        </a>
+    </div>
+
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 2rem;">
+        <div>
+            <h1 style="font-size: 1.75rem; font-weight: 700; margin-bottom: 0.25rem;">{{ subscription.name }}</h1>
+            <p style="color: var(--text-secondary);">
+                <code class="mono">{{ subscription.url }}</code>
+                {% if subscription.is_active %}
+                    <span class="badge badge-low" style="margin-left: 0.5rem;"><i class="fas fa-check"></i> Active</span>
+                {% else %}
+                    <span class="badge badge-high" style="margin-left: 0.5rem;"><i class="fas fa-pause"></i> Paused</span>
+                {% endif %}
+            </p>
+        </div>
+        <div style="display: flex; gap: 0.5rem;">
+            <form method="POST" action="{{ url_for('main.rotate_webhook_secret', public_id=subscription.public_id) }}" onsubmit="return confirm('Rotate the signing secret? The current secret stops working immediately.');">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="btn btn-sm btn-secondary"><i class="fas fa-sync"></i> Rotate secret</button>
+            </form>
+        </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: 1fr 320px; gap: 2rem;">
+        <div class="card">
+            <div class="card-header">
+                <h2 class="card-title">
+                    <i class="fas fa-list" style="color: var(--accent-primary);"></i>
+                    Recent deliveries
+                </h2>
+            </div>
+
+            {% if deliveries %}
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Event</th>
+                            <th>Status</th>
+                            <th>Attempts</th>
+                            <th>Code</th>
+                            <th>Error</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for d in deliveries %}
+                        <tr>
+                            <td style="white-space: nowrap; font-size: 0.8125rem;">{{ d.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                            <td><code class="mono" style="font-size: 0.75rem;">{{ d.event_type }}</code></td>
+                            <td>
+                                {% if d.status == 'succeeded' %}
+                                    <span class="badge badge-low">succeeded</span>
+                                {% elif d.status == 'failed' %}
+                                    <span class="badge badge-critical">failed</span>
+                                {% elif d.status == 'retrying' %}
+                                    <span class="badge badge-medium">retrying</span>
+                                {% else %}
+                                    <span class="badge badge-low">{{ d.status }}</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ d.attempt_count }}</td>
+                            <td>{{ d.response_code or '—' }}</td>
+                            <td style="max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="{{ d.last_error or '' }}">{{ d.last_error or '' }}</td>
+                            <td>
+                                {% if d.status in ['failed', 'succeeded'] %}
+                                <form method="POST" action="{{ url_for('main.replay_webhook_delivery', public_id=subscription.public_id, delivery_id=d.id) }}" style="display: inline;">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <button type="submit" class="btn btn-sm btn-secondary" title="Replay"><i class="fas fa-redo"></i></button>
+                                </form>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="empty-state">
+                <i class="fas fa-inbox"></i>
+                <h3 style="margin-bottom: 0.5rem;">No deliveries yet</h3>
+                <p>This webhook hasn't received any events yet. They'll show up here once they fire.</p>
+            </div>
+            {% endif %}
+        </div>
+
+        <div class="card" style="height: fit-content;">
+            <div class="card-header">
+                <h2 class="card-title">
+                    <i class="fas fa-info-circle" style="color: var(--accent-primary);"></i>
+                    Details
+                </h2>
+            </div>
+            <dl style="display: grid; grid-template-columns: 1fr; gap: 0.75rem;">
+                <div>
+                    <dt style="font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase;">Subscribed events</dt>
+                    <dd style="margin-top: 0.25rem;">
+                        {% for et in subscription.event_types %}
+                            <span class="badge badge-low" style="font-size: 0.6875rem;">{{ et }}</span>
+                        {% endfor %}
+                    </dd>
+                </div>
+                <div>
+                    <dt style="font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase;">Created</dt>
+                    <dd>{{ subscription.created_at.strftime('%Y-%m-%d %H:%M UTC') }}</dd>
+                </div>
+                <div>
+                    <dt style="font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase;">Last success</dt>
+                    <dd>{{ subscription.last_success_at.strftime('%Y-%m-%d %H:%M UTC') if subscription.last_success_at else '—' }}</dd>
+                </div>
+                <div>
+                    <dt style="font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase;">Last failure</dt>
+                    <dd>{{ subscription.last_failure_at.strftime('%Y-%m-%d %H:%M UTC') if subscription.last_failure_at else '—' }}</dd>
+                </div>
+                <div>
+                    <dt style="font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase;">Consecutive failures</dt>
+                    <dd>{{ subscription.consecutive_failures }} / {{ subscription.CONSECUTIVE_FAILURE_LIMIT }}</dd>
+                </div>
+            </dl>
+        </div>
+    </div>
+</div>
+{% endblock %}

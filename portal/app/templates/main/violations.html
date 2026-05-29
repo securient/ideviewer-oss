@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+
+{% block title %}Policy Violations - IDE Viewer{% endblock %}
+
+{% block content %}
+<div class="fade-in">
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 2rem;">
+        <div>
+            <h1 style="font-size: 1.75rem; font-weight: 700; margin-bottom: 0.25rem;">Policy Violations</h1>
+            <p style="color: var(--text-secondary);">Extensions that match an active warn or block-alert policy.</p>
+        </div>
+        <div>
+            {% if show_resolved %}
+                <a href="{{ url_for('main.violations') }}" class="btn btn-sm btn-secondary"><i class="fas fa-filter"></i> Unresolved only</a>
+            {% else %}
+                <a href="{{ url_for('main.violations', show_resolved=1) }}" class="btn btn-sm btn-secondary"><i class="fas fa-history"></i> Show resolved</a>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="card">
+        {% if violations %}
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Last seen</th>
+                        <th>Host</th>
+                        <th>Extension</th>
+                        <th>Policy</th>
+                        <th>Action</th>
+                        <th>Risk</th>
+                        <th>Status</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for v in violations %}
+                    <tr>
+                        <td style="white-space: nowrap; font-size: 0.8125rem;">{{ v.last_seen_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                        <td>
+                            <a href="{{ url_for('main.host_detail', host_id=v.host.public_id) }}">{{ v.host.hostname }}</a>
+                        </td>
+                        <td>
+                            <code class="mono" style="font-size: 0.8125rem;">{{ v.extension_id }}</code>
+                            {% if v.extension_version %}<span style="color: var(--text-muted);">@{{ v.extension_version }}</span>{% endif %}
+                            {% if v.publisher %}<div style="font-size: 0.75rem; color: var(--text-muted);">{{ v.publisher }}</div>{% endif %}
+                        </td>
+                        <td>{{ v.policy.name }}</td>
+                        <td>
+                            {% if v.action_taken == 'allow' %}
+                                <span class="badge badge-low">allow</span>
+                            {% elif v.action_taken == 'warn' %}
+                                <span class="badge badge-medium">warn</span>
+                            {% else %}
+                                <span class="badge badge-critical">block-alert</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if v.risk_level %}
+                                <span class="badge badge-{{ v.risk_level }}">{{ v.risk_level }}</span>
+                            {% else %}
+                                <span style="color: var(--text-muted);">—</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if v.is_resolved %}
+                                <span class="badge badge-low"><i class="fas fa-check"></i> Resolved</span>
+                            {% else %}
+                                <span class="badge badge-high"><i class="fas fa-exclamation"></i> Open</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if not v.is_resolved %}
+                            <form method="POST" action="{{ url_for('main.resolve_violation', violation_id=v.id) }}" style="display: inline;">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <button type="submit" class="btn btn-sm btn-secondary" title="Mark resolved"><i class="fas fa-check"></i></button>
+                            </form>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <i class="fas fa-check-circle"></i>
+            <h3 style="margin-bottom: 0.5rem;">{% if show_resolved %}No violations on record{% else %}No open violations{% endif %}</h3>
+            <p>{% if show_resolved %}You haven't created any policies yet, or no extension has matched.{% else %}Either no policies are tripping, or all matches have been resolved.{% endif %}</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

@@ -112,6 +112,122 @@ Admins can revoke a host's token from the host detail page in the portal UI. On 
 
 Daemons built before this change use the customer key indefinitely and continue working without modification.
 
+## Outbound webhooks
+
+The portal can push events to any HTTP endpoint as they happen. Manage subscriptions at `/webhooks`. Each subscription has a URL, an event filter (one or more of the event types below, or `*` for all), and an HMAC signing secret that's shown exactly once on creation.
+
+### Event types
+
+| Event | Fired when |
+|---|---|
+| `tamper_alert.created` | The daemon reports a tamper event (`/api/alert`) or a host deregisters (`/api/deregister-host`) |
+| `extension.high_risk_detected` | A scan or realtime rescan surfaces an extension with `risk_level` of `high` or `critical` |
+| `hook_bypass.detected` | A developer commits with `--no-verify` and the daemon reports it (`/api/hook-bypass`) |
+| `policy.violation` | Reserved for the policy engine (T2.2) |
+
+### Payload format
+
+Every delivery is a `POST` with `Content-Type: application/json` and the body:
+
+```json
+{
+  "id": "evt_5a3c…",
+  "type": "tamper_alert.created",
+  "created_at": "2026-05-29T18:42:01.123456Z",
+  "data": { … event-specific fields … }
+}
+```
+
+Headers:
+
+| Header | Value |
+|---|---|
+| `X-IDEViewer-Signature` | `t=<unix-seconds>,v1=<hex>` — Stripe-style |
+| `X-IDEViewer-Event-Type` | The event type (same as `type` in the body) |
+| `X-IDEViewer-Event-Id` | The event id (same as `id` in the body) |
+| `User-Agent` | `IDEViewer-Webhook/1.0` |
+
+### Verifying signatures
+
+The signed payload is `f"{t}.{raw_body}"` (literal `.` between the timestamp and the raw request body) HMAC-SHA256'd with the subscription's secret. Reject any request where the timestamp is more than five minutes off from your clock — that defeats replay.
+
+Python receiver example:
+
+```python
+import hmac, hashlib, time
+from flask import request, abort
+
+SECRET = "whsec_…"  # the value shown once on creation
+
+@app.post("/webhook")
+def handle():
+    sig = request.headers.get("X-IDEViewer-Signature", "")
+    parts = dict(p.split("=", 1) for p in sig.split(",") if "=" in p)
+    t, v1 = parts.get("t"), parts.get("v1")
+    if not t or not v1 or abs(time.time() - int(t)) > 300:
+        abort(401)
+    expected = hmac.new(
+        SECRET.encode(), f"{t}.{request.get_data(as_text=True)}".encode(), hashlib.sha256
+    ).hexdigest()
+    if not hmac.compare_digest(expected, v1):
+        abort(401)
+    # ... process request.json ...
+    return "", 204
+```
+
+### Retries and health
+
+Failed deliveries retry on a fixed schedule: 30 seconds, 2 minutes, 10 minutes, 1 hour, 6 hours (six attempts total, ~7.5h window). Each subscription's `consecutive_failures` counter increments per terminal failure and resets on the next success — at 25 consecutive failures the subscription auto-pauses to stop hammering a dead endpoint. You can replay any past delivery (succeeded or failed) from the subscription detail page.
+
+### Async vs sync
+
+When `REDIS_URL` is set, deliveries run on the RQ worker and benefit from the full retry schedule. When unset, the portal attempts a single inline POST and gives up if it fails — the same degradation pattern as the OSV.dev vuln scan.
+
+## Extension policies
+
+Manage rules at `/policies`. Each policy combines a set of match criteria with an action that fires when an extension matches. Policies are evaluated in **priority order** (lower number wins) and **first-match-wins** per extension — put a tight `allow` policy above a broad `block-alert` to whitelist specific extensions from a wider block.
+
+### Match criteria
+
+Every populated criterion is ANDed. A policy with zero criteria never matches.
+
+| Field | Type | Notes |
+|---|---|---|
+| `match_publisher` | glob (fnmatch) | e.g., `evil-*` matches `evil-corp` but not `goodcorp` |
+| `match_extension_id` | glob | e.g., `*.banned-*` |
+| `match_permission_glob` | glob | matches any of the extension's permission names; e.g., `network*` |
+| `match_risk_level` | minimum threshold | `low` < `medium` < `high` < `critical` |
+
+### Actions
+
+| Action | What fires |
+|---|---|
+| `allow` | Nothing. Acts as an explicit whitelist override — useful for exempting specific extensions from a broader block. |
+| `warn` | Inserts a `PolicyViolation` row; fires `policy.violation` webhook with `action=warn`. |
+| `block-alert` | Inserts a `PolicyViolation` row; inserts a `TamperAlert` at `critical` severity (same red surface as tamper alerts on the dashboard); fires `policy.violation` webhook with `action=block-alert`. The daemon does not currently enforce — this is detect-and-notify only. |
+
+### Violations
+
+`/violations` lists every active match across all your hosts. Each row is unique per `(host, policy, extension, extension_version)` — rescanning the same extension refreshes `last_seen_at` rather than inserting duplicates. Resolved violations stay in the table for audit; toggle the view to see them.
+
+### Examples
+
+```text
+# Block all extensions from publisher "evil-corp"
+match_publisher: evil-corp
+action: block-alert
+
+# Warn on anything that asks for network permissions and is high-risk
+match_permission_glob: network*
+match_risk_level: high
+action: warn
+
+# Whitelist one specific extension from being flagged
+match_extension_id: trusted-publisher.essential-tool
+action: allow
+priority: 1                  # higher priority (lower number) than the broader block below
+```
+
 ## Production Deployment
 
 ### Google Cloud Run

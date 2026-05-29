@@ -8,8 +8,13 @@ from datetime import datetime, timedelta
 from sqlalchemy import or_
 
 from app import db
-from app.models import CustomerKey, Host, ScanReport, ExtensionInfo, SecretFinding, PackageInfo, ScanRequest, TamperAlert, Vulnerability, HookBypass, AIToolInfo
-from app.auth.forms import CustomerKeyForm
+from app.models import (
+    CustomerKey, Host, ScanReport, ExtensionInfo, SecretFinding, PackageInfo,
+    ScanRequest, TamperAlert, Vulnerability, HookBypass, AIToolInfo,
+    WebhookSubscription, WebhookDelivery,
+    ExtensionPolicy, PolicyViolation,
+)
+from app.auth.forms import CustomerKeyForm, WebhookSubscriptionForm, ExtensionPolicyForm
 from app.marketplace import fetch_extension_details
 
 main_bp = Blueprint('main', __name__)
@@ -791,10 +796,278 @@ def delete_key(key_id):
     
     db.session.delete(key)
     db.session.commit()
-    
+
     flash(f'Key {key.name} has been deleted', 'success')
-    
+
     return redirect(url_for('main.keys'))
+
+
+def _user_subscription_or_404(public_id):
+    sub = WebhookSubscription.query.filter_by(public_id=public_id).first_or_404()
+    if sub.customer_key.user_id != current_user.id:
+        flash('Access denied', 'error')
+        return None
+    return sub
+
+
+@main_bp.route('/webhooks')
+@login_required
+def webhooks():
+    """List outbound webhook subscriptions for the user's customer keys."""
+    key_ids = [k.id for k in current_user.customer_keys]
+    subs = (
+        WebhookSubscription.query
+        .filter(WebhookSubscription.customer_key_id.in_(key_ids))
+        .order_by(WebhookSubscription.created_at.desc())
+        .all()
+    )
+    form = WebhookSubscriptionForm()
+    form.customer_key_id.choices = [
+        (k.id, k.name) for k in current_user.customer_keys.filter_by(is_active=True)
+    ]
+    revealed_secret = request.args.get('reveal')  # public_id of just-created sub
+    return render_template(
+        'main/webhooks.html',
+        subscriptions=subs,
+        form=form,
+        revealed_secret=revealed_secret,
+    )
+
+
+@main_bp.route('/webhooks/create', methods=['POST'])
+@login_required
+def create_webhook():
+    form = WebhookSubscriptionForm()
+    form.customer_key_id.choices = [
+        (k.id, k.name) for k in current_user.customer_keys.filter_by(is_active=True)
+    ]
+    if not form.validate_on_submit():
+        for field, errors in form.errors.items():
+            for err in errors:
+                flash(f'{field}: {err}', 'error')
+        return redirect(url_for('main.webhooks'))
+
+    key = CustomerKey.query.get_or_404(form.customer_key_id.data)
+    if key.user_id != current_user.id:
+        flash('Access denied', 'error')
+        return redirect(url_for('main.webhooks'))
+
+    sub = WebhookSubscription(
+        customer_key_id=key.id,
+        name=form.name.data,
+        url=form.url.data,
+        event_types=form.event_types.data,
+        created_by_user_id=current_user.id,
+    )
+    db.session.add(sub)
+    db.session.commit()
+    flash(f'Webhook "{sub.name}" created. Copy the secret below — it will not be shown again.', 'success')
+    return redirect(url_for('main.webhooks', reveal=sub.public_id))
+
+
+@main_bp.route('/webhooks/<public_id>')
+@login_required
+def webhook_detail(public_id):
+    sub = _user_subscription_or_404(public_id)
+    if sub is None:
+        return redirect(url_for('main.webhooks'))
+    deliveries = (
+        WebhookDelivery.query
+        .filter_by(subscription_id=sub.id)
+        .order_by(WebhookDelivery.created_at.desc())
+        .limit(50)
+        .all()
+    )
+    return render_template(
+        'main/webhook_detail.html',
+        subscription=sub,
+        deliveries=deliveries,
+    )
+
+
+@main_bp.route('/webhooks/<public_id>/toggle', methods=['POST'])
+@login_required
+def toggle_webhook(public_id):
+    sub = _user_subscription_or_404(public_id)
+    if sub is None:
+        return redirect(url_for('main.webhooks'))
+    sub.is_active = not sub.is_active
+    if sub.is_active:
+        sub.consecutive_failures = 0
+    db.session.commit()
+    flash(f'Webhook {sub.name} is now {"active" if sub.is_active else "paused"}', 'success')
+    return redirect(url_for('main.webhooks'))
+
+
+@main_bp.route('/webhooks/<public_id>/rotate-secret', methods=['POST'])
+@login_required
+def rotate_webhook_secret(public_id):
+    sub = _user_subscription_or_404(public_id)
+    if sub is None:
+        return redirect(url_for('main.webhooks'))
+    sub.secret = WebhookSubscription.generate_secret()
+    db.session.commit()
+    flash('Secret rotated. Copy the new value below — it will not be shown again.', 'success')
+    return redirect(url_for('main.webhooks', reveal=sub.public_id))
+
+
+@main_bp.route('/webhooks/<public_id>/delete', methods=['POST'])
+@login_required
+def delete_webhook(public_id):
+    sub = _user_subscription_or_404(public_id)
+    if sub is None:
+        return redirect(url_for('main.webhooks'))
+    name = sub.name
+    db.session.delete(sub)
+    db.session.commit()
+    flash(f'Webhook "{name}" deleted', 'success')
+    return redirect(url_for('main.webhooks'))
+
+
+@main_bp.route('/webhooks/<public_id>/deliveries/<int:delivery_id>/replay', methods=['POST'])
+@login_required
+def replay_webhook_delivery(public_id, delivery_id):
+    sub = _user_subscription_or_404(public_id)
+    if sub is None:
+        return redirect(url_for('main.webhooks'))
+    delivery = WebhookDelivery.query.filter_by(id=delivery_id, subscription_id=sub.id).first_or_404()
+
+    # Reset state and re-enqueue.
+    delivery.status = WebhookDelivery.STATUS_PENDING
+    delivery.attempt_count = 0
+    delivery.last_error = None
+    delivery.completed_at = None
+    db.session.commit()
+
+    from app.queue import enqueue
+    from app.jobs.webhook_delivery import deliver_webhook
+    job = enqueue(deliver_webhook, delivery.id, retry_max=0)
+    if job is None:
+        try:
+            deliver_webhook(delivery.id)
+        except Exception:
+            current_app.logger.exception('inline replay failed')
+
+    flash('Delivery re-queued', 'success')
+    return redirect(url_for('main.webhook_detail', public_id=sub.public_id))
+
+
+def _user_policy_or_404(public_id):
+    policy = ExtensionPolicy.query.filter_by(public_id=public_id).first_or_404()
+    if policy.customer_key.user_id != current_user.id:
+        flash('Access denied', 'error')
+        return None
+    return policy
+
+
+@main_bp.route('/policies')
+@login_required
+def policies():
+    """List extension policies across the user's customer keys."""
+    key_ids = [k.id for k in current_user.customer_keys]
+    items = (
+        ExtensionPolicy.query
+        .filter(ExtensionPolicy.customer_key_id.in_(key_ids))
+        .order_by(ExtensionPolicy.priority.asc(), ExtensionPolicy.created_at.desc())
+        .all()
+    )
+    form = ExtensionPolicyForm()
+    form.customer_key_id.choices = [
+        (k.id, k.name) for k in current_user.customer_keys.filter_by(is_active=True)
+    ]
+    return render_template('main/policies.html', policies=items, form=form)
+
+
+@main_bp.route('/policies/create', methods=['POST'])
+@login_required
+def create_policy():
+    form = ExtensionPolicyForm()
+    form.customer_key_id.choices = [
+        (k.id, k.name) for k in current_user.customer_keys.filter_by(is_active=True)
+    ]
+    if not form.validate_on_submit():
+        for field, errors in form.errors.items():
+            for err in errors:
+                flash(f'{field}: {err}', 'error')
+        return redirect(url_for('main.policies'))
+
+    key = CustomerKey.query.get_or_404(form.customer_key_id.data)
+    if key.user_id != current_user.id:
+        flash('Access denied', 'error')
+        return redirect(url_for('main.policies'))
+
+    policy = ExtensionPolicy(
+        customer_key_id=key.id,
+        name=form.name.data,
+        priority=form.priority.data,
+        action=form.action.data,
+        match_publisher=form.match_publisher.data or None,
+        match_extension_id=form.match_extension_id.data or None,
+        match_permission_glob=form.match_permission_glob.data or None,
+        match_risk_level=form.match_risk_level.data or None,
+        created_by_user_id=current_user.id,
+    )
+    db.session.add(policy)
+    db.session.commit()
+    flash(f'Policy "{policy.name}" created', 'success')
+    return redirect(url_for('main.policies'))
+
+
+@main_bp.route('/policies/<public_id>/toggle', methods=['POST'])
+@login_required
+def toggle_policy(public_id):
+    policy = _user_policy_or_404(public_id)
+    if policy is None:
+        return redirect(url_for('main.policies'))
+    policy.is_active = not policy.is_active
+    db.session.commit()
+    flash(f'Policy {policy.name} is now {"active" if policy.is_active else "paused"}', 'success')
+    return redirect(url_for('main.policies'))
+
+
+@main_bp.route('/policies/<public_id>/delete', methods=['POST'])
+@login_required
+def delete_policy(public_id):
+    policy = _user_policy_or_404(public_id)
+    if policy is None:
+        return redirect(url_for('main.policies'))
+    name = policy.name
+    # Delete associated violations first to satisfy FK.
+    PolicyViolation.query.filter_by(policy_id=policy.id).delete()
+    db.session.delete(policy)
+    db.session.commit()
+    flash(f'Policy "{name}" deleted', 'success')
+    return redirect(url_for('main.policies'))
+
+
+@main_bp.route('/violations')
+@login_required
+def violations():
+    """List policy violations across the user's hosts."""
+    key_ids = [k.id for k in current_user.customer_keys]
+    host_ids = [h.id for h in Host.query.filter(Host.customer_key_id.in_(key_ids))]
+    show_resolved = request.args.get('show_resolved') == '1'
+    query = PolicyViolation.query.filter(PolicyViolation.host_id.in_(host_ids))
+    if not show_resolved:
+        query = query.filter_by(is_resolved=False)
+    items = query.order_by(PolicyViolation.last_seen_at.desc()).limit(200).all()
+    return render_template('main/violations.html', violations=items, show_resolved=show_resolved)
+
+
+@main_bp.route('/violations/<int:violation_id>/resolve', methods=['POST'])
+@login_required
+def resolve_violation(violation_id):
+    v = PolicyViolation.query.get_or_404(violation_id)
+    host = Host.query.get(v.host_id)
+    if not host or host.customer_key.user_id != current_user.id:
+        flash('Access denied', 'error')
+        return redirect(url_for('main.violations'))
+    v.is_resolved = True
+    v.resolved_at = datetime.utcnow()
+    v.resolved_by_user_id = current_user.id
+    db.session.commit()
+    flash('Violation resolved', 'success')
+    return redirect(url_for('main.violations'))
 
 
 @main_bp.route('/alert/<int:alert_id>/acknowledge', methods=['POST'])

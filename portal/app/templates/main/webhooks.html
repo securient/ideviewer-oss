@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+
+{% block title %}Webhooks - IDE Viewer{% endblock %}
+
+{% block content %}
+<div class="fade-in">
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 2rem;">
+        <div>
+            <h1 style="font-size: 1.75rem; font-weight: 700; margin-bottom: 0.25rem;">Outbound Webhooks</h1>
+            <p style="color: var(--text-secondary);">Get notified when events happen on your hosts — Slack, Teams, PagerDuty, SIEM, anywhere.</p>
+        </div>
+    </div>
+
+    {% if revealed_secret %}
+        {% set revealed_sub = subscriptions|selectattr('public_id', 'equalto', revealed_secret)|first %}
+        {% if revealed_sub %}
+        <div class="card" style="margin-bottom: 1.5rem; border: 1px solid var(--accent-primary);">
+            <div class="card-header">
+                <h2 class="card-title">
+                    <i class="fas fa-key" style="color: var(--accent-primary);"></i>
+                    Signing secret for "{{ revealed_sub.name }}"
+                </h2>
+            </div>
+            <p style="margin-bottom: 0.75rem; color: var(--text-secondary);">Copy this now. You won't be shown it again. Use it to verify the <code>X-IDEViewer-Signature</code> header on incoming requests.</p>
+            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                <code class="mono" style="background: var(--bg-tertiary); padding: 0.5rem 0.75rem; border-radius: var(--radius-sm); flex: 1; word-break: break-all;">{{ revealed_sub.secret }}</code>
+                <button onclick="copyText('{{ revealed_sub.secret }}')" class="btn btn-sm btn-secondary"><i class="fas fa-copy"></i> Copy</button>
+            </div>
+        </div>
+        {% endif %}
+    {% endif %}
+
+    <div style="display: grid; grid-template-columns: 1fr 360px; gap: 2rem;">
+        <div class="card">
+            <div class="card-header">
+                <h2 class="card-title">
+                    <i class="fas fa-paper-plane" style="color: var(--accent-primary);"></i>
+                    Your Subscriptions
+                </h2>
+            </div>
+
+            {% if subscriptions %}
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>URL</th>
+                            <th>Events</th>
+                            <th>Status</th>
+                            <th>Failures</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for sub in subscriptions %}
+                        <tr>
+                            <td style="font-weight: 500;">
+                                <a href="{{ url_for('main.webhook_detail', public_id=sub.public_id) }}">{{ sub.name }}</a>
+                            </td>
+                            <td><code class="mono" style="font-size: 0.8125rem;">{{ sub.url }}</code></td>
+                            <td>
+                                {% for et in sub.event_types %}
+                                    <span class="badge badge-low" style="font-size: 0.6875rem;">{{ et }}</span>
+                                {% endfor %}
+                            </td>
+                            <td>
+                                {% if sub.is_active %}
+                                <span class="badge badge-low"><i class="fas fa-check"></i> Active</span>
+                                {% else %}
+                                <span class="badge badge-high"><i class="fas fa-pause"></i> Paused</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if sub.consecutive_failures > 0 %}
+                                <span class="badge badge-high">{{ sub.consecutive_failures }}</span>
+                                {% else %}
+                                <span style="color: var(--text-muted);">0</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <div style="display: flex; gap: 0.5rem;">
+                                    <form method="POST" action="{{ url_for('main.toggle_webhook', public_id=sub.public_id) }}" style="display: inline;">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                        <button type="submit" class="btn btn-sm btn-secondary" title="{{ 'Pause' if sub.is_active else 'Resume' }}">
+                                            <i class="fas {{ 'fa-pause' if sub.is_active else 'fa-play' }}"></i>
+                                        </button>
+                                    </form>
+                                    <form method="POST" action="{{ url_for('main.delete_webhook', public_id=sub.public_id) }}" style="display: inline;" onsubmit="return confirm('Delete this webhook? All delivery history is removed too.');">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                        <button type="submit" class="btn btn-sm btn-danger" title="Delete">
+                                            <i class="fas fa-trash"></i>
+                                        </button>
+                                    </form>
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="empty-state">
+                <i class="fas fa-paper-plane"></i>
+                <h3 style="margin-bottom: 0.5rem;">No webhooks yet</h3>
+                <p>Create one to receive event notifications.</p>
+            </div>
+            {% endif %}
+        </div>
+
+        <div class="card" style="height: fit-content;">
+            <div class="card-header">
+                <h2 class="card-title">
+                    <i class="fas fa-plus-circle" style="color: var(--success);"></i>
+                    Create Webhook
+                </h2>
+            </div>
+
+            <form method="POST" action="{{ url_for('main.create_webhook') }}">
+                {{ form.hidden_tag() }}
+                <div class="form-group">
+                    <label class="form-label" for="name">Name</label>
+                    {{ form.name(class="form-input", placeholder="e.g., Slack #security") }}
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="url">Endpoint URL</label>
+                    {{ form.url(class="form-input", placeholder="https://your-app.example.com/webhook") }}
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="customer_key_id">Customer key</label>
+                    {{ form.customer_key_id(class="form-input") }}
+                    <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">Only events for hosts under this key will fire.</p>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Event types</label>
+                    <div style="display: flex; flex-direction: column; gap: 0.375rem;">
+                        {% for value, label in form.event_types.choices %}
+                        <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.875rem;">
+                            <input type="checkbox" name="event_types" value="{{ value }}">
+                            <span><code class="mono" style="font-size: 0.75rem;">{{ value }}</code> — {{ label }}</span>
+                        </label>
+                        {% endfor %}
+                    </div>
+                </div>
+                {{ form.submit(class="btn btn-primary", style="width: 100%;") }}
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+function copyText(text) {
+    navigator.clipboard.writeText(text).then(() => {
+        const n = document.createElement('div');
+        n.textContent = 'Copied to clipboard';
+        n.style.cssText = 'position:fixed;bottom:2rem;right:2rem;background:var(--success);color:white;padding:0.75rem 1.5rem;border-radius:var(--radius-sm);font-weight:500;z-index:1000;';
+        document.body.appendChild(n);
+        setTimeout(() => n.remove(), 1500);
+    });
+}
+</script>
+{% endblock %}

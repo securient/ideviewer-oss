@@ -684,6 +684,24 @@
                 </a>
             </li>
             <li>
+                <a href="{{ url_for('main.webhooks') }}" class="nav-link {% if request.endpoint in ['main.webhooks', 'main.webhook_detail'] %}active{% endif %}">
+                    <i class="fas fa-paper-plane"></i>
+                    Webhooks
+                </a>
+            </li>
+            <li>
+                <a href="{{ url_for('main.policies') }}" class="nav-link {% if request.endpoint == 'main.policies' %}active{% endif %}">
+                    <i class="fas fa-gavel"></i>
+                    Policies
+                </a>
+            </li>
+            <li>
+                <a href="{{ url_for('main.violations') }}" class="nav-link {% if request.endpoint == 'main.violations' %}active{% endif %}">
+                    <i class="fas fa-exclamation-triangle"></i>
+                    Violations
+                </a>
+            </li>
+            <li>
                 <a href="{{ url_for('auth.logout') }}" class="nav-link">
                     <i class="fas fa-sign-out-alt"></i>
                     Logout

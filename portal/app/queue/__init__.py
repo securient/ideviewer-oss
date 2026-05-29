@@ -9,7 +9,8 @@ functions, and bound methods will not survive the round-trip.
 """
 import logging
 import os
-from typing import Callable, Optional
+from datetime import timedelta
+from typing import Callable, List, Optional, Union
 
 import redis
 from rq import Queue, Retry
@@ -44,7 +45,13 @@ def is_async() -> bool:
     return _queue is not None
 
 
-def enqueue(func: Callable, *args, retry_max: int = 3, **kwargs) -> Optional[Job]:
+def enqueue(
+    func: Callable,
+    *args,
+    retry_max: int = 3,
+    retry_interval: Optional[List[int]] = None,
+    **kwargs,
+) -> Optional[Job]:
     """Enqueue a job. Returns the Job, or None if running sync.
 
     ``func`` must be a module-level function — RQ pickles it by
@@ -52,12 +59,29 @@ def enqueue(func: Callable, *args, retry_max: int = 3, **kwargs) -> Optional[Job
     """
     if _queue is None:
         return None
+    interval = retry_interval if retry_interval is not None else [10, 60, 300]
     return _queue.enqueue(
         func,
         *args,
-        retry=Retry(max=retry_max, interval=[10, 60, 300]),
+        retry=Retry(max=retry_max, interval=interval),
         **kwargs,
     )
+
+
+def enqueue_in(
+    delay: Union[int, timedelta],
+    func: Callable,
+    *args,
+    **kwargs,
+) -> Optional[Job]:
+    """Schedule a job to run after ``delay``. Returns the Job, or None if
+    Redis is unavailable (sync mode — caller must accept no scheduling).
+    """
+    if _queue is None:
+        return None
+    if isinstance(delay, int):
+        delay = timedelta(seconds=delay)
+    return _queue.enqueue_in(delay, func, *args, **kwargs)
 
 
 def reset_for_tests() -> None:
