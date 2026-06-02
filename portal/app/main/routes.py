@@ -13,6 +13,7 @@ from app.models import (
     ScanRequest, TamperAlert, Vulnerability, HookBypass, AIToolInfo,
     WebhookSubscription, WebhookDelivery,
     ExtensionPolicy, PolicyViolation,
+    ExtensionMetadata,
 )
 from app.auth.forms import CustomerKeyForm, WebhookSubscriptionForm, ExtensionPolicyForm
 from app.marketplace import fetch_extension_details
@@ -702,6 +703,28 @@ def host_detail(host_id):
     # Get AI tool info for this host
     ai_tools = AIToolInfo.query.filter_by(host_id=host.id).order_by(AIToolInfo.tool_name).all()
 
+    # Unpublished-extension detection (T2.3): find ExtensionMetadata
+    # rows flagged is_unpublished where the (extension_id, version)
+    # tuple matches something in this host's current scan.
+    unpublished_extensions = []
+    if latest_report and latest_report.scan_data:
+        seen_keys = set()
+        for ide in latest_report.scan_data.get('ides') or []:
+            for ext in ide.get('extensions') or []:
+                ext_id = ext.get('id') or ext.get('extension_id')
+                version = ext.get('version')
+                if ext_id and version:
+                    seen_keys.add((ext_id, version))
+        if seen_keys:
+            ext_ids = list({k[0] for k in seen_keys})
+            candidate_rows = ExtensionMetadata.query.filter(
+                ExtensionMetadata.is_unpublished == True,  # noqa: E712
+                ExtensionMetadata.extension_id.in_(ext_ids),
+            ).all()
+            for row in candidate_rows:
+                if (row.extension_id, row.version) in seen_keys:
+                    unpublished_extensions.append(row)
+
     return render_template('main/host_detail.html',
                            host=host,
                            extensions=extensions,
@@ -715,7 +738,8 @@ def host_detail(host_id):
                            pkg_vuln_map=pkg_vuln_map,
                            total_vuln_count=total_vuln_count,
                            hook_bypasses=hook_bypasses,
-                           ai_tools=ai_tools)
+                           ai_tools=ai_tools,
+                           unpublished_extensions=unpublished_extensions)
 
 
 @main_bp.route('/keys')
@@ -1734,7 +1758,19 @@ def extension_detail(extension_id):
         'risk_explanation': risk_explanation,
     }
     
-    return render_template('main/extension_detail.html', 
+    # Lookup the cached enrichment metadata (T2.3). Surface the most
+    # recent cache row for any version of this extension so the page
+    # can render the "unpublished" banner without depending on which
+    # version is currently installed.
+    cached_meta = (
+        ExtensionMetadata.query
+        .filter_by(marketplace=marketplace, extension_id=extension_id)
+        .order_by(ExtensionMetadata.fetched_at.desc())
+        .first()
+    )
+    extension_data['cached_metadata'] = cached_meta
+
+    return render_template('main/extension_detail.html',
                            extension=extension_data,
                            permission_info=PERMISSION_INFO)
 

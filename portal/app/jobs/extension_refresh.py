@@ -11,6 +11,8 @@ import logging
 import os
 from datetime import datetime, timedelta
 
+from app.queue import enqueue
+
 refresh_logger = logging.getLogger("ideviewer.extension_refresh")
 
 REFRESH_THRESHOLD = timedelta(hours=24)
@@ -33,7 +35,6 @@ def refresh_stale_extension_metadata() -> dict:
 
 def _run() -> dict:
     from app.models import ExtensionMetadata
-    from app.queue import enqueue
     from app.jobs.extension_enrich import enrich_extension
 
     cutoff = datetime.utcnow() - REFRESH_THRESHOLD

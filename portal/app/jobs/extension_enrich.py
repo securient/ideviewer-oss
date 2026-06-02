@@ -19,6 +19,9 @@ import os
 from datetime import datetime, timedelta
 from typing import Iterable, Optional, Set, Tuple
 
+from app.events import emit_event
+from app.marketplace import fetch_extension_with_status
+
 enrich_logger = logging.getLogger("ideviewer.extension_enrich")
 
 # HTTP status codes that we treat as "definitely unpublished" rather
@@ -46,7 +49,6 @@ def enrich_extension(marketplace: str, extension_id: str, version: str) -> dict:
 def _run(marketplace: str, extension_id: str, version: str) -> dict:
     from app import db
     from app.models import ExtensionMetadata
-    from app.marketplace import fetch_extension_with_status
 
     data, status_code = fetch_extension_with_status(extension_id, marketplace)
 
@@ -108,7 +110,6 @@ def _emit_unpublished_event(row) -> None:
     least one host running this extension+version.
     """
     from app import db
-    from app.events import emit_event
     from app.models import Host, ScanReport, CustomerKey
 
     # Find which customers have hosts running this extension at this
@@ -191,6 +192,9 @@ def _coerce_dt(v) -> Optional[datetime]:
 STALE_AFTER = timedelta(hours=24)
 
 
+from app.queue import enqueue
+
+
 def enqueue_pending_enrichments(scan_data: dict) -> int:
     """Schedule enrichment jobs for every (marketplace, extension_id,
     version) in ``scan_data`` whose cache row is missing or older than
@@ -203,7 +207,6 @@ def enqueue_pending_enrichments(scan_data: dict) -> int:
     """
     from app.marketplace import detect_marketplace
     from app.models import ExtensionMetadata
-    from app.queue import enqueue
 
     triples = _collect_triples(scan_data, detect_marketplace)
     if not triples:
