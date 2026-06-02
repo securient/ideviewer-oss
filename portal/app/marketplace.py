@@ -23,12 +23,19 @@ _ssl_context = None  # Use system default SSL verification
 
 
 class MarketplaceClient:
-    """Base class for marketplace API clients."""
-    
+    """Base class for marketplace API clients.
+
+    last_status_code is set on every call to _make_request: the actual
+    HTTP code on success, e.code on HTTPError, or None on transport
+    errors. The enrichment worker (T2.3) reads it to distinguish
+    "definitely unpublished" (404/410) from transient failures.
+    """
+
     def __init__(self, timeout: int = 10):
         self.timeout = timeout
-    
-    def _make_request(self, url: str, method: str = 'GET', 
+        self.last_status_code: Optional[int] = None
+
+    def _make_request(self, url: str, method: str = 'GET',
                       data: Optional[bytes] = None,
                       headers: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         """Make an HTTP request."""
@@ -38,13 +45,19 @@ class MarketplaceClient:
         }
         if headers:
             req_headers.update(headers)
-        
+
         request = Request(url, data=data, headers=req_headers, method=method)
-        
+
         try:
             with urlopen(request, timeout=self.timeout, context=_ssl_context) as response:
+                self.last_status_code = getattr(response, 'status', 200)
                 return json.loads(response.read().decode('utf-8'))
-        except (HTTPError, URLError, json.JSONDecodeError) as e:
+        except HTTPError as e:
+            self.last_status_code = e.code
+            logger.error(f"Marketplace request failed (HTTP {e.code}): {e}")
+            return {}
+        except (URLError, json.JSONDecodeError) as e:
+            self.last_status_code = None
             logger.error(f"Marketplace request failed: {e}")
             return {}
 
@@ -336,25 +349,45 @@ def get_marketplace_client(marketplace: str) -> Optional[MarketplaceClient]:
 def fetch_extension_details(extension_id: str, marketplace: str = 'vscode') -> Optional[Dict[str, Any]]:
     """
     Fetch extension details from the appropriate marketplace.
-    
+
     Args:
         extension_id: Extension identifier (e.g., 'ms-python.python')
         marketplace: Marketplace type ('vscode', 'jetbrains', etc.)
-    
+
     Returns:
         Extension details dictionary or None if not found.
     """
+    data, _ = fetch_extension_with_status(extension_id, marketplace)
+    return data
+
+
+def fetch_extension_with_status(
+    extension_id: str,
+    marketplace: str = 'vscode',
+) -> tuple:
+    """Fetch extension details and return ``(data_or_None, http_status_or_None)``.
+
+    The status code lets callers (the enrichment worker) distinguish
+    "definitely unpublished" (404 / 410) from "transient failure"
+    (None or 5xx). ``data`` is None when the marketplace returned no
+    extension; the status may still be 200 in that case (e.g. the
+    VS Code Marketplace returns 200 with an empty result list for
+    non-existent extensions).
+    """
     client = get_marketplace_client(marketplace)
-    
+    if client is None:
+        return None, None
+
     if marketplace.lower() in ('vscode', 'cursor', 'kiro', 'vscodium', 'openvsx'):
-        # Parse publisher.extension format
         parts = extension_id.split('.', 1)
         if len(parts) != 2:
-            return None
+            return None, None
         publisher, name = parts
-        return client.get_extension(publisher, name)
-    
-    elif marketplace.lower() in ('jetbrains', 'intellij-idea', 'pycharm', 'webstorm', 'goland'):
-        return client.get_extension(extension_id)
-    
-    return None
+        data = client.get_extension(publisher, name)
+        return data, client.last_status_code
+
+    if marketplace.lower() in ('jetbrains', 'intellij-idea', 'pycharm', 'webstorm', 'goland'):
+        data = client.get_extension(extension_id)
+        return data, client.last_status_code
+
+    return None, None

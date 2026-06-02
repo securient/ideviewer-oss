@@ -930,3 +930,66 @@ class PolicyViolation(db.Model):
 
     def __repr__(self):
         return f'<PolicyViolation host={self.host_id} ext={self.extension_id}@{self.extension_version}>'
+
+
+class ExtensionMetadata(db.Model):
+    """Cached marketplace metadata for one (marketplace, extension_id, version).
+
+    Populated by the enrichment worker. The whole point is to detect the
+    moment an extension becomes ``is_unpublished`` — that's the
+    "removed 3 days ago and you still have it on 14 hosts" demo. The
+    transition (False -> True) emits ``extension.unpublished_detected``
+    exactly once; subsequent rechecks just refresh ``fetched_at``.
+    """
+
+    __tablename__ = 'extension_metadata'
+
+    id = db.Column(db.Integer, primary_key=True)
+    marketplace = db.Column(db.String(50), nullable=False)
+    extension_id = db.Column(db.String(200), nullable=False)
+    version = db.Column(db.String(50), nullable=False)
+
+    publisher_display_name = db.Column(db.String(200), nullable=True)
+    install_count = db.Column(db.BigInteger, nullable=True)
+    average_rating = db.Column(db.Float, nullable=True)
+    last_updated_at = db.Column(db.DateTime, nullable=True)  # marketplace's lastUpdated, not ours
+
+    is_unpublished = db.Column(db.Boolean, default=False, nullable=False)
+    unpublished_detected_at = db.Column(db.DateTime, nullable=True)
+
+    raw_data = db.Column(db.JSON, nullable=True)
+
+    fetched_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    last_fetch_status = db.Column(db.Integer, nullable=True)  # http status or None
+
+    __table_args__ = (
+        db.UniqueConstraint('marketplace', 'extension_id', 'version', name='uq_ext_meta'),
+        db.Index('idx_ext_meta_lookup', 'marketplace', 'extension_id', 'version'),
+        db.Index('idx_ext_meta_unpublished', 'is_unpublished'),
+        db.Index('idx_ext_meta_fetched_at', 'fetched_at'),
+    )
+
+    @property
+    def is_stale(self) -> bool:
+        from datetime import timedelta
+        if self.fetched_at is None:
+            return True
+        return datetime.utcnow() - self.fetched_at > timedelta(hours=24)
+
+    def to_dict(self):
+        return {
+            'marketplace': self.marketplace,
+            'extension_id': self.extension_id,
+            'version': self.version,
+            'publisher_display_name': self.publisher_display_name,
+            'install_count': self.install_count,
+            'average_rating': self.average_rating,
+            'last_updated_at': self.last_updated_at.isoformat() if self.last_updated_at else None,
+            'is_unpublished': self.is_unpublished,
+            'unpublished_detected_at': self.unpublished_detected_at.isoformat() if self.unpublished_detected_at else None,
+            'fetched_at': self.fetched_at.isoformat() if self.fetched_at else None,
+        }
+
+    def __repr__(self):
+        flag = ' UNPUBLISHED' if self.is_unpublished else ''
+        return f'<ExtensionMetadata {self.marketplace}:{self.extension_id}@{self.version}{flag}>'
