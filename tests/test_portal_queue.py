@@ -61,6 +61,46 @@ class TestEnqueueSync:
         assert result is None
 
 
+class TestEnqueueWithMockedQueue:
+    """Verify enqueue's handling of retry_max edge cases against a real
+    RQ Queue surface — caught in smoke test when retry_max=0 crashed
+    Retry(max=0) in events.emit_event's enqueue call.
+    """
+
+    def _install_mock_queue(self):
+        from unittest.mock import MagicMock
+        from app import queue as queue_module
+        mock_q = MagicMock()
+        mock_q.enqueue.return_value = MagicMock(id="job-123")
+        queue_module._queue = mock_q
+        return mock_q
+
+    def test_retry_max_zero_omits_Retry_argument(self, portal_app):
+        from app.queue import enqueue, reset_for_tests
+        with portal_app.app_context():
+            mock_q = self._install_mock_queue()
+            try:
+                enqueue(lambda: None, retry_max=0)
+                _, kwargs = mock_q.enqueue.call_args
+                assert "retry" not in kwargs, (
+                    "retry_max=0 must not pass a Retry — RQ rejects max<1"
+                )
+            finally:
+                reset_for_tests()
+
+    def test_positive_retry_max_passes_Retry(self, portal_app):
+        from app.queue import enqueue, reset_for_tests
+        from rq import Retry
+        with portal_app.app_context():
+            mock_q = self._install_mock_queue()
+            try:
+                enqueue(lambda: None, retry_max=3)
+                _, kwargs = mock_q.enqueue.call_args
+                assert isinstance(kwargs.get("retry"), Retry)
+            finally:
+                reset_for_tests()
+
+
 # ──────────────────────────────────────────────
 # Vulnerability scan idempotency (sync path)
 # ──────────────────────────────────────────────

@@ -59,6 +59,11 @@ def enqueue(
     """
     if _queue is None:
         return None
+    if retry_max <= 0:
+        # RQ's Retry requires max >= 1. retry_max=0 is the caller's way
+        # of saying "no RQ-level retries" (typically because the job
+        # schedules its own backoff via enqueue_in).
+        return _queue.enqueue(func, *args, **kwargs)
     interval = retry_interval if retry_interval is not None else [10, 60, 300]
     return _queue.enqueue(
         func,
