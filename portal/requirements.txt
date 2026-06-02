@@ -29,3 +29,4 @@ gunicorn>=21.0.0
 # Background job queue
 redis>=5.0.0
 rq>=1.16.0
+rq-scheduler>=0.13.1

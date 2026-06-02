@@ -332,3 +332,99 @@ resource "aws_ecs_service" "portal_worker" {
     Name = "${local.name_prefix}-portal-worker"
   }
 }
+
+# -----------------------------------------------------------------------------
+# RQ Scheduler Task Definition (ticks the daily extension-metadata refresh)
+# Single replica only — multiple schedulers would double-schedule recurring
+# jobs since each maintains its own copy in Redis.
+# -----------------------------------------------------------------------------
+
+resource "aws_cloudwatch_log_group" "portal_scheduler" {
+  name              = "/ecs/${local.name_prefix}-portal-scheduler"
+  retention_in_days = 30
+
+  tags = {
+    Name = "${local.name_prefix}-portal-scheduler-logs"
+  }
+}
+
+resource "aws_ecs_task_definition" "portal_scheduler" {
+  family                   = "${local.name_prefix}-portal-scheduler"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = "256"
+  memory                   = "512"
+  execution_role_arn       = aws_iam_role.ecs_execution.arn
+  task_role_arn            = aws_iam_role.ecs_task.arn
+
+  container_definitions = jsonencode([
+    {
+      name      = "portal-scheduler"
+      image     = "${aws_ecr_repository.portal.repository_url}:latest"
+      essential = true
+
+      command = ["python", "run_scheduler.py"]
+
+      environment = [
+        { name = "FLASK_CONFIG", value = "production" },
+        { name = "PORTAL_URL", value = local.portal_url },
+        { name = "DISABLE_LOCAL_LOGIN", value = var.disable_local_login },
+        { name = "FORCE_HTTPS", value = var.custom_domain != "" ? "true" : "false" },
+        { name = "REDIS_URL", value = "redis://${aws_elasticache_cluster.main.cache_nodes[0].address}:6379/0" },
+        { name = "SKIP_DB_INIT", value = "1" },
+      ]
+
+      secrets = [
+        {
+          name      = "SECRET_KEY"
+          valueFrom = "${aws_secretsmanager_secret.app_config.arn}:SECRET_KEY::"
+        },
+        {
+          name      = "DATABASE_URL"
+          valueFrom = "${aws_secretsmanager_secret.app_config.arn}:DATABASE_URL::"
+        },
+      ]
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = aws_cloudwatch_log_group.portal_scheduler.name
+          "awslogs-region"        = var.aws_region
+          "awslogs-stream-prefix" = "scheduler"
+        }
+      }
+    }
+  ])
+
+  tags = {
+    Name = "${local.name_prefix}-portal-scheduler"
+  }
+}
+
+resource "aws_ecs_service" "portal_scheduler" {
+  name            = "${local.name_prefix}-portal-scheduler"
+  cluster         = aws_ecs_cluster.main.id
+  task_definition = aws_ecs_task_definition.portal_scheduler.arn
+  desired_count   = 1
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = aws_subnet.private[*].id
+    security_groups  = [aws_security_group.ecs.id]
+    assign_public_ip = false
+  }
+
+  depends_on = [
+    aws_db_instance.main,
+    aws_secretsmanager_secret_version.app_config,
+    aws_elasticache_cluster.main,
+  ]
+
+  lifecycle {
+    ignore_changes = [desired_count]
+  }
+
+  tags = {
+    Name = "${local.name_prefix}-portal-scheduler"
+  }
+}
