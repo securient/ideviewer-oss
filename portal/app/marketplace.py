@@ -346,6 +346,24 @@ def get_marketplace_client(marketplace: str) -> Optional[MarketplaceClient]:
     return clients.get(marketplace.lower(), VSCodeMarketplace)()
 
 
+def detect_marketplace(ide_name: str = '', ide_type: str = '') -> str:
+    """Map a scan IDE (name + type) to the marketplace it pulls from.
+
+    Mirrors the heuristic used elsewhere in main/routes for the
+    extension search UI. Falls back to 'vscode' for everything else
+    since that's the dominant marketplace.
+    """
+    name = (ide_name or '').lower()
+    typ = (ide_type or '').lower()
+    if 'jetbrains' in typ or name in {'pycharm', 'intellij', 'webstorm', 'goland', 'rubymine', 'phpstorm', 'clion', 'rider', 'datagrip'}:
+        return 'jetbrains'
+    if 'vscodium' in typ:
+        return 'vscodium'
+    if 'cursor' in typ or 'cursor' in name:
+        return 'cursor'
+    return 'vscode'
+
+
 def fetch_extension_details(extension_id: str, marketplace: str = 'vscode') -> Optional[Dict[str, Any]]:
     """
     Fetch extension details from the appropriate marketplace.
