@@ -252,6 +252,48 @@ If an extension that was previously marked unpublished returns to the marketplac
 - The first refresh tick fires 60 seconds after the scheduler starts; subsequent ticks every 24 hours.
 - Without Redis (sync mode), scan-triggered enrichments run inline as best-effort single attempts and no daily refresh runs. This matches the existing degradation pattern for vuln scans and webhook deliveries.
 
+## Observability
+
+Two surfaces ship as part of the Sprint 3 thin slice: JSON logging in production and a Prometheus `/metrics` endpoint.
+
+### JSON logs
+
+When `FLASK_CONFIG=production`, the portal switches its root logger to a JSON formatter writing one object per line to stdout. Each line includes `timestamp`, `level`, `name`, `message`, plus any `extra=` fields. Dev (`FLASK_CONFIG=development` or `testing`) keeps the human-readable default. No log shippers required — your container runtime (ECS, k8s, Docker) is already capturing stdout.
+
+Example line:
+
+```json
+{"timestamp": "2026-06-03T17:42:01.123Z", "level": "INFO", "name": "ideviewer.webhook", "message": "delivery succeeded", "delivery_id": 412, "event_id": "evt_…"}
+```
+
+### `/metrics` (Prometheus)
+
+The portal exposes `GET /metrics` in the standard Prometheus text format. Four counters:
+
+| Metric | Labels | Incremented when |
+|---|---|---|
+| `ideviewer_webhook_deliveries_total` | `status` (`succeeded` / `failed` / `retrying`) | Every webhook delivery attempt reaches a terminal state |
+| `ideviewer_policy_violations_total` | `action` (`warn` / `block-alert`) | A policy match writes a `PolicyViolation` row |
+| `ideviewer_rq_jobs_total` | `job`, `outcome` (`success` / `failure`) | An RQ background job completes |
+| `ideviewer_extension_enrichments_total` | `outcome` (`success` / `unpublished` / `error`) | The marketplace enrichment worker finishes one extension |
+
+**Auth**: open by default. Operators control access via network policy / firewall / ingress (the standard Prometheus exporter pattern). To require a token, set `METRICS_TOKEN=<value>` and Prometheus will need to send `Authorization: Bearer <value>`. Leave unset for OSS deployments where the metrics endpoint isn't on a public ingress.
+
+### Scraping
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: ideviewer-portal
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['portal.internal:8080']
+    # If METRICS_TOKEN is set:
+    # authorization:
+    #   type: Bearer
+    #   credentials: <value>
+```
+
 ## Production Deployment
 
 ### Google Cloud Run
