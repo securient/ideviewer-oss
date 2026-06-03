@@ -9,6 +9,8 @@ import os
 from datetime import datetime
 from typing import Any, Dict
 
+from app.observability import RQ_JOBS
+
 vuln_logger = logging.getLogger("ideviewer.vuln_scan")
 
 
@@ -48,7 +50,9 @@ def _run(host_id, db, Host) -> Dict[str, Any]:
         db.session.commit()
     except Exception:
         db.session.rollback()
+        RQ_JOBS.labels(job='vuln_scan', outcome='failure').inc()
         raise
+    RQ_JOBS.labels(job='vuln_scan', outcome='success').inc()
     return {"host_id": host_id, "vulnerabilities_found": count}
 
 

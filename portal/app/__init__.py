@@ -90,13 +90,20 @@ def create_app(config_name=None):
     from app.auth.routes import auth_bp
     from app.main.routes import main_bp
     from app.api.routes import api_bp
-    
+    from app.observability import metrics_bp, init_json_logging
+
     app.register_blueprint(auth_bp)
     app.register_blueprint(main_bp)
     app.register_blueprint(api_bp, url_prefix='/api')
-    
-    # Exempt API blueprint from CSRF (uses API keys instead)
+    app.register_blueprint(metrics_bp)
+
+    # Exempt API and metrics blueprints from CSRF.
     csrf.exempt(api_bp)
+    csrf.exempt(metrics_bp)
+
+    # Observability: JSON logs in production, /metrics always exposed.
+    app.config.setdefault('FLASK_CONFIG', config_name)
+    init_json_logging(app)
     
     # Database initialization — skip during migration commands and when entrypoint already ran migrations
     if not os.environ.get('SKIP_DB_INIT') and not os.environ.get('MIGRATIONS_DONE'):

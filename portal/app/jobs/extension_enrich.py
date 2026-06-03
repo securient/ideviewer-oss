@@ -21,6 +21,7 @@ from typing import Iterable, Optional, Set, Tuple
 
 from app.events import emit_event
 from app.marketplace import fetch_extension_with_status
+from app.observability import EXTENSION_ENRICHMENTS
 
 enrich_logger = logging.getLogger("ideviewer.extension_enrich")
 
@@ -93,6 +94,11 @@ def _run(marketplace: str, extension_id: str, version: str) -> dict:
 
     if just_unpublished:
         _emit_unpublished_event(row)
+        EXTENSION_ENRICHMENTS.labels(outcome='unpublished').inc()
+    elif data:
+        EXTENSION_ENRICHMENTS.labels(outcome='success').inc()
+    else:
+        EXTENSION_ENRICHMENTS.labels(outcome='error').inc()
 
     return {
         "marketplace": marketplace,
