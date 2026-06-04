@@ -228,6 +228,72 @@ action: allow
 priority: 1                  # higher priority (lower number) than the broader block below
 ```
 
+## Extension marketplace enrichment
+
+On every scan, the portal enqueues a marketplace-metadata fetch for each `(marketplace, extension_id, version)` whose cache is missing or older than 24 hours. The worker stores publisher name, install count, average rating, marketplace `lastUpdated`, and — most importantly — `is_unpublished`. The whole point is to detect the moment an extension is removed from the marketplace while still installed on your hosts.
+
+### What ships with it
+
+- A new `extension_metadata` table — one row per `(marketplace, extension_id, version)`.
+- A worker job `enrich_extension(marketplace, extension_id, version)` that calls the marketplace and upserts the cache row.
+- A daily refresh job, run by an **rq-scheduler** container (`portal-scheduler` in compose / Terraform), that re-polls every cache row older than 24h. This is the safety net for hosts that stopped scanning.
+- A new webhook event `extension.unpublished_detected` that fires **exactly once** per `(extension_id, version)` on the cache transition `is_unpublished: false → true`. The payload includes the list of affected hosts under your customer key.
+- Two UI surfaces: a red banner on the extension detail page when the extension is unpublished, and an "Unpublished" stat card + table on the host detail page listing affected extensions.
+
+### How "unpublished" is decided
+
+The marketplace client tracks the HTTP status of the most recent fetch. A response of **404** or **410** is treated as definitively unpublished. Any other failure (network error, 5xx, JSON parse failure) is treated as transient — the cache row's `is_unpublished` state stays untouched, only `fetched_at` and `last_fetch_status` are refreshed. This prevents flapping caused by marketplace outages.
+
+If an extension that was previously marked unpublished returns to the marketplace (200 with data), `is_unpublished` is cleared and `unpublished_detected_at` is reset — but no recovery event is fired.
+
+### Operational notes
+
+- The scheduler service must run as **a single replica** — multiple `rqscheduler` processes against the same Redis would double-schedule the recurring job. The Terraform module pins `desired_count = 1`.
+- The first refresh tick fires 60 seconds after the scheduler starts; subsequent ticks every 24 hours.
+- Without Redis (sync mode), scan-triggered enrichments run inline as best-effort single attempts and no daily refresh runs. This matches the existing degradation pattern for vuln scans and webhook deliveries.
+
+## Observability
+
+Two surfaces ship as part of the Sprint 3 thin slice: JSON logging in production and a Prometheus `/metrics` endpoint.
+
+### JSON logs
+
+When `FLASK_CONFIG=production`, the portal switches its root logger to a JSON formatter writing one object per line to stdout. Each line includes `timestamp`, `level`, `name`, `message`, plus any `extra=` fields. Dev (`FLASK_CONFIG=development` or `testing`) keeps the human-readable default. No log shippers required — your container runtime (ECS, k8s, Docker) is already capturing stdout.
+
+Example line:
+
+```json
+{"timestamp": "2026-06-03T17:42:01.123Z", "level": "INFO", "name": "ideviewer.webhook", "message": "delivery succeeded", "delivery_id": 412, "event_id": "evt_…"}
+```
+
+### `/metrics` (Prometheus)
+
+The portal exposes `GET /metrics` in the standard Prometheus text format. Four counters:
+
+| Metric | Labels | Incremented when |
+|---|---|---|
+| `ideviewer_webhook_deliveries_total` | `status` (`succeeded` / `failed` / `retrying`) | Every webhook delivery attempt reaches a terminal state |
+| `ideviewer_policy_violations_total` | `action` (`warn` / `block-alert`) | A policy match writes a `PolicyViolation` row |
+| `ideviewer_rq_jobs_total` | `job`, `outcome` (`success` / `failure`) | An RQ background job completes |
+| `ideviewer_extension_enrichments_total` | `outcome` (`success` / `unpublished` / `error`) | The marketplace enrichment worker finishes one extension |
+
+**Auth**: open by default. Operators control access via network policy / firewall / ingress (the standard Prometheus exporter pattern). To require a token, set `METRICS_TOKEN=<value>` and Prometheus will need to send `Authorization: Bearer <value>`. Leave unset for OSS deployments where the metrics endpoint isn't on a public ingress.
+
+### Scraping
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: ideviewer-portal
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['portal.internal:8080']
+    # If METRICS_TOKEN is set:
+    # authorization:
+    #   type: Bearer
+    #   credentials: <value>
+```
+
 ## Production Deployment
 
 ### Google Cloud Run

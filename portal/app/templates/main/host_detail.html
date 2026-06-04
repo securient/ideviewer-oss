@@ -416,7 +416,53 @@
                 <p>Bypasses</p>
             </div>
         </div>
+        <div class="stat-card">
+            <div class="stat-icon {% if unpublished_extensions|length > 0 %}red{% else %}green{% endif %}">
+                <i class="fas fa-store-slash"></i>
+            </div>
+            <div class="stat-content">
+                <h3>{{ unpublished_extensions|length }}</h3>
+                <p>Unpublished</p>
+            </div>
+        </div>
     </div>
+
+    {% if unpublished_extensions %}
+    <div class="card" style="border-left: 4px solid var(--danger, #dc3545); margin-bottom: 1.5rem;">
+        <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem;">
+            <i class="fas fa-store-slash" style="color: var(--danger, #dc3545);"></i>
+            <h2 class="card-title" style="margin: 0;">Extensions removed from marketplace</h2>
+        </div>
+        <p style="color: var(--text-secondary); margin-bottom: 0.75rem;">These extensions are still installed on this host but are no longer available on their respective marketplaces. Investigate why they were removed.</p>
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Extension</th>
+                        <th>Version</th>
+                        <th>Marketplace</th>
+                        <th>Removed detected</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for m in unpublished_extensions %}
+                    <tr>
+                        <td>
+                            <a href="{{ url_for('main.extension_detail', extension_id=m.extension_id, marketplace=m.marketplace) }}">
+                                <code class="mono" style="font-size: 0.8125rem;">{{ m.extension_id }}</code>
+                            </a>
+                            {% if m.publisher_display_name %}<div style="font-size: 0.75rem; color: var(--text-muted);">{{ m.publisher_display_name }}</div>{% endif %}
+                        </td>
+                        <td>{{ m.version }}</td>
+                        <td>{{ m.marketplace | capitalize }}</td>
+                        <td style="font-size: 0.8125rem;">{{ m.unpublished_detected_at.strftime('%Y-%m-%d') if m.unpublished_detected_at else '—' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
 
     {% if hook_bypasses %}
     <!-- Hook Bypass Warnings -->

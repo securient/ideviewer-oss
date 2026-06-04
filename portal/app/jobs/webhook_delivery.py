@@ -20,6 +20,8 @@ from typing import Tuple
 
 import requests
 
+from app.observability import WEBHOOK_DELIVERIES
+
 logger = logging.getLogger("ideviewer.webhook")
 
 # Backoff schedule applied AFTER attempt N (i.e. RETRY_DELAYS[0] is the
@@ -87,6 +89,7 @@ def _attempt_delivery(delivery_id: int) -> None:
             delivery.last_error = None
             sub.record_success()
             db.session.commit()
+            WEBHOOK_DELIVERIES.labels(status='succeeded').inc()
             return
         delivery.last_error = f"HTTP {status_code}"
     except requests.RequestException as e:
@@ -100,11 +103,13 @@ def _attempt_delivery(delivery_id: int) -> None:
         delivery.completed_at = datetime.utcnow()
         sub.record_failure()
         db.session.commit()
+        WEBHOOK_DELIVERIES.labels(status='failed').inc()
         return
 
     delivery.status = WebhookDelivery.STATUS_RETRYING
     sub.record_failure()
     db.session.commit()
+    WEBHOOK_DELIVERIES.labels(status='retrying').inc()
 
     delay = RETRY_DELAYS_SECONDS[delivery.attempt_count - 1]
     from app.queue import enqueue_in

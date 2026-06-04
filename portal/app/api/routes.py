@@ -17,6 +17,7 @@ from app.models import CustomerKey, Host, ScanReport, ExtensionInfo, SecretFindi
 from app.main.routes import calculate_risk_level
 from app.events import emit_event
 from app.policy.runner import evaluate_and_record, build_extensions_from_scan
+from app.jobs.extension_enrich import enqueue_pending_enrichments
 from app.queue import is_async, enqueue
 from app.jobs.vuln_scan import scan_host_vulnerabilities
 
@@ -598,6 +599,8 @@ def submit_report():
         extensions=build_extensions_from_scan(scan_data, calculate_risk_level),
     )
 
+    enqueue_pending_enrichments(scan_data)
+
     response_payload = {
         'success': True,
         'report_id': report.id,
@@ -1079,6 +1082,7 @@ def receive_realtime_event():
             customer_key_id=key.id,
             extensions=build_extensions_from_scan(scan_data, calculate_risk_level),
         )
+        enqueue_pending_enrichments(scan_data)
 
     # Log the event
     changes = data.get('changes', [])

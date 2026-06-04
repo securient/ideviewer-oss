@@ -173,6 +173,8 @@ Each component is classified by type (`skill`, `mcp-server`, `cloud-mcp`, `integ
 - **Background Job Queue** — vulnerability lookups dispatched to an RQ worker when Redis is available; falls back to inline scans otherwise
 - **Outbound Webhooks** — push events (`tamper_alert.created`, `extension.high_risk_detected`, `hook_bypass.detected`, `policy.violation`) to any HTTP endpoint with HMAC-signed payloads and automatic retry
 - **Extension Policies** — per-customer allow/warn/block rules matching publisher, extension ID, permission, or risk-level; matches surface as `PolicyViolation` rows, critical tamper alerts (for block), and `policy.violation` webhooks
+- **Marketplace Enrichment** — background worker fetches publisher, install count, rating, and (critically) `is_unpublished` state for every extension on every host; daily re-poll detects when an extension is removed from the marketplace, emits `extension.unpublished_detected` webhook, and surfaces a banner on affected hosts
+- **Observability** — JSON logs to stdout in production, plus a Prometheus `/metrics` endpoint with counters for webhook deliveries, policy violations, RQ job outcomes, and extension enrichments
 
 ## Deployment
 

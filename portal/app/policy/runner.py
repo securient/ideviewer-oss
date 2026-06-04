@@ -16,6 +16,7 @@ from typing import Iterable, List
 from app import db
 from app.events import emit_event
 from app.models import ExtensionPolicy, PolicyViolation, TamperAlert
+from app.observability import POLICY_VIOLATIONS
 from app.policy import evaluate
 
 
@@ -81,6 +82,7 @@ def evaluate_and_record(
             db.session.flush()
 
         violation_ids.append(violation.id)
+        POLICY_VIOLATIONS.labels(action=match.action).inc()
 
         if match.action == ExtensionPolicy.ACTION_BLOCK_ALERT:
             alert = TamperAlert(
