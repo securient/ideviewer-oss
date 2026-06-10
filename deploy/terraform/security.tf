@@ -60,11 +60,54 @@ resource "aws_vpc_security_group_ingress_rule" "ecs_from_alb" {
   referenced_security_group_id = aws_security_group.alb.id
 }
 
-resource "aws_vpc_security_group_egress_rule" "ecs_all" {
+# Scoped egress instead of allow-all. The portal box holds the org's entire
+# findings inventory, so an unrestricted egress is the obvious exfil path.
+# It needs: HTTPS out (ECR, Secrets Manager, OSV.dev, marketplaces, OAuth),
+# DNS, and the database/queue. For an even tighter posture, replace the
+# 0.0.0.0/0 HTTPS rule with VPC endpoints for the AWS services.
+resource "aws_vpc_security_group_egress_rule" "ecs_https" {
   security_group_id = aws_security_group.ecs.id
-  description       = "Allow all outbound (ECR, Secrets Manager, NAT)"
-  ip_protocol       = "-1"
+  description       = "HTTPS out (AWS APIs, OSV.dev, marketplaces, OAuth)"
+  from_port         = 443
+  to_port           = 443
+  ip_protocol       = "tcp"
   cidr_ipv4         = "0.0.0.0/0"
+}
+
+resource "aws_vpc_security_group_egress_rule" "ecs_dns_udp" {
+  security_group_id = aws_security_group.ecs.id
+  description       = "DNS (UDP)"
+  from_port         = 53
+  to_port           = 53
+  ip_protocol       = "udp"
+  cidr_ipv4         = "0.0.0.0/0"
+}
+
+resource "aws_vpc_security_group_egress_rule" "ecs_dns_tcp" {
+  security_group_id = aws_security_group.ecs.id
+  description       = "DNS (TCP)"
+  from_port         = 53
+  to_port           = 53
+  ip_protocol       = "tcp"
+  cidr_ipv4         = "0.0.0.0/0"
+}
+
+resource "aws_vpc_security_group_egress_rule" "ecs_to_rds" {
+  security_group_id            = aws_security_group.ecs.id
+  description                  = "PostgreSQL to RDS"
+  from_port                    = 5432
+  to_port                      = 5432
+  ip_protocol                  = "tcp"
+  referenced_security_group_id = aws_security_group.rds.id
+}
+
+resource "aws_vpc_security_group_egress_rule" "ecs_to_redis" {
+  security_group_id            = aws_security_group.ecs.id
+  description                  = "Redis to ElastiCache"
+  from_port                    = 6379
+  to_port                      = 6379
+  ip_protocol                  = "tcp"
+  referenced_security_group_id = aws_security_group.redis.id
 }
 
 # -----------------------------------------------------------------------------

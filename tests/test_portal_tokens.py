@@ -293,3 +293,56 @@ class TestScanRequestsAcceptHostToken:
             json={"status": "scanning_ides"},
         )
         assert resp.status_code == 403
+
+
+class TestEnrolledHostRequiresToken:
+    """P4: once a host holds a valid enrollment token, the shared customer
+    key may no longer write data on its behalf (only enroll / rotate)."""
+
+    def test_customer_key_heartbeat_rejected_for_enrolled_host(
+        self, portal_client, test_customer_key, test_host_with_token
+    ):
+        host, _token = test_host_with_token
+        resp = portal_client.post(
+            "/api/heartbeat",
+            headers={"X-Customer-Key": test_customer_key.key},
+            json={"hostname": host.hostname, "daemon_version": "0.2.0"},
+        )
+        assert resp.status_code == 401
+
+    def test_token_heartbeat_still_succeeds_for_enrolled_host(
+        self, portal_client, test_host_with_token
+    ):
+        host, token = test_host_with_token
+        resp = portal_client.post(
+            "/api/heartbeat",
+            headers={"X-Host-Token": token},
+            json={"hostname": host.hostname, "daemon_version": "0.2.0"},
+        )
+        assert resp.status_code == 200
+
+    def test_customer_key_report_rejected_for_enrolled_host(
+        self, portal_client, test_customer_key, test_host_with_token
+    ):
+        host, _token = test_host_with_token
+        resp = portal_client.post(
+            "/api/report",
+            headers={"X-Customer-Key": test_customer_key.key},
+            json={
+                "hostname": host.hostname,
+                "platform": "Linux",
+                "scan_data": {"ides": [], "total_ides": 0, "total_extensions": 0},
+            },
+        )
+        assert resp.status_code == 401
+
+    def test_customer_key_works_for_unenrolled_host(
+        self, portal_client, test_customer_key
+    ):
+        # A host with no token yet can still bootstrap over the customer key.
+        resp = portal_client.post(
+            "/api/heartbeat",
+            headers={"X-Customer-Key": test_customer_key.key},
+            json={"hostname": "brand-new-unenrolled-host", "daemon_version": "0.2.0"},
+        )
+        assert resp.status_code == 200

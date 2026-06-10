@@ -26,6 +26,12 @@ resource "aws_db_instance" "main" {
   max_allocated_storage = var.rds_max_allocated_storage
   storage_type          = "gp3"
 
+  # Encryption at rest. The portal DB holds every host's findings, secret
+  # locations and CVEs — it must be encrypted. Uses the AWS-managed RDS KMS
+  # key unless rds_kms_key_id is supplied.
+  storage_encrypted = true
+  kms_key_id        = var.rds_kms_key_id != "" ? var.rds_kms_key_id : null
+
   db_name  = "ideviewer"
   username = local.rds_username
   password = random_password.rds_master_password.result
@@ -42,7 +48,7 @@ resource "aws_db_instance" "main" {
   final_snapshot_identifier = var.rds_skip_final_snapshot ? null : "${local.name_prefix}-final-snapshot"
 
   apply_immediately   = true
-  deletion_protection = false
+  deletion_protection = var.rds_deletion_protection
 
   tags = {
     Name = "${local.name_prefix}-postgres"

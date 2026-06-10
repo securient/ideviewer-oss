@@ -1,0 +1,6 @@
+{
+  "_comment": "Canonical extension permission risk tiers. Single source of truth for IDEViewer's permission-based risk classification. The portal loads this at runtime (portal/app/risk_rules.py). The Go scanner's risk model is being converged onto this file; until then, keep the two in sync and covered by parity tests.",
+  "critical": ["*", "onFileSystem", "shellExecution", "processExecution"],
+  "high": ["authentication", "terminal", "taskDefinitions", "onUri", "onAuthenticationRequest"],
+  "medium": ["buildSystems", "onStartupFinished", "debuggers", "onDebug", "onTerminalProfile"]
+}

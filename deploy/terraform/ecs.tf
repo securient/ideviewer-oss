@@ -131,7 +131,7 @@ resource "aws_ecs_task_definition" "portal" {
         { name = "PORTAL_URL", value = local.portal_url },
         { name = "DISABLE_LOCAL_LOGIN", value = var.disable_local_login },
         { name = "FORCE_HTTPS", value = var.custom_domain != "" ? "true" : "false" },
-        { name = "REDIS_URL", value = "redis://${aws_elasticache_cluster.main.cache_nodes[0].address}:6379/0" },
+        # REDIS_URL is delivered via Secrets Manager (authenticated rediss:// URL).
       ]
 
       secrets = [
@@ -150,6 +150,10 @@ resource "aws_ecs_task_definition" "portal" {
         {
           name      = "GOOGLE_CLIENT_SECRET"
           valueFrom = "${aws_secretsmanager_secret.app_config.arn}:GOOGLE_CLIENT_SECRET::"
+        },
+        {
+          name      = "REDIS_URL"
+          valueFrom = "${aws_secretsmanager_secret.app_config.arn}:REDIS_URL::"
         },
       ]
 
@@ -262,7 +266,7 @@ resource "aws_ecs_task_definition" "portal_worker" {
         { name = "PORTAL_URL", value = local.portal_url },
         { name = "DISABLE_LOCAL_LOGIN", value = var.disable_local_login },
         { name = "FORCE_HTTPS", value = var.custom_domain != "" ? "true" : "false" },
-        { name = "REDIS_URL", value = "redis://${aws_elasticache_cluster.main.cache_nodes[0].address}:6379/0" },
+        # REDIS_URL is delivered via Secrets Manager (authenticated rediss:// URL).
         { name = "SKIP_DB_INIT", value = "1" },
       ]
 
@@ -282,6 +286,10 @@ resource "aws_ecs_task_definition" "portal_worker" {
         {
           name      = "GOOGLE_CLIENT_SECRET"
           valueFrom = "${aws_secretsmanager_secret.app_config.arn}:GOOGLE_CLIENT_SECRET::"
+        },
+        {
+          name      = "REDIS_URL"
+          valueFrom = "${aws_secretsmanager_secret.app_config.arn}:REDIS_URL::"
         },
       ]
 
@@ -321,7 +329,7 @@ resource "aws_ecs_service" "portal_worker" {
   depends_on = [
     aws_db_instance.main,
     aws_secretsmanager_secret_version.app_config,
-    aws_elasticache_cluster.main,
+    aws_elasticache_replication_group.main,
   ]
 
   lifecycle {
@@ -370,7 +378,7 @@ resource "aws_ecs_task_definition" "portal_scheduler" {
         { name = "PORTAL_URL", value = local.portal_url },
         { name = "DISABLE_LOCAL_LOGIN", value = var.disable_local_login },
         { name = "FORCE_HTTPS", value = var.custom_domain != "" ? "true" : "false" },
-        { name = "REDIS_URL", value = "redis://${aws_elasticache_cluster.main.cache_nodes[0].address}:6379/0" },
+        # REDIS_URL is delivered via Secrets Manager (authenticated rediss:// URL).
         { name = "SKIP_DB_INIT", value = "1" },
       ]
 
@@ -417,7 +425,7 @@ resource "aws_ecs_service" "portal_scheduler" {
   depends_on = [
     aws_db_instance.main,
     aws_secretsmanager_secret_version.app_config,
-    aws_elasticache_cluster.main,
+    aws_elasticache_replication_group.main,
   ]
 
   lifecycle {

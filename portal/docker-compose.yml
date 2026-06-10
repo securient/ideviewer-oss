@@ -63,6 +63,14 @@ services:
       # Flask config
       FLASK_CONFIG: production
       SECRET_KEY: dev-secret-key-change-in-production
+      # LOCAL DEV ONLY: allow the known-insecure SECRET_KEY above. Never set
+      # this in a real deployment — provide a strong SECRET_KEY instead.
+      ALLOW_INSECURE_SECRET_KEY: "1"
+
+      # Initial admin credentials (LOCAL DEV ONLY). In a real deployment,
+      # omit IDEVIEWER_ADMIN_PASSWORD and a strong password is generated and
+      # printed to the logs on first boot.
+      IDEVIEWER_ADMIN_PASSWORD: ideviewer
 
       # Database connection
       DATABASE_URL: postgresql://ideviewer:ideviewer_dev_password@db:5432/ideviewer
@@ -101,6 +109,7 @@ services:
       # Flask config
       FLASK_CONFIG: production
       SECRET_KEY: dev-secret-key-change-in-production
+      ALLOW_INSECURE_SECRET_KEY: "1"  # LOCAL DEV ONLY
 
       # Database connection
       DATABASE_URL: postgresql://ideviewer:ideviewer_dev_password@db:5432/ideviewer
@@ -130,6 +139,7 @@ services:
     environment:
       FLASK_CONFIG: production
       SECRET_KEY: dev-secret-key-change-in-production
+      ALLOW_INSECURE_SECRET_KEY: "1"  # LOCAL DEV ONLY
       DATABASE_URL: postgresql://ideviewer:ideviewer_dev_password@db:5432/ideviewer
       REDIS_URL: redis://redis:6379/0
       PORTAL_URL: http://localhost:8080

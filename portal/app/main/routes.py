@@ -1442,37 +1442,16 @@ def get_risk_level_info(risk_level: str) -> dict:
     return RISK_LEVEL_INFO.get(risk_level, RISK_LEVEL_INFO['low'])
 
 
-def calculate_risk_level(permissions):
-    """Calculate risk level based on permissions."""
-    
-    if not permissions:
-        return 'low'
-    
-    critical_perms = {'*', 'onFileSystem', 'shellExecution', 'processExecution'}
-    high_perms = {'authentication', 'terminal', 'taskDefinitions', 'onUri', 'onAuthenticationRequest'}
-    medium_perms = {'buildSystems', 'onStartupFinished', 'debuggers', 'onDebug', 'onTerminalProfile'}
-    
-    has_dangerous = False
-    
-    for perm in permissions:
-        perm_name = perm.get('name', '') if isinstance(perm, dict) else str(perm)
-        
-        if perm_name in critical_perms:
-            return 'critical'
-        if perm_name in high_perms:
-            has_dangerous = True
-        if isinstance(perm, dict) and perm.get('is_dangerous'):
-            has_dangerous = True
-    
-    if has_dangerous:
-        return 'high'
-    
-    for perm in permissions:
-        perm_name = perm.get('name', '') if isinstance(perm, dict) else str(perm)
-        if perm_name in medium_perms:
-            return 'medium'
-    
-    return 'low'
+# Risk tiers and the classifier now live in app.risk_rules (single source of
+# truth, loaded from rules/extension_risk_tiers.json). Re-exported here so the
+# many existing `from app.main.routes import calculate_risk_level` imports keep
+# working.
+from app.risk_rules import (
+    calculate_risk_level,
+    CRITICAL_PERMISSIONS,
+    HIGH_PERMISSIONS,
+    MEDIUM_PERMISSIONS,
+)
 
 
 def get_risk_explanation(permissions, risk_level: str) -> str:
@@ -1483,21 +1462,18 @@ def get_risk_explanation(permissions, risk_level: str) -> str:
     critical_found = []
     high_found = []
     medium_found = []
-    
-    critical_perms = {'*', 'onFileSystem', 'shellExecution', 'processExecution'}
-    high_perms = {'authentication', 'terminal', 'taskDefinitions', 'onUri', 'onAuthenticationRequest'}
-    medium_perms = {'buildSystems', 'onStartupFinished', 'debuggers', 'onDebug', 'onTerminalProfile'}
-    
+
+    # Tiers come from the shared source of truth (app.risk_rules).
     for perm in permissions:
         perm_name = perm.get('name', '') if isinstance(perm, dict) else str(perm)
-        
-        if perm_name in critical_perms:
+
+        if perm_name in CRITICAL_PERMISSIONS:
             info = get_permission_info(perm_name)
             critical_found.append(f"• {info['name']}: {info['concern']}")
-        elif perm_name in high_perms or (isinstance(perm, dict) and perm.get('is_dangerous')):
+        elif perm_name in HIGH_PERMISSIONS or (isinstance(perm, dict) and perm.get('is_dangerous')):
             info = get_permission_info(perm_name)
             high_found.append(f"• {info['name']}: {info['concern']}")
-        elif perm_name in medium_perms:
+        elif perm_name in MEDIUM_PERMISSIONS:
             info = get_permission_info(perm_name)
             medium_found.append(f"• {info['name']}: {info['concern']}")
     

@@ -7,7 +7,9 @@ All API endpoints require a valid customer key in the X-Customer-Key header.
 from flask import Blueprint, request, jsonify, current_app
 from datetime import datetime
 import hashlib
+import os
 import socket
+import threading
 import traceback
 
 import logging
@@ -142,6 +144,26 @@ def _enforce_hostname_binding(host, body_hostname):
         return None
     if body_hostname and body_hostname != host.hostname:
         return {'error': 'Hostname does not match token binding'}, 403
+    return None
+
+
+def _reject_customer_key_if_enrolled(key, host_from_token, hostname):
+    """Refuse customer-key data writes once a host has been enrolled.
+
+    After enrollment a host holds a per-host token and the daemon uses it
+    (X-Host-Token). The shared customer key is then only valid for
+    enrollment / token rotation. This stops a holder of the org-wide
+    customer key from impersonating or overwriting an already-enrolled
+    host's data via the legacy customer-key path.
+
+    Returns an error tuple (response_dict, status) to reject, else None.
+    Enrollment (register-host) and rotation intentionally do NOT call this.
+    """
+    if host_from_token is not None:
+        return None  # already token-authenticated — fine
+    existing = Host.query.filter_by(hostname=hostname, customer_key_id=key.id).first()
+    if existing is not None and existing.token_is_valid():
+        return {'error': 'Host is enrolled; X-Host-Token required'}, 401
     return None
 
 
@@ -331,6 +353,10 @@ def submit_report():
     err = _enforce_hostname_binding(host_from_token, hostname)
     if err:
         return jsonify(err[0]), err[1]
+
+    enroll_err = _reject_customer_key_if_enrolled(key, host_from_token, hostname)
+    if enroll_err:
+        return jsonify(enroll_err[0]), enroll_err[1]
 
     scan_data = data.get('scan_data')
     if not scan_data:
@@ -568,19 +594,41 @@ def submit_report():
     # Commit everything first so the daemon gets a fast response
     db.session.commit()
 
-    # Run vulnerability enrichment. Async path uses RQ; sync fallback runs
-    # inline so first-run UX is preserved when Redis is unavailable.
+    # Run vulnerability enrichment without blocking the daemon's response.
+    #   * Async path (Redis present): enqueue an RQ job.
+    #   * No queue: run in a background thread bound to the current app so
+    #     the OSV.dev network round-trip can't stall (or time out) report
+    #     ingestion. Set INLINE_VULN_SCAN=0 to skip it entirely.
     host_id_for_vuln = host.id
     job_id = None
     if is_async():
         job = enqueue(scan_host_vulnerabilities, host_id_for_vuln)
         if job is not None:
             job_id = job.id
-    else:
-        try:
-            scan_host_vulnerabilities(host_id_for_vuln)
-        except Exception as e:
-            current_app.logger.error("inline vuln scan failed: %s", e)
+    elif os.environ.get('INLINE_VULN_SCAN', '1').lower() in ('1', 'true', 'yes'):
+        if current_app.config.get('TESTING'):
+            # Under tests run synchronously: the suite uses an in-memory
+            # SQLite DB (per-connection) and tears it down right after the
+            # request, so a background thread would race the teardown.
+            try:
+                scan_host_vulnerabilities(host_id_for_vuln)
+            except Exception as e:
+                vuln_logger.error("inline vuln scan failed: %s", e)
+        else:
+            app_obj = current_app._get_current_object()
+
+            def _bg_vuln_scan(hid, app_ref):
+                with app_ref.app_context():
+                    try:
+                        scan_host_vulnerabilities(hid)
+                    except Exception as e:
+                        vuln_logger.error("background vuln scan failed: %s", e)
+
+            threading.Thread(
+                target=_bg_vuln_scan,
+                args=(host_id_for_vuln, app_obj),
+                daemon=True,
+            ).start()
 
     for ext_data in high_risk_extensions:
         emit_event(
@@ -770,6 +818,10 @@ def heartbeat():
     if err:
         return jsonify(err[0]), err[1]
 
+    enroll_err = _reject_customer_key_if_enrolled(key, host_from_token, hostname)
+    if enroll_err:
+        return jsonify(enroll_err[0]), enroll_err[1]
+
     host = host_from_token
     if host is None:
         host = Host.query.filter_by(
@@ -811,6 +863,10 @@ def receive_alert():
     if err:
         return jsonify(err[0]), err[1]
 
+    enroll_err = _reject_customer_key_if_enrolled(key, host_from_token, hostname)
+    if enroll_err:
+        return jsonify(enroll_err[0]), enroll_err[1]
+
     host = host_from_token
     if host is None:
         host = Host.query.filter_by(
@@ -820,7 +876,7 @@ def receive_alert():
 
     if not host:
         return jsonify({'error': 'Host not found'}), 404
-    
+
     # Determine severity based on alert type
     severity_map = {
         'daemon_stopping': 'high',
@@ -895,6 +951,10 @@ def deregister_host():
     if err:
         return jsonify(err[0]), err[1]
 
+    enroll_err = _reject_customer_key_if_enrolled(key, host_from_token, hostname)
+    if enroll_err:
+        return jsonify(enroll_err[0]), enroll_err[1]
+
     host = host_from_token
     if host is None:
         host = Host.query.filter_by(
@@ -961,6 +1021,10 @@ def receive_realtime_event():
     err = _enforce_hostname_binding(host_from_token, hostname)
     if err:
         return jsonify(err[0]), err[1]
+
+    enroll_err = _reject_customer_key_if_enrolled(key, host_from_token, hostname)
+    if enroll_err:
+        return jsonify(enroll_err[0]), enroll_err[1]
 
     host = host_from_token
     if host is None:
@@ -1114,6 +1178,10 @@ def receive_hook_bypass():
     err = _enforce_hostname_binding(host_from_token, hostname)
     if err:
         return jsonify(err[0]), err[1]
+
+    enroll_err = _reject_customer_key_if_enrolled(key, host_from_token, hostname)
+    if enroll_err:
+        return jsonify(enroll_err[0]), enroll_err[1]
 
     host = host_from_token
     if host is None:
