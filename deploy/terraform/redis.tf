@@ -56,16 +56,33 @@ resource "aws_elasticache_parameter_group" "redis" {
 # Cluster
 # -----------------------------------------------------------------------------
 
-resource "aws_elasticache_cluster" "main" {
-  cluster_id           = "${local.name_prefix}-redis"
+resource "random_password" "redis_auth" {
+  length  = 32
+  special = false # ElastiCache AUTH tokens must be alphanumeric-safe
+}
+
+# A single-node replication group (cluster mode disabled). We use this rather
+# than aws_elasticache_cluster because AUTH tokens and at-rest encryption are
+# only available on replication groups. The job queue carries host/finding
+# identifiers, so it must not be an unauthenticated plaintext service on the
+# VPC network.
+resource "aws_elasticache_replication_group" "main" {
+  replication_group_id = "${local.name_prefix}-redis"
+  description          = "IDEViewer portal job queue (RQ)"
   engine               = "redis"
   engine_version       = "7.1"
   node_type            = var.redis_node_type
-  num_cache_nodes      = 1
+  num_cache_clusters   = 1
   parameter_group_name = aws_elasticache_parameter_group.redis.name
   subnet_group_name    = aws_elasticache_subnet_group.redis.name
   security_group_ids   = [aws_security_group.redis.id]
   port                 = 6379
+
+  automatic_failover_enabled = false
+
+  transit_encryption_enabled = true
+  at_rest_encryption_enabled = true
+  auth_token                 = random_password.redis_auth.result
 
   tags = {
     Name = "${local.name_prefix}-redis"

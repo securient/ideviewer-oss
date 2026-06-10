@@ -133,10 +133,11 @@ func TestRedactValue(t *testing.T) {
 		want  string
 	}{
 		{"", ""},
-		{"ab", "**"},
-		{"abcde", "ab***"},
-		{"abcdefghijk", "abcd***hijk"},
-		{"abcdefghijklmnop", "abcd********mnop"},
+		{"ab", "[redacted · short]"},
+		{"abcde", "[redacted · short]"},
+		{"abcdefghijk", "[redacted · short]"},
+		{"abcdefghijklmnop", "[redacted · medium]"},
+		{"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "[redacted · long]"},
 	}
 
 	for _, tt := range tests {

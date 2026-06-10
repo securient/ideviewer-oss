@@ -24,7 +24,7 @@ import logging
 import os
 import sys
 
-from flask import Blueprint, Response, abort, request
+from flask import Blueprint, Response, abort, current_app, request
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
     Counter,
@@ -114,15 +114,31 @@ metrics_bp = Blueprint('metrics', __name__)
 def metrics():
     """Prometheus scrape endpoint.
 
-    If ``METRICS_TOKEN`` is set, require ``Authorization: Bearer <token>``.
-    If unset (default), open to anyone with network access.
+    Auth model:
+      * If ``METRICS_TOKEN`` is set, require ``Authorization: Bearer <token>``.
+      * If unset and running in production, deny (403) — metrics must not be
+        open to the network by default in production. Set METRICS_TOKEN to
+        enable scraping.
+      * If unset in dev/testing, stay open for convenience.
     """
     expected = os.environ.get('METRICS_TOKEN')
     if expected:
         auth = request.headers.get('Authorization', '')
-        if not auth.startswith('Bearer '):
+        if not auth.startswith('Bearer ') or not hmac_compare(auth[len('Bearer '):], expected):
             abort(401)
-        if auth[len('Bearer '):] != expected:
-            abort(401)
+    else:
+        config_name = (
+            current_app.config.get('FLASK_CONFIG')
+            or os.environ.get('FLASK_CONFIG')
+            or ''
+        )
+        if config_name == 'production':
+            abort(403)
 
     return Response(generate_latest(), mimetype=CONTENT_TYPE_LATEST)
+
+
+def hmac_compare(a: str, b: str) -> bool:
+    """Constant-time string comparison for bearer-token checks."""
+    import hmac as _hmac
+    return _hmac.compare_digest(a, b)

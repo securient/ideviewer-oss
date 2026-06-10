@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 )
@@ -33,19 +34,31 @@ var (
 	awsSecretKeyRe = regexp.MustCompile(`^[a-zA-Z0-9+/]{40}$`)
 )
 
-// redactValue redacts a secret value, showing only first 4 and last 4 characters.
+// redactValue produces a non-reversible placeholder for a detected secret.
+//
+// It deliberately reveals NO plaintext characters — only a fixed mask and a
+// coarse length class. The previous implementation exposed the first and last
+// four characters plus the exact length, which leaks recoverable material for
+// structured / fixed-prefix secrets (e.g. AWS access keys) and aids
+// brute-force/correlation. The portal only needs enough to display and
+// de-duplicate a finding, never the value itself.
 func redactValue(value string) string {
-	if value == "" {
+	n := len(value)
+	if n == 0 {
 		return ""
 	}
-	n := len(value)
-	if n <= 10 {
-		if n <= 2 {
-			return strings.Repeat("*", n)
-		}
-		return value[:2] + strings.Repeat("*", n-2)
+	var class string
+	switch {
+	case n < 16:
+		class = "short"
+	case n < 40:
+		class = "medium"
+	case n < 80:
+		class = "long"
+	default:
+		class = "very long"
 	}
-	return value[:4] + strings.Repeat("*", n-8) + value[n-4:]
+	return "[redacted · " + class + "]"
 }
 
 // checkEthPrivateKey checks if a key/value pair looks like an Ethereum private key.
@@ -106,8 +119,8 @@ func checkMnemonic(filePath, key, value string, lineNum int) *SecretFinding {
 		}
 	}
 
-	first2 := words[0] + " " + words[1]
-	last := words[len(words)-1]
+	// Never echo any of the actual words — that alone can be enough to
+	// recover or confirm a seed phrase. Report the word count only.
 	return &SecretFinding{
 		FilePath:       filePath,
 		SecretType:     "mnemonic_seed_phrase",
@@ -116,7 +129,7 @@ func checkMnemonic(filePath, key, value string, lineNum int) *SecretFinding {
 		Severity:       "critical",
 		Description:    "Plaintext mnemonic/seed phrase detected. This can be used to derive all wallet keys and drain all associated funds.",
 		Recommendation: "Use encrypted keystores or hardware wallets. Never store seed phrases in plaintext files.",
-		RedactedValue:  redactValue(first2) + " ... " + redactValue(last),
+		RedactedValue:  fmt.Sprintf("[redacted · %d-word seed phrase]", len(words)),
 		Source:         "filesystem",
 	}
 }

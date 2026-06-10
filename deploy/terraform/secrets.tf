@@ -30,8 +30,12 @@ resource "aws_secretsmanager_secret" "app_config" {
 locals {
   # Compute secret payload — any change here triggers a new version
   app_secrets = jsonencode({
-    SECRET_KEY           = base64encode(random_password.secret_key.result)
-    DATABASE_URL         = "postgresql://${local.rds_username}:${random_password.rds_master_password.result}@${aws_db_instance.main.endpoint}/ideviewer"
+    SECRET_KEY   = base64encode(random_password.secret_key.result)
+    DATABASE_URL = "postgresql://${local.rds_username}:${random_password.rds_master_password.result}@${aws_db_instance.main.endpoint}/ideviewer"
+    # Authenticated, TLS Redis URL (matches auth_token + transit encryption on
+    # the ElastiCache cluster). Delivered via Secrets Manager so the token is
+    # never exposed in the plaintext task-definition environment.
+    REDIS_URL            = "rediss://:${random_password.redis_auth.result}@${aws_elasticache_replication_group.main.primary_endpoint_address}:6379/0"
     GOOGLE_CLIENT_ID     = var.google_client_id
     GOOGLE_CLIENT_SECRET = var.google_client_secret
     DISABLE_LOCAL_LOGIN  = var.disable_local_login

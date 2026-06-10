@@ -2,6 +2,10 @@
 package updater
 
 import (
+	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,6 +23,27 @@ import (
 
 const githubAPIURL = "https://api.github.com/repos/securient/ideviewer-oss/releases/latest"
 
+// updatePublicKeyB64 is the base64-encoded ed25519 public key (32 bytes)
+// that release artifacts are signed with. It is compiled into the binary so
+// an attacker who can MITM the download or tamper with a release asset cannot
+// get a malicious installer to run.
+//
+// SETUP (one-time, by the maintainer):
+//
+//	# generate a keypair (keep the private key offline / in CI secrets)
+//	openssl genpkey -algorithm ed25519 -out ideviewer-update.key
+//	openssl pkey -in ideviewer-update.key -pubout -outform DER | tail -c 32 | base64
+//	# paste the output below, then sign each release artifact:
+//	#   openssl pkeyutl -sign -inkey ideviewer-update.key -rawin -in <asset> -out <asset>.sig
+//	#   base64 -w0 <asset>.sig > <asset>.sig.b64   # upload <asset>.sig.b64 as "<asset>.sig"
+//
+// Until this is populated, auto-update fails closed (refuses to install).
+const updatePublicKeyB64 = ""
+
+// ErrUpdateUnverified means the downloaded artifact could not be
+// cryptographically verified against the pinned signing key.
+var errUpdateUnverified = fmt.Errorf("update signature verification failed")
+
 // UpdateInfo holds the result of an update check.
 type UpdateInfo struct {
 	CurrentVersion  string `json:"current_version"`
@@ -26,6 +51,7 @@ type UpdateInfo struct {
 	UpdateAvailable bool   `json:"update_available"`
 	DownloadURL     string `json:"download_url"`
 	AssetName       string `json:"asset_name"`
+	SignatureURL    string `json:"signature_url"`
 }
 
 // githubRelease is the subset of the GitHub release API we need.
@@ -80,12 +106,25 @@ func CheckForUpdate() (*UpdateInfo, error) {
 		}
 	}
 
+	// Find the matching detached signature ("<asset>.sig").
+	var signatureURL string
+	if assetName != "" {
+		want := assetName + ".sig"
+		for _, asset := range release.Assets {
+			if asset.Name == want {
+				signatureURL = asset.BrowserDownloadURL
+				break
+			}
+		}
+	}
+
 	info := &UpdateInfo{
 		CurrentVersion:  current,
 		LatestVersion:   latest,
 		UpdateAvailable: compareVersions(latest, current) > 0,
 		DownloadURL:     downloadURL,
 		AssetName:       assetName,
+		SignatureURL:    signatureURL,
 	}
 
 	return info, nil
@@ -129,7 +168,85 @@ func DownloadAndInstall(info *UpdateInfo) error {
 	}
 	f.Close()
 
+	// Verify the artifact against the pinned signing key BEFORE running any
+	// installer. This is the line of defense against a MITM'd download or a
+	// tampered release asset being executed with elevated privileges.
+	if err := verifyArtifact(destPath, info.SignatureURL); err != nil {
+		return err
+	}
+
 	return installUpdate(destPath)
+}
+
+// verifyArtifact verifies the downloaded file against the pinned ed25519
+// public key using the detached signature at signatureURL. It fails closed:
+// a missing pinned key, missing signature, or any mismatch aborts the update.
+func verifyArtifact(filePath, signatureURL string) error {
+	pubB64 := strings.TrimSpace(updatePublicKeyB64)
+	if pubB64 == "" {
+		return fmt.Errorf("%w: no signing key is pinned in this build; "+
+			"auto-update is disabled until releases are signed (see pkg/updater)", errUpdateUnverified)
+	}
+	pubBytes, err := base64.StdEncoding.DecodeString(pubB64)
+	if err != nil || len(pubBytes) != ed25519.PublicKeySize {
+		return fmt.Errorf("%w: pinned public key is malformed", errUpdateUnverified)
+	}
+
+	if signatureURL == "" {
+		return fmt.Errorf("%w: release has no detached signature (.sig) asset", errUpdateUnverified)
+	}
+
+	sig, err := fetchSignature(signatureURL)
+	if err != nil {
+		return fmt.Errorf("%w: %v", errUpdateUnverified, err)
+	}
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("%w: cannot read downloaded artifact: %v", errUpdateUnverified, err)
+	}
+
+	if !ed25519.Verify(ed25519.PublicKey(pubBytes), data, sig) {
+		return fmt.Errorf("%w: signature does not match the pinned key", errUpdateUnverified)
+	}
+
+	sum := sha256.Sum256(data)
+	fmt.Printf("  Verified update signature (sha256 %s)\n", hex.EncodeToString(sum[:]))
+	return nil
+}
+
+// fetchSignature downloads a detached signature asset. The asset is expected
+// to contain a base64-encoded 64-byte ed25519 signature over the artifact
+// bytes (optionally with surrounding whitespace).
+func fetchSignature(signatureURL string) ([]byte, error) {
+	client := &http.Client{Timeout: 30 * time.Second}
+	req, err := http.NewRequest("GET", signatureURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "IDEViewer-Updater")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to download signature: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("signature download returned %d", resp.StatusCode)
+	}
+
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if err != nil {
+		return nil, err
+	}
+	sig, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(raw)))
+	if err != nil {
+		return nil, fmt.Errorf("signature is not valid base64: %w", err)
+	}
+	if len(sig) != ed25519.SignatureSize {
+		return nil, fmt.Errorf("signature has wrong length (%d)", len(sig))
+	}
+	return sig, nil
 }
 
 // platformAssetPattern returns the (prefix, suffix) for matching release assets.
@@ -153,8 +270,9 @@ func platformAssetPattern() (string, string) {
 func installUpdate(filePath string) error {
 	switch runtime.GOOS {
 	case "darwin":
-		// Remove quarantine attribute.
-		_ = exec.Command("xattr", "-rd", "com.apple.quarantine", filePath).Run()
+		// NOTE: we intentionally do NOT strip the com.apple.quarantine
+		// attribute. Gatekeeper should still evaluate the signed .pkg;
+		// the artifact has already been verified against the pinned key.
 		cmd := exec.Command("sudo", "installer", "-pkg", filePath, "-target", "/")
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr

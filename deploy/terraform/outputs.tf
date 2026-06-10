@@ -30,5 +30,5 @@ output "ecs_service_name" {
 
 output "redis_endpoint" {
   description = "ElastiCache Redis endpoint (private DNS)"
-  value       = "${aws_elasticache_cluster.main.cache_nodes[0].address}:6379"
+  value       = "${aws_elasticache_replication_group.main.primary_endpoint_address}:6379"
 }

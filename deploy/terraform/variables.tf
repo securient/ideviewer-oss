@@ -108,6 +108,18 @@ variable "rds_skip_final_snapshot" {
   default     = true
 }
 
+variable "rds_kms_key_id" {
+  description = "KMS key ARN for RDS encryption at rest. Empty uses the AWS-managed RDS key."
+  type        = string
+  default     = ""
+}
+
+variable "rds_deletion_protection" {
+  description = "Enable RDS deletion protection (recommended true in production)."
+  type        = bool
+  default     = true
+}
+
 variable "redis_node_type" {
   description = "ElastiCache Redis node type"
   type        = string
