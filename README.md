@@ -77,14 +77,18 @@ The portal is a self-hosted web dashboard for monitoring multiple developer mach
 ./start.sh --aws        # Deploy to AWS (ECS + RDS + ALB)
 ```
 
-Default login: `admin` / `ideviewer` (you'll be prompted to change the password).
+Default login (via `./start.sh` or `./start.sh --docker`): `admin` / `ideviewer` — you'll be prompted to change it on first login. When running the portal container directly without setting `IDEVIEWER_ADMIN_PASSWORD`, a strong initial password is generated and printed to the startup logs instead.
+
+> **Portal URL / port:** `./start.sh` (local SQLite) serves on **http://localhost:5000**; `./start.sh --docker` serves on **http://localhost:8080**. Use the matching URL below.
 
 ### Connect a Daemon
+
+First log in to the portal and create a customer key (Keys → Create), then:
 
 ```bash
 ideviewer register \
   --customer-key YOUR-KEY \
-  --portal-url http://localhost:5000
+  --portal-url http://localhost:8080   # use :5000 for ./start.sh (local SQLite)
 ```
 
 The daemon starts automatically after registration and runs continuously in the background.
@@ -96,6 +100,7 @@ docker pull ghcr.io/securient/ideviewer-oss-portal:latest
 docker run -p 8080:8080 \
   -e SECRET_KEY=$(openssl rand -base64 32) \
   -e DATABASE_URL=postgresql://user:pass@host:5432/ideviewer \
+  -e IDEVIEWER_ADMIN_PASSWORD=choose-a-strong-password \
   ghcr.io/securient/ideviewer-oss-portal:latest
 ```
 
