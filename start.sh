@@ -95,6 +95,9 @@ EOF
     # Step 5: Load .env (temporarily disable set -e since .env may have comments/empty lines)
     export FLASK_CONFIG=development
     export FLASK_APP=run.py
+    # Local-dev convenience: keep the documented admin/ideviewer login working.
+    # (The portal otherwise generates a random initial admin password and logs it.)
+    export IDEVIEWER_ADMIN_PASSWORD="${IDEVIEWER_ADMIN_PASSWORD:-ideviewer}"
     set +e
     set -a
     source "$ENV_FILE" 2>/dev/null
