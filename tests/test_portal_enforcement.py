@@ -295,3 +295,39 @@ class TestDependencyRisk:
             assert len(res['examples']) == 3  # critical + 2 high
             # unrelated extension id => nothing
             assert _extension_dependency_risk(test_host.id, 'other.ext')['critical'] == 0
+
+
+class TestNotifications:
+    def test_feed_lists_unacknowledged_and_marks_read(
+        self, portal_app, portal_db, logged_in_client, test_host
+    ):
+        from app.models import TamperAlert
+        portal_app.config['WTF_CSRF_ENABLED'] = False
+        with portal_app.app_context():
+            a1 = TamperAlert(host_id=test_host.id, alert_type='policy_violation',
+                             details='evil ext', severity='critical')
+            a2 = TamperAlert(host_id=test_host.id, alert_type='file_modified',
+                             details='y', severity='critical', is_acknowledged=True)
+            portal_db.session.add_all([a1, a2])
+            portal_db.session.commit()
+            a1id = a1.id
+
+        data = logged_in_client.get('/notifications').get_json()
+        assert data['count'] == 1  # only the unacknowledged one
+        assert data['items'][0]['label'] == 'Policy violation'
+        assert data['items'][0]['category'] == 'policy'
+
+        assert logged_in_client.post(f'/notifications/{a1id}/read').status_code == 200
+        assert logged_in_client.get('/notifications').get_json()['count'] == 0
+
+    def test_read_all(self, portal_app, portal_db, logged_in_client, test_host):
+        from app.models import TamperAlert
+        portal_app.config['WTF_CSRF_ENABLED'] = False
+        with portal_app.app_context():
+            for _ in range(3):
+                portal_db.session.add(TamperAlert(host_id=test_host.id, alert_type='file_modified',
+                                                   details='d', severity='critical'))
+            portal_db.session.commit()
+        assert logged_in_client.get('/notifications').get_json()['count'] == 3
+        assert logged_in_client.post('/notifications/read-all').status_code == 200
+        assert logged_in_client.get('/notifications').get_json()['count'] == 0

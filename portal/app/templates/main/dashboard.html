@@ -81,17 +81,19 @@
         <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
             <h2 class="card-title" style="color: #dc2626;">
                 <i class="fas fa-shield-alt"></i>
-                Tamper Alerts ({{ tamper_alerts|length }})
+                Security Alerts ({{ tamper_alerts|length }})
             </h2>
         </div>
         <p style="margin-bottom: 1rem; color: var(--text-secondary); font-size: 0.875rem;">
-            The following hosts have reported integrity violations. The daemon may have been tampered with or removed.
+            Unacknowledged alerts across your hosts — policy violations and integrity/tamper events (a daemon that may have been tampered with or removed).
         </p>
         <div style="display: flex; flex-direction: column; gap: 0.75rem;">
             {% for item in tamper_alerts %}
             <div style="display: flex; align-items: center; justify-content: space-between; padding: 0.75rem 1rem; background: rgba(220, 38, 38, 0.08); border: 1px solid rgba(220, 38, 38, 0.2); border-radius: var(--radius-sm);">
                 <div style="display: flex; align-items: center; gap: 0.75rem; flex: 1;">
-                    {% if item.alert.alert_type == 'daemon_stopping' %}
+                    {% if item.alert.alert_type == 'policy_violation' %}
+                    <i class="fas fa-gavel" style="color: #f59e0b; font-size: 1.125rem;"></i>
+                    {% elif item.alert.alert_type == 'daemon_stopping' %}
                     <i class="fas fa-power-off" style="color: #f59e0b; font-size: 1.125rem;"></i>
                     {% elif item.alert.alert_type == 'file_deleted' %}
                     <i class="fas fa-trash-alt" style="color: #dc2626; font-size: 1.125rem;"></i>

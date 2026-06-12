@@ -627,6 +627,42 @@
             color: var(--text-muted);
         }
 
+        /* Notifications bell */
+        .notif-wrap { position: relative; display: flex; align-items: center; }
+        .notif-bell { background: none; border: none; cursor: pointer; position: relative; color: var(--text-secondary); }
+        .notif-bell:hover { color: var(--text-primary); }
+        .notif-badge {
+            position: absolute; top: -4px; right: -6px;
+            background: var(--danger); color: #fff; font-size: 0.625rem; font-weight: 700;
+            min-width: 16px; height: 16px; line-height: 16px; text-align: center;
+            border-radius: 9999px; padding: 0 4px;
+        }
+        .notif-dropdown {
+            position: absolute; top: calc(100% + 10px); right: 0; width: 360px;
+            background: var(--bg-card); border: 1px solid var(--border-color);
+            border-radius: var(--radius-md); box-shadow: var(--shadow-lg);
+            display: none; z-index: 1000; max-height: 460px; overflow-y: auto;
+        }
+        .notif-dropdown.active { display: block; }
+        .notif-head {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 0.75rem 1rem; border-bottom: 1px solid var(--border-color);
+            font-weight: 600; font-size: 0.875rem; position: sticky; top: 0; background: var(--bg-card);
+        }
+        .notif-readall { background: none; border: none; color: var(--accent-primary); cursor: pointer; font-size: 0.75rem; }
+        .notif-item { display: flex; gap: 0.75rem; padding: 0.75rem 1rem; border-bottom: 1px solid var(--border-color); align-items: flex-start; }
+        .notif-item:last-child { border-bottom: none; }
+        .notif-icon { width: 28px; height: 28px; border-radius: var(--radius-sm); background: var(--bg-tertiary); display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 0.8125rem; color: var(--text-secondary); }
+        .notif-icon.policy { color: var(--warning); }
+        .notif-icon.integrity { color: var(--danger); }
+        .notif-content { flex: 1; min-width: 0; }
+        .notif-title { font-size: 0.8125rem; font-weight: 600; }
+        .notif-meta { font-size: 0.6875rem; color: var(--text-muted); font-weight: 400; }
+        .notif-detail { font-size: 0.75rem; color: var(--text-secondary); margin-top: 2px; word-break: break-word; }
+        .notif-read { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 0.75rem; flex-shrink: 0; }
+        .notif-read:hover { color: var(--success); }
+        .notif-empty { padding: 1.5rem; text-align: center; color: var(--text-muted); font-size: 0.8125rem; }
+
         /* Responsive */
         @media (max-width: 768px) {
             .navbar {
@@ -700,6 +736,19 @@
                     <i class="fas fa-exclamation-triangle"></i>
                     Violations
                 </a>
+            </li>
+            <li class="notif-wrap">
+                <button type="button" class="nav-link notif-bell" id="notifBell" aria-label="Notifications">
+                    <i class="fas fa-bell"></i>
+                    <span class="notif-badge" id="notifBadge" style="display:none;">0</span>
+                </button>
+                <div class="notif-dropdown" id="notifDropdown">
+                    <div class="notif-head">
+                        <span>Notifications</span>
+                        <button type="button" id="notifReadAll" class="notif-readall">Mark all read</button>
+                    </div>
+                    <div id="notifList"><div class="notif-empty">Loading…</div></div>
+                </div>
             </li>
             <li>
                 <a href="{{ url_for('auth.logout') }}" class="nav-link">
@@ -925,6 +974,65 @@
             div.textContent = text;
             return div.innerHTML;
         }
+    })();
+    </script>
+
+    <script>
+    (function() {
+        const bell = document.getElementById('notifBell');
+        const dropdown = document.getElementById('notifDropdown');
+        const badge = document.getElementById('notifBadge');
+        const list = document.getElementById('notifList');
+        const readAll = document.getElementById('notifReadAll');
+        if (!bell || !dropdown) return;
+        const csrf = (document.querySelector('meta[name="csrf-token"]') || {}).content || '';
+
+        function timeAgo(iso) {
+            if (!iso) return '';
+            const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+            if (s < 60) return 'just now';
+            if (s < 3600) return Math.floor(s / 60) + 'm ago';
+            if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+            return Math.floor(s / 86400) + 'd ago';
+        }
+        function esc(t) { const d = document.createElement('div'); d.textContent = t == null ? '' : t; return d.innerHTML; }
+
+        function render(data) {
+            const n = data.count || 0;
+            if (n > 0) { badge.style.display = 'inline-block'; badge.textContent = n > 99 ? '99+' : n; }
+            else { badge.style.display = 'none'; }
+            if (!data.items || !data.items.length) {
+                list.innerHTML = '<div class="notif-empty">You\'re all caught up.</div>';
+                return;
+            }
+            list.innerHTML = data.items.map(it => `
+                <div class="notif-item" data-id="${it.id}">
+                    <div class="notif-icon ${esc(it.category)}"><i class="fas ${esc(it.icon)}"></i></div>
+                    <div class="notif-content">
+                        <div class="notif-title">${esc(it.label)} <span class="notif-meta">· ${esc(it.hostname)} · ${timeAgo(it.created_at)}</span></div>
+                        <div class="notif-detail">${esc(it.details)}</div>
+                    </div>
+                    <button class="notif-read" title="Mark read" data-id="${it.id}"><i class="fas fa-check"></i></button>
+                </div>`).join('');
+            list.querySelectorAll('.notif-read').forEach(b => b.addEventListener('click', e => {
+                e.stopPropagation();
+                markRead(b.getAttribute('data-id'));
+            }));
+        }
+        function load() { fetch('/notifications').then(r => r.json()).then(render).catch(() => {}); }
+        function markRead(id) {
+            fetch(`/notifications/${id}/read`, { method: 'POST', headers: { 'X-CSRFToken': csrf } }).then(load);
+        }
+        if (readAll) readAll.addEventListener('click', e => {
+            e.stopPropagation();
+            fetch('/notifications/read-all', { method: 'POST', headers: { 'X-CSRFToken': csrf } }).then(load);
+        });
+        bell.addEventListener('click', e => { e.stopPropagation(); dropdown.classList.toggle('active'); });
+        document.addEventListener('click', e => {
+            if (!dropdown.contains(e.target) && !bell.contains(e.target)) dropdown.classList.remove('active');
+        });
+        load();
+        setInterval(load, 30000);
     })();
     </script>
     {% endif %}

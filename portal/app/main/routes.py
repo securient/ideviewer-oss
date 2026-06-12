@@ -1257,9 +1257,85 @@ def acknowledge_alert(alert_id):
     alert.acknowledged_by = current_user.id
     alert.acknowledged_at = datetime.utcnow()
     db.session.commit()
-    
+
     flash('Alert acknowledged', 'success')
     return redirect(url_for('main.dashboard'))
+
+
+# ── Notifications (bell dropdown) ────────────────────────────────────────
+
+def _user_host_ids():
+    key_ids = [k.id for k in current_user.customer_keys]
+    return [h.id for h in Host.query.filter(Host.customer_key_id.in_(key_ids))]
+
+
+# Friendlier labels/icons per alert type for the notifications feed.
+_ALERT_META = {
+    'policy_violation':   {'label': 'Policy violation',   'icon': 'fa-gavel',                'category': 'policy'},
+    'file_modified':      {'label': 'File modified',       'icon': 'fa-file-pen',             'category': 'integrity'},
+    'file_deleted':       {'label': 'File deleted',        'icon': 'fa-file-circle-xmark',    'category': 'integrity'},
+    'daemon_stopping':    {'label': 'Daemon stopping',     'icon': 'fa-circle-stop',          'category': 'integrity'},
+    'uninstall_attempt':  {'label': 'Uninstall attempt',   'icon': 'fa-triangle-exclamation', 'category': 'integrity'},
+    'host_deregistered':  {'label': 'Host deregistered',   'icon': 'fa-plug-circle-xmark',    'category': 'integrity'},
+}
+
+
+@main_bp.route('/notifications')
+@login_required
+def notifications():
+    """JSON feed of unacknowledged alerts for the bell dropdown."""
+    host_ids = _user_host_ids()
+    q = (TamperAlert.query
+         .filter(TamperAlert.host_id.in_(host_ids),
+                 TamperAlert.is_acknowledged == False)  # noqa: E712
+         .order_by(TamperAlert.created_at.desc()))
+    total = q.count()
+    items = q.limit(20).all()
+    host_name = {h.id: h.hostname for h in Host.query.filter(Host.id.in_(host_ids))}
+    return jsonify({
+        'count': total,
+        'items': [{
+            'id': a.id,
+            'alert_type': a.alert_type,
+            'label': _ALERT_META.get(a.alert_type, {}).get('label', a.alert_type.replace('_', ' ').title()),
+            'icon': _ALERT_META.get(a.alert_type, {}).get('icon', 'fa-bell'),
+            'category': _ALERT_META.get(a.alert_type, {}).get('category', 'alert'),
+            'severity': a.severity,
+            'details': (a.details or '')[:200],
+            'hostname': host_name.get(a.host_id, 'unknown host'),
+            'created_at': a.created_at.isoformat() + 'Z' if a.created_at else None,
+        } for a in items],
+    })
+
+
+@main_bp.route('/notifications/<int:alert_id>/read', methods=['POST'])
+@login_required
+def notification_read(alert_id):
+    alert = TamperAlert.query.get_or_404(alert_id)
+    host = Host.query.get(alert.host_id)
+    if not host or host.customer_key.user_id != current_user.id:
+        return jsonify({'error': 'access denied'}), 403
+    alert.is_acknowledged = True
+    alert.acknowledged_by = current_user.id
+    alert.acknowledged_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify({'success': True})
+
+
+@main_bp.route('/notifications/read-all', methods=['POST'])
+@login_required
+def notifications_read_all():
+    host_ids = _user_host_ids()
+    TamperAlert.query.filter(
+        TamperAlert.host_id.in_(host_ids),
+        TamperAlert.is_acknowledged == False,  # noqa: E712
+    ).update(
+        {'is_acknowledged': True, 'acknowledged_by': current_user.id,
+         'acknowledged_at': datetime.utcnow()},
+        synchronize_session=False,
+    )
+    db.session.commit()
+    return jsonify({'success': True})
 
 
 @main_bp.route('/host/<host_id>/trigger-scan', methods=['POST'])
