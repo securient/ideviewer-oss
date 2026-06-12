@@ -75,57 +75,7 @@
         </a>
     </div>
     
-    <!-- Tamper Alerts -->
-    {% if tamper_alerts %}
-    <div class="card" style="margin-bottom: 2rem; border-left: 4px solid #dc2626; background: rgba(220, 38, 38, 0.05);">
-        <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
-            <h2 class="card-title" style="color: #dc2626;">
-                <i class="fas fa-shield-alt"></i>
-                Security Alerts ({{ tamper_alerts|length }})
-            </h2>
-        </div>
-        <p style="margin-bottom: 1rem; color: var(--text-secondary); font-size: 0.875rem;">
-            Unacknowledged alerts across your hosts — policy violations and integrity/tamper events (a daemon that may have been tampered with or removed).
-        </p>
-        <div style="display: flex; flex-direction: column; gap: 0.75rem;">
-            {% for item in tamper_alerts %}
-            <div style="display: flex; align-items: center; justify-content: space-between; padding: 0.75rem 1rem; background: rgba(220, 38, 38, 0.08); border: 1px solid rgba(220, 38, 38, 0.2); border-radius: var(--radius-sm);">
-                <div style="display: flex; align-items: center; gap: 0.75rem; flex: 1;">
-                    {% if item.alert.alert_type == 'policy_violation' %}
-                    <i class="fas fa-gavel" style="color: #f59e0b; font-size: 1.125rem;"></i>
-                    {% elif item.alert.alert_type == 'daemon_stopping' %}
-                    <i class="fas fa-power-off" style="color: #f59e0b; font-size: 1.125rem;"></i>
-                    {% elif item.alert.alert_type == 'file_deleted' %}
-                    <i class="fas fa-trash-alt" style="color: #dc2626; font-size: 1.125rem;"></i>
-                    {% elif item.alert.alert_type == 'file_modified' %}
-                    <i class="fas fa-file-signature" style="color: #dc2626; font-size: 1.125rem;"></i>
-                    {% else %}
-                    <i class="fas fa-exclamation-triangle" style="color: #dc2626; font-size: 1.125rem;"></i>
-                    {% endif %}
-                    <div>
-                        <div style="font-weight: 600; font-size: 0.875rem;">
-                            {% if item.host %}
-                            <a href="{{ url_for('main.host_detail', host_id=item.host.public_id) }}">{{ item.host.hostname }}</a> —
-                            {% endif %}
-                            {{ item.alert.alert_type | replace('_', ' ') | title }}
-                        </div>
-                        <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.125rem;">
-                            {{ item.alert.details[:150] }}{% if item.alert.details|length > 150 %}...{% endif %}
-                            <span style="color: var(--text-muted); margin-left: 0.5rem;">{{ item.alert.created_at.strftime('%Y-%m-%d %H:%M') }}</span>
-                        </div>
-                    </div>
-                </div>
-                <form method="POST" action="{{ url_for('main.acknowledge_alert', alert_id=item.alert.id) }}" style="margin-left: 0.75rem;">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <button type="submit" class="btn btn-secondary" style="font-size: 0.75rem; padding: 0.375rem 0.75rem; white-space: nowrap;">
-                        <i class="fas fa-check"></i> Acknowledge
-                    </button>
-                </form>
-            </div>
-            {% endfor %}
-        </div>
-    </div>
-    {% endif %}
+    {# Security alerts now live in the notifications bell (top nav), not here. #}
 
     <!-- Missing Hosts Alert -->
     {% if missing_hosts %}

@@ -63,13 +63,20 @@ class CustomerKeyForm(FlaskForm):
 
 
 SUPPORTED_WEBHOOK_EVENTS = [
-    ('tamper_alert.created', 'Tamper alert created'),
+    # Proactive — fired as the developer's machine changes
+    ('extension.installed', 'Extension installed'),
+    ('extension.updated', 'Extension updated'),
+    ('extension.removed', 'Extension removed / uninstalled'),
+    ('secret.detected', 'Plaintext secret detected'),
     ('extension.high_risk_detected', 'High-risk extension detected'),
     ('extension.unpublished_detected', 'Extension removed from marketplace'),
-    ('hook_bypass.detected', 'Git hook bypass detected'),
+    # Policy & enforcement
     ('policy.violation', 'Policy violation'),
     ('enforcement.action_created', 'Enforcement action created'),
     ('enforcement.completed', 'Enforcement action completed'),
+    # Integrity / tamper
+    ('tamper_alert.created', 'Tamper alert created'),
+    ('hook_bypass.detected', 'Git hook bypass detected'),
 ]
 
 

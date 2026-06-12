@@ -204,6 +204,22 @@ def _slack_payload(event_type: str, payload: dict) -> dict:
             f"• {ext_label}" + (f"  _{ide}_" if ide else "") +
             f"\n• Publisher: {publisher or '?'}   •   Risk: *{risk or '?'}*"
         ) + vuln_line()
+    elif event_type == 'extension.installed':
+        text = (f":new: *Extension installed* on *{hostname}*\n"
+                f"• {ext_label}" + (f"  _{ide}_" if ide else "") +
+                (f"\n• Publisher: {publisher}" if publisher else "")) + vuln_line()
+    elif event_type == 'extension.updated':
+        prev = ext.get('previous_version')
+        text = (f":arrows_counterclockwise: *Extension updated* on *{hostname}*\n"
+                f"• {ext_label}" + (f" (from {prev})" if prev else "") + (f"  _{ide}_" if ide else "")) + vuln_line()
+    elif event_type == 'extension.removed':
+        text = (f":wastebasket: *Extension removed* on *{hostname}*\n• {ext_label}" + (f"  _{ide}_" if ide else ""))
+    elif event_type == 'secret.detected':
+        sec = d.get('secret') or {}
+        text = (f":key: *Plaintext secret detected* on *{hostname}*\n"
+                f"• Type: *{sec.get('secret_type', '?')}*   •   Source: {sec.get('source', '?')}\n"
+                f"• Location: `{sec.get('file_path', '?')}`"
+                + (f" ({sec.get('variable_name')})" if sec.get('variable_name') else ""))
     elif event_type == 'extension.unpublished_detected':
         text = f":package: *Extension removed from marketplace* — {ext_label} (host *{hostname}*)"
     elif event_type == 'tamper_alert.created':

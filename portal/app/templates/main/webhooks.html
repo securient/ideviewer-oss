@@ -59,10 +59,11 @@
                                 <a href="{{ url_for('main.webhook_detail', public_id=sub.public_id) }}">{{ sub.name }}</a>
                             </td>
                             <td><code class="mono" style="font-size: 0.8125rem;">{{ sub.url }}</code></td>
-                            <td>
-                                {% for et in sub.event_types %}
-                                    <span class="badge badge-low" style="font-size: 0.6875rem;">{{ et }}</span>
-                                {% endfor %}
+                            <td style="white-space: nowrap;">
+                                <span style="color: var(--text-secondary); font-size: 0.8125rem;">
+                                    {% if '*' in sub.event_types %}All events{% else %}{{ sub.event_types|length }} event{{ '' if sub.event_types|length == 1 else 's' }}{% endif %}
+                                </span>
+                                <a href="{{ url_for('main.edit_webhook', public_id=sub.public_id) }}" style="font-size: 0.75rem; margin-left: 0.5rem;">Details / edit</a>
                             </td>
                             <td>
                                 {% if sub.is_active %}

@@ -899,6 +899,35 @@ def create_webhook():
     return redirect(url_for('main.webhooks', reveal=sub.public_id))
 
 
+@main_bp.route('/webhooks/<public_id>/edit', methods=['GET', 'POST'])
+@login_required
+def edit_webhook(public_id):
+    """Edit a webhook's name, URL, and subscribed event types."""
+    sub = _user_subscription_or_404(public_id)
+    if sub is None:
+        return redirect(url_for('main.webhooks'))
+
+    form = WebhookSubscriptionForm(obj=sub)
+    form.customer_key_id.choices = [
+        (k.id, k.name) for k in current_user.customer_keys.filter_by(is_active=True)
+    ]
+    if request.method == 'POST':
+        form.customer_key_id.data = sub.customer_key_id  # key is not editable
+        if not form.validate_on_submit():
+            for field, errors in form.errors.items():
+                for err in errors:
+                    flash(f'{field}: {err}', 'error')
+            return render_template('main/webhook_edit.html', form=form, sub=sub)
+        sub.name = form.name.data
+        sub.url = form.url.data
+        sub.event_types = form.event_types.data
+        db.session.commit()
+        flash(f'Webhook "{sub.name}" updated', 'success')
+        return redirect(url_for('main.webhooks'))
+
+    return render_template('main/webhook_edit.html', form=form, sub=sub)
+
+
 @main_bp.route('/webhooks/<public_id>')
 @login_required
 def webhook_detail(public_id):
@@ -1283,17 +1312,22 @@ _ALERT_META = {
 @main_bp.route('/notifications')
 @login_required
 def notifications():
-    """JSON feed of unacknowledged alerts for the bell dropdown."""
+    """JSON feed for the bell dropdown.
+
+    Returns unread alerts by default; ?include_read=1 also returns recently
+    acknowledged ones (for the "show read" view). ``count`` is always the
+    unread count, so the badge is unaffected by the toggle.
+    """
     host_ids = _user_host_ids()
-    q = (TamperAlert.query
-         .filter(TamperAlert.host_id.in_(host_ids),
-                 TamperAlert.is_acknowledged == False)  # noqa: E712
-         .order_by(TamperAlert.created_at.desc()))
-    total = q.count()
-    items = q.limit(20).all()
+    include_read = request.args.get('include_read') == '1'
+    base = TamperAlert.query.filter(TamperAlert.host_id.in_(host_ids))
+    unread_count = base.filter(TamperAlert.is_acknowledged == False).count()  # noqa: E712
+    q = base if include_read else base.filter(TamperAlert.is_acknowledged == False)  # noqa: E712
+    items = q.order_by(TamperAlert.created_at.desc()).limit(30).all()
     host_name = {h.id: h.hostname for h in Host.query.filter(Host.id.in_(host_ids))}
     return jsonify({
-        'count': total,
+        'count': unread_count,
+        'include_read': include_read,
         'items': [{
             'id': a.id,
             'alert_type': a.alert_type,
@@ -1304,6 +1338,7 @@ def notifications():
             'details': (a.details or '')[:200],
             'hostname': host_name.get(a.host_id, 'unknown host'),
             'created_at': a.created_at.isoformat() + 'Z' if a.created_at else None,
+            'read': bool(a.is_acknowledged),
         } for a in items],
     })
 

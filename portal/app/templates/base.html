@@ -745,7 +745,10 @@
                 <div class="notif-dropdown" id="notifDropdown">
                     <div class="notif-head">
                         <span>Notifications</span>
-                        <button type="button" id="notifReadAll" class="notif-readall">Mark all read</button>
+                        <span>
+                            <button type="button" id="notifShowRead" class="notif-readall" style="margin-right: 0.75rem;">Show read</button>
+                            <button type="button" id="notifReadAll" class="notif-readall">Mark all read</button>
+                        </span>
                     </div>
                     <div id="notifList"><div class="notif-empty">Loading…</div></div>
                 </div>
@@ -984,8 +987,10 @@
         const badge = document.getElementById('notifBadge');
         const list = document.getElementById('notifList');
         const readAll = document.getElementById('notifReadAll');
+        const showRead = document.getElementById('notifShowRead');
         if (!bell || !dropdown) return;
         const csrf = (document.querySelector('meta[name="csrf-token"]') || {}).content || '';
+        let includeRead = false;
 
         function timeAgo(iso) {
             if (!iso) return '';
@@ -1006,26 +1011,35 @@
                 return;
             }
             list.innerHTML = data.items.map(it => `
-                <div class="notif-item" data-id="${it.id}">
+                <div class="notif-item" data-id="${it.id}" style="${it.read ? 'opacity:0.55;' : ''}">
                     <div class="notif-icon ${esc(it.category)}"><i class="fas ${esc(it.icon)}"></i></div>
                     <div class="notif-content">
                         <div class="notif-title">${esc(it.label)} <span class="notif-meta">· ${esc(it.hostname)} · ${timeAgo(it.created_at)}</span></div>
                         <div class="notif-detail">${esc(it.details)}</div>
                     </div>
-                    <button class="notif-read" title="Mark read" data-id="${it.id}"><i class="fas fa-check"></i></button>
+                    ${it.read ? '' : `<button class="notif-read" title="Mark read" data-id="${it.id}"><i class="fas fa-check"></i></button>`}
                 </div>`).join('');
             list.querySelectorAll('.notif-read').forEach(b => b.addEventListener('click', e => {
                 e.stopPropagation();
                 markRead(b.getAttribute('data-id'));
             }));
         }
-        function load() { fetch('/notifications').then(r => r.json()).then(render).catch(() => {}); }
+        function load() {
+            fetch('/notifications' + (includeRead ? '?include_read=1' : ''))
+                .then(r => r.json()).then(render).catch(() => {});
+        }
         function markRead(id) {
             fetch(`/notifications/${id}/read`, { method: 'POST', headers: { 'X-CSRFToken': csrf } }).then(load);
         }
         if (readAll) readAll.addEventListener('click', e => {
             e.stopPropagation();
             fetch('/notifications/read-all', { method: 'POST', headers: { 'X-CSRFToken': csrf } }).then(load);
+        });
+        if (showRead) showRead.addEventListener('click', e => {
+            e.stopPropagation();
+            includeRead = !includeRead;
+            showRead.textContent = includeRead ? 'Hide read' : 'Show read';
+            load();
         });
         bell.addEventListener('click', e => { e.stopPropagation(); dropdown.classList.toggle('active'); });
         document.addEventListener('click', e => {

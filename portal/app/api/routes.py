@@ -285,6 +285,58 @@ def rotate_host_token():
     return jsonify({'success': True, 'host_token': plaintext}), 200
 
 
+def _index_extensions(scan_data):
+    """Index a scan's extensions by (ide_name, extension_id) for diffing."""
+    idx = {}
+    if not scan_data:
+        return idx
+    for ide in scan_data.get('ides', []) or []:
+        ide_name = ide.get('name', 'Unknown')
+        ide_type = ide.get('ide_type')
+        for ext in (ide.get('extensions') or []):
+            ext_id = ext.get('id') or ext.get('extension_id')
+            if not ext_id:
+                continue
+            idx[(ide_name, ext_id)] = {
+                'extension_id': ext_id,
+                'name': ext.get('name'),
+                'version': ext.get('version'),
+                'publisher': ext.get('publisher'),
+                'ide': ide_name,
+                'ide_type': ide_type,
+            }
+    return idx
+
+
+def _emit_extension_changes(host, customer_key_id, prev_scan_data, new_scan_data):
+    """Emit extension.installed / removed / updated by diffing two scans.
+
+    Only fires when a previous scan exists, so a host's first report doesn't
+    flood the feed with one 'installed' per existing extension.
+    """
+    if not prev_scan_data:
+        return
+    prev = _index_extensions(prev_scan_data)
+    new = _index_extensions(new_scan_data)
+
+    def host_blk():
+        return {'id': host.public_id, 'hostname': host.hostname}
+
+    for key, ext in new.items():
+        if key not in prev:
+            emit_event('extension.installed', customer_key_id=customer_key_id,
+                       data={'host': host_blk(), 'extension': ext})
+        elif ext.get('version') != prev[key].get('version'):
+            ext_u = dict(ext)
+            ext_u['previous_version'] = prev[key].get('version')
+            emit_event('extension.updated', customer_key_id=customer_key_id,
+                       data={'host': host_blk(), 'extension': ext_u})
+    for key, ext in prev.items():
+        if key not in new:
+            emit_event('extension.removed', customer_key_id=customer_key_id,
+                       data={'host': host_blk(), 'extension': ext})
+
+
 @api_bp.route('/report', methods=['POST'])
 def submit_report():
     """
@@ -384,6 +436,13 @@ def submit_report():
                     'permissions': permissions,
                 })
 
+    # Capture the previous scan's extensions for install/remove/update
+    # diffing (before this report becomes the host's latest). Also collect
+    # newly-detected secrets to emit proactive events after commit.
+    _prev_report = host.latest_report
+    prev_scan_data = _prev_report.scan_data if _prev_report else None
+    new_secret_events = []
+
     # Create scan report
     report = ScanReport(
         host_id=host.id,
@@ -441,6 +500,13 @@ def submit_report():
                     repo_path=finding.get('repo_path'),
                 )
                 db.session.add(secret)
+                new_secret_events.append({
+                    'secret_type': finding.get('secret_type', 'unknown'),
+                    'file_path': file_path,
+                    'variable_name': variable_name,
+                    'severity': finding.get('severity', 'critical'),
+                    'source': finding.get('source', 'filesystem'),
+                })
 
             secrets_count += 1
             if finding.get('severity') == 'critical':
@@ -600,6 +666,13 @@ def submit_report():
     )
 
     enqueue_pending_enrichments(scan_data)
+
+    # Proactive events: extension installs/removals/updates (diffed against the
+    # previous scan) and any newly-detected secrets.
+    _emit_extension_changes(host, key.id, prev_scan_data, scan_data)
+    for s in new_secret_events:
+        emit_event('secret.detected', customer_key_id=key.id,
+                   data={'host': {'id': host.public_id, 'hostname': host.hostname}, 'secret': s})
 
     response_payload = {
         'success': True,

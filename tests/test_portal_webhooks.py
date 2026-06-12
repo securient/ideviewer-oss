@@ -397,3 +397,39 @@ class TestSlackFormatting:
         assert 'testssh' in t               # policy name
         assert '2 critical, 1 high' in t    # vuln summary
         assert 'CVE-2026-1' in t            # example CVE
+
+    def test_slack_extension_installed(self, portal_app):
+        from app.jobs.webhook_delivery import _slack_payload
+        out = _slack_payload('extension.installed', {'data': {
+            'host': {'hostname': 'mac'},
+            'extension': {'extension_id': 'evil.x', 'version': '1.0', 'ide': 'Cursor', 'publisher': 'evil'}}})
+        t = out['text'].lower()
+        assert 'installed' in t and 'evil.x' in out['text'] and 'mac' in out['text']
+
+    def test_slack_secret_detected(self, portal_app):
+        from app.jobs.webhook_delivery import _slack_payload
+        out = _slack_payload('secret.detected', {'data': {
+            'host': {'hostname': 'mac'},
+            'secret': {'secret_type': 'aws_key', 'file_path': '/x/.env', 'source': 'filesystem'}}})
+        assert 'aws_key' in out['text'] and '/x/.env' in out['text']
+
+
+class TestWebhookEdit:
+    def test_edit_updates_events(self, portal_app, portal_db, logged_in_client, test_customer_key):
+        from app.models import WebhookSubscription
+        portal_app.config['WTF_CSRF_ENABLED'] = False
+        with portal_app.app_context():
+            s = WebhookSubscription(customer_key_id=test_customer_key.id, name='w',
+                                    url='https://x.example.com/h', event_types=['policy.violation'])
+            portal_db.session.add(s)
+            portal_db.session.commit()
+            pid = s.public_id
+        resp = logged_in_client.post(f'/webhooks/{pid}/edit', data={
+            'name': 'w2', 'url': 'https://y.example.com/h',
+            'customer_key_id': str(test_customer_key.id),
+            'event_types': ['extension.installed', 'secret.detected']})
+        assert resp.status_code in (302, 303)
+        with portal_app.app_context():
+            s = WebhookSubscription.query.filter_by(public_id=pid).first()
+            assert s.name == 'w2'
+            assert set(s.event_types) == {'extension.installed', 'secret.detected'}

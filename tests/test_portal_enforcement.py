@@ -331,3 +331,32 @@ class TestNotifications:
         assert logged_in_client.get('/notifications').get_json()['count'] == 3
         assert logged_in_client.post('/notifications/read-all').status_code == 200
         assert logged_in_client.get('/notifications').get_json()['count'] == 0
+
+
+class TestProactiveEvents:
+    def test_extension_change_diff_emits_installed_removed_updated(self, portal_app):
+        from unittest.mock import patch, MagicMock
+        from app.api import routes as r
+        prev = {'ides': [{'name': 'VS Code', 'ide_type': 'vscode', 'extensions': [
+            {'id': 'a.keep', 'version': '1.0'}, {'id': 'b.remove', 'version': '2.0'},
+            {'id': 'c.update', 'version': '1.0'}]}]}
+        new = {'ides': [{'name': 'VS Code', 'ide_type': 'vscode', 'extensions': [
+            {'id': 'a.keep', 'version': '1.0'}, {'id': 'c.update', 'version': '1.1'},
+            {'id': 'd.new', 'version': '3.0'}]}]}
+        host = MagicMock(); host.public_id = 'h'; host.hostname = 'mac'
+        with portal_app.app_context():
+            with patch('app.api.routes.emit_event') as m:
+                r._emit_extension_changes(host, 1, prev, new)
+        types = [c.args[0] for c in m.call_args_list]
+        assert 'extension.installed' in types   # d.new
+        assert 'extension.removed' in types     # b.remove
+        assert 'extension.updated' in types     # c.update 1.0->1.1
+        assert 'a.keep' not in str(m.call_args_list) or types.count('extension.installed') == 1
+
+    def test_first_scan_emits_nothing(self, portal_app):
+        from unittest.mock import patch, MagicMock
+        from app.api import routes as r
+        with portal_app.app_context():
+            with patch('app.api.routes.emit_event') as m:
+                r._emit_extension_changes(MagicMock(), 1, None, {'ides': []})
+        assert m.call_count == 0
