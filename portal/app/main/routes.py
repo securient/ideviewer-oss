@@ -642,6 +642,7 @@ def host_detail(host_id):
                 extensions.append({
                     'ide_name': ide_name,
                     'ide_version': ide_version,
+                    'extension_id': ext.get('id') or ext.get('extension_id') or '',
                     'name': ext.get('name', 'Unknown'),
                     'version': ext.get('version', 'Unknown'),
                     'publisher': ext.get('publisher', 'Unknown'),

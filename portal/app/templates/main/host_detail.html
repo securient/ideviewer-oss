@@ -575,6 +575,7 @@
                     <thead>
                         <tr>
                             <th>Extension</th>
+                            <th>ID <span style="text-transform: none; font-weight: 400; color: var(--text-muted);">(use in policies)</span></th>
                             <th>IDE</th>
                             <th>Version</th>
                             <th>Publisher</th>
@@ -592,6 +593,9 @@
                             data-publisher="{{ (ext.publisher or '')|lower }}">
                             <td>
                                 <div style="font-weight: 500;">{{ ext.name }}</div>
+                            </td>
+                            <td onclick="event.stopPropagation();">
+                                <code class="mono" style="font-size: 0.8125rem; user-select: all;" title="Copy into a policy's Extension ID field">{{ ext.extension_id or '—' }}</code>
                             </td>
                             <td>
                                 <span style="color: var(--text-secondary);">{{ ext.ide_name }}</span>
