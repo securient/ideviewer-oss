@@ -123,6 +123,21 @@ def _send(
     event_type: str,
     event_id: str,
 ) -> Tuple[int, str]:
+    # Slack Incoming Webhooks reject anything that isn't a Slack-shaped body
+    # (HTTP 400 "no_text"). Detect them and send a formatted text message
+    # instead of our generic signed envelope. Slack ignores extra headers and
+    # doesn't verify the HMAC, so we send a plain JSON message.
+    if 'hooks.slack.com' in url:
+        body = json.dumps(_slack_payload(event_type, payload))
+        response = requests.post(
+            url,
+            data=body,
+            headers={'Content-Type': 'application/json',
+                     'User-Agent': 'IDEViewer-Webhook/1.0'},
+            timeout=HTTP_TIMEOUT_SECONDS,
+        )
+        return response.status_code, response.text
+
     body = json.dumps(payload, separators=(',', ':'), sort_keys=True)
     timestamp = int(time.time())
     signed = f"{timestamp}.{body}".encode('utf-8')
@@ -141,3 +156,44 @@ def _send(
         timeout=HTTP_TIMEOUT_SECONDS,
     )
     return response.status_code, response.text
+
+
+def _slack_payload(event_type: str, p: dict) -> dict:
+    """Render an event as a Slack Incoming-Webhook message (``{"text": ...}``).
+
+    Defensive: every field is optional, with a JSON fallback for event types
+    we don't have a bespoke template for.
+    """
+    host = p.get('host') or {}
+    hostname = host.get('hostname', 'unknown host')
+    ext = p.get('extension') or {}
+    ext_id = ext.get('extension_id') or ext.get('id') or ext.get('name') or 'unknown'
+    ver = ext.get('version')
+    ext_label = f"`{ext_id}`" + (f"@{ver}" if ver else "")
+
+    if event_type == 'policy.violation':
+        pol = p.get('policy') or {}
+        text = (f":rotating_light: *Policy violation* — {ext_label} on *{hostname}* "
+                f"matched policy *{pol.get('name', '?')}* (action: {pol.get('action', '?')})")
+    elif event_type == 'extension.high_risk_detected':
+        text = (f":warning: *High-risk extension* — {ext_label} "
+                f"({ext.get('risk_level', '?')}) on *{hostname}*")
+    elif event_type == 'extension.unpublished_detected':
+        text = (f":package: *Extension removed from marketplace* — {ext_label} "
+                f"(host *{hostname}*)")
+    elif event_type == 'tamper_alert.created':
+        text = (f":rotating_light: *Tamper alert* [{p.get('severity', '?')}] on "
+                f"*{hostname}*: {p.get('details', '')}")
+    elif event_type == 'hook_bypass.detected':
+        text = (f":no_entry: *Git hook bypass* on *{hostname}* — commit "
+                f"`{(p.get('commit_hash') or '')[:10]}` by {p.get('commit_author', '?')}")
+    elif event_type in ('enforcement.action_created', 'enforcement.completed'):
+        action = p.get('action', 'enforcement')
+        verb = 'requested' if event_type.endswith('created') else (p.get('status') or 'updated')
+        detail = p.get('result_detail') or ''
+        text = (f":lock: *Enforcement {action} {verb}* for {ext_label} on *{hostname}*"
+                + (f" — {detail}" if detail else ""))
+    else:
+        text = f"*{event_type}*\n```{json.dumps(p, indent=2)[:1500]}```"
+
+    return {"text": "IDEViewer — " + text}

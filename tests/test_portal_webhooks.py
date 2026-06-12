@@ -314,3 +314,61 @@ class TestUI:
         resp = logged_in_client.get("/webhooks")
         assert resp.status_code == 200
         assert b"Outbound Webhooks" in resp.data
+
+
+class TestSlackFormatting:
+    def test_slack_payload_policy_violation(self, portal_app):
+        from app.jobs.webhook_delivery import _slack_payload
+        out = _slack_payload('policy.violation', {
+            'host': {'hostname': 'mac-1'},
+            'policy': {'name': 'p', 'action': 'block-alert'},
+            'extension': {'extension_id': 'evil.x', 'version': '1.0'},
+        })
+        assert 'text' in out
+        assert 'evil.x' in out['text']
+        assert 'mac-1' in out['text']
+
+    def test_slack_payload_unknown_event_fallback(self, portal_app):
+        from app.jobs.webhook_delivery import _slack_payload
+        out = _slack_payload('weird.event', {'foo': 'bar'})
+        assert 'text' in out and 'weird.event' in out['text']
+
+    def test_send_uses_slack_format_for_slack_url(self, portal_app):
+        import json as _json
+        from app.jobs.webhook_delivery import _send
+        captured = {}
+
+        def fake_post(url, data=None, headers=None, timeout=None):
+            captured['data'] = data
+            captured['headers'] = headers or {}
+            m = MagicMock()
+            m.status_code = 200
+            m.text = 'ok'
+            return m
+
+        with patch("app.jobs.webhook_delivery.requests.post", side_effect=fake_post):
+            _send('https://hooks.slack.com/services/T/B/x', 'secret',
+                  {'host': {'hostname': 'h'}, 'extension': {'extension_id': 'e'}},
+                  'policy.violation', 'evt1')
+        sent = _json.loads(captured['data'])
+        assert 'text' in sent
+        assert 'X-IDEViewer-Signature' not in captured['headers']
+
+    def test_send_uses_generic_format_for_non_slack_url(self, portal_app):
+        import json as _json
+        from app.jobs.webhook_delivery import _send
+        captured = {}
+
+        def fake_post(url, data=None, headers=None, timeout=None):
+            captured['data'] = data
+            captured['headers'] = headers or {}
+            m = MagicMock()
+            m.status_code = 200
+            m.text = 'ok'
+            return m
+
+        with patch("app.jobs.webhook_delivery.requests.post", side_effect=fake_post):
+            _send('https://example.com/hook', 'secret', {'a': 1}, 'policy.violation', 'evt1')
+        sent = _json.loads(captured['data'])
+        assert 'text' not in sent
+        assert 'X-IDEViewer-Signature' in captured['headers']
