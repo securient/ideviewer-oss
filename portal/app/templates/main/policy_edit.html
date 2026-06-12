@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+
+{% block title %}Edit Policy - IDE Viewer{% endblock %}
+
+{% block content %}
+<div class="fade-in" style="max-width: 640px;">
+    <div style="margin-bottom: 1.5rem;">
+        <a href="{{ url_for('main.policies') }}" style="color: var(--text-secondary); text-decoration: none; font-size: 0.875rem;">
+            <i class="fas fa-arrow-left"></i> Back to policies
+        </a>
+        <h1 style="font-size: 1.75rem; font-weight: 700; margin-top: 0.5rem;">Edit policy</h1>
+    </div>
+
+    <div class="card">
+        <form method="POST" action="{{ url_for('main.edit_policy', public_id=policy.public_id) }}">
+            {{ form.hidden_tag() }}
+            {# Customer key is not editable here. #}
+            <input type="hidden" name="customer_key_id" value="{{ policy.customer_key_id }}">
+
+            <div class="form-group">
+                <label class="form-label">Name</label>
+                {{ form.name(class="form-input") }}
+            </div>
+            <div class="form-group">
+                <label class="form-label">Priority <span style="color: var(--text-muted); font-weight: normal;">(lower wins)</span></label>
+                {{ form.priority(class="form-input") }}
+            </div>
+            <div class="form-group">
+                <label class="form-label">Action</label>
+                {{ form.action(class="form-input") }}
+            </div>
+            <p style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.75rem;">At least one match criterion is required. Globs use <code>*</code> and <code>?</code>. Use the extension <strong>ID</strong> (e.g. <code>ms-python.python</code>), not the display name.</p>
+            <div class="form-group">
+                <label class="form-label">Publisher glob</label>
+                {{ form.match_publisher(class="form-input", placeholder="e.g., evil-* or specific-publisher") }}
+            </div>
+            <div class="form-group">
+                <label class="form-label">Extension ID glob</label>
+                {{ form.match_extension_id(class="form-input", placeholder="e.g., ms-kubernetes-tools.* or *kubernetes*") }}
+            </div>
+            <div class="form-group">
+                <label class="form-label">Permission glob</label>
+                {{ form.match_permission_glob(class="form-input", placeholder="e.g., onFileSystem or *") }}
+            </div>
+            <div class="form-group">
+                <label class="form-label">Risk level threshold</label>
+                {{ form.match_risk_level(class="form-input") }}
+            </div>
+            <div style="display: flex; gap: 0.5rem;">
+                <button type="submit" class="btn btn-primary">Update policy</button>
+                <a href="{{ url_for('main.policies') }}" class="btn btn-secondary">Cancel</a>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

@@ -1066,12 +1066,53 @@ def delete_policy(public_id):
     if policy is None:
         return redirect(url_for('main.policies'))
     name = policy.name
-    # Delete associated violations first to satisfy FK.
+    # Unlink enforcement actions from this policy's violations (their
+    # violation_id FK would block the violation delete), then delete the
+    # violations themselves.
+    vids = [v.id for v in PolicyViolation.query.filter_by(policy_id=policy.id)]
+    if vids:
+        EnforcementAction.query.filter(
+            EnforcementAction.violation_id.in_(vids)
+        ).update({'violation_id': None}, synchronize_session=False)
     PolicyViolation.query.filter_by(policy_id=policy.id).delete()
     db.session.delete(policy)
     db.session.commit()
     flash(f'Policy "{name}" deleted', 'success')
     return redirect(url_for('main.policies'))
+
+
+@main_bp.route('/policies/<public_id>/edit', methods=['GET', 'POST'])
+@login_required
+def edit_policy(public_id):
+    """Edit an existing extension policy (all fields except the customer key)."""
+    policy = _user_policy_or_404(public_id)
+    if policy is None:
+        return redirect(url_for('main.policies'))
+
+    form = ExtensionPolicyForm(obj=policy)
+    form.customer_key_id.choices = [
+        (k.id, k.name) for k in current_user.customer_keys.filter_by(is_active=True)
+    ]
+
+    if request.method == 'POST':
+        form.customer_key_id.data = policy.customer_key_id  # key is not editable
+        if not form.validate_on_submit():
+            for field, errors in form.errors.items():
+                for err in errors:
+                    flash(f'{field}: {err}', 'error')
+            return render_template('main/policy_edit.html', form=form, policy=policy)
+        policy.name = form.name.data
+        policy.priority = form.priority.data
+        policy.action = form.action.data
+        policy.match_publisher = form.match_publisher.data or None
+        policy.match_extension_id = form.match_extension_id.data or None
+        policy.match_permission_glob = form.match_permission_glob.data or None
+        policy.match_risk_level = form.match_risk_level.data or None
+        db.session.commit()
+        flash(f'Policy "{policy.name}" updated', 'success')
+        return redirect(url_for('main.policies'))
+
+    return render_template('main/policy_edit.html', form=form, policy=policy)
 
 
 @main_bp.route('/violations')

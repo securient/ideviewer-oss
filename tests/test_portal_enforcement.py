@@ -243,3 +243,29 @@ class TestHostDeletion:
             assert ScanReport.query.filter_by(host_id=host_id).count() == 0
             assert EnforcementAction.query.filter_by(host_id=host_id).count() == 0
             assert PolicyViolation.query.filter_by(host_id=host_id).count() == 0
+
+
+class TestPolicyEdit:
+    def test_edit_updates_policy(self, portal_app, portal_db, logged_in_client, test_customer_key):
+        from app.models import ExtensionPolicy
+        portal_app.config['WTF_CSRF_ENABLED'] = False
+        with portal_app.app_context():
+            p = ExtensionPolicy(customer_key_id=test_customer_key.id, name='old',
+                                priority=100, action='warn', match_publisher='foo')
+            portal_db.session.add(p)
+            portal_db.session.commit()
+            pid = p.public_id
+
+        resp = logged_in_client.post(f'/policies/{pid}/edit', data={
+            'name': 'newname', 'priority': '5', 'action': 'quarantine',
+            'customer_key_id': str(test_customer_key.id),
+            'match_publisher': 'evilcorp', 'match_extension_id': '',
+            'match_permission_glob': '', 'match_risk_level': '',
+        })
+        assert resp.status_code in (302, 303)
+        with portal_app.app_context():
+            p = ExtensionPolicy.query.filter_by(public_id=pid).first()
+            assert p.name == 'newname'
+            assert p.priority == 5
+            assert p.action == 'quarantine'
+            assert p.match_publisher == 'evilcorp'
