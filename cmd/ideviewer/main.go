@@ -47,6 +47,7 @@ func init() {
 	rootCmd.AddCommand(packagesCmd)
 	rootCmd.AddCommand(daemonCmd)
 	rootCmd.AddCommand(registerCmd)
+	rootCmd.AddCommand(enforceCmd)
 	rootCmd.AddCommand(stopCmd)
 	rootCmd.AddCommand(hooksCmd)
 	rootCmd.AddCommand(updateCmd)
