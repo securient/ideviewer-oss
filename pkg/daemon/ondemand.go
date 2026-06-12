@@ -210,7 +210,7 @@ func (d *Daemon) executeOnDemandScan(requestID int) {
 		"log_message": "Submitting scan results to portal...",
 	})
 
-	d.lastResult = ideResult
+	d.setResult(ideResult)
 	d.sendToPortal(ideResult, secretsResult, depResult, nil)
 
 	progress(map[string]any{
