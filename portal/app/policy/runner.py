@@ -46,6 +46,7 @@ def evaluate_and_record(
     matches = evaluate(extensions_list, policies)
     violation_ids: List[int] = []
     enforcement_action_ids: List[int] = []
+    ide_by_vid: dict = {}  # violation id -> IDE info from the scan
     now = datetime.utcnow()
 
     for match in matches:
@@ -83,6 +84,10 @@ def evaluate_and_record(
             db.session.flush()
 
         violation_ids.append(violation.id)
+        ide_by_vid[violation.id] = {
+            'ide': match.extension.get('ide'),
+            'ide_type': match.extension.get('ide_type'),
+        }
         POLICY_VIOLATIONS.labels(action=match.action).inc()
 
         if match.action == ExtensionPolicy.ACTION_BLOCK_ALERT:
@@ -135,6 +140,9 @@ def evaluate_and_record(
                     'version': v.extension_version,
                     'publisher': v.publisher,
                     'risk_level': v.risk_level,
+                    'ide': (ide_by_vid.get(v.id) or {}).get('ide'),
+                    'ide_type': (ide_by_vid.get(v.id) or {}).get('ide_type'),
+                    'vulnerable_dependencies': _extension_dependency_risk(host.id, v.extension_id),
                 },
                 'first_detected_at': v.first_detected_at.isoformat() + 'Z' if v.first_detected_at else None,
             },
@@ -146,6 +154,41 @@ def evaluate_and_record(
             emit_enforcement_created(a, host, customer_key_id)
 
     return violation_ids
+
+
+def _extension_dependency_risk(host_id, extension_id) -> dict:
+    """Summarise critical/high vulnerabilities in packages bundled by this
+    extension (PackageInfo.source_extension == extension_id), correlated by the
+    OSV vuln scan. Eventually-consistent: reflects the last completed vuln scan
+    for the host (the current scan's vuln job may still be running).
+    """
+    result = {'critical': 0, 'high': 0, 'examples': []}
+    if not extension_id:
+        return result
+    from app.models import Vulnerability, PackageInfo
+    rows = (
+        db.session.query(Vulnerability)
+        .join(PackageInfo, Vulnerability.package_info_id == PackageInfo.id)
+        .filter(
+            Vulnerability.host_id == host_id,
+            Vulnerability.is_resolved.is_(False),
+            PackageInfo.source_extension == extension_id,
+        )
+        .all()
+    )
+    for v in rows:
+        sev = (v.severity_label or '').lower()
+        if sev == 'critical':
+            result['critical'] += 1
+        elif sev == 'high':
+            result['high'] += 1
+        if sev in ('critical', 'high') and len(result['examples']) < 5:
+            result['examples'].append({
+                'vuln_id': v.vuln_id,
+                'package': f"{v.package_name}@{v.package_version}",
+                'severity': sev,
+            })
+    return result
 
 
 def _ensure_quarantine_action(host, violation, ext) -> int:

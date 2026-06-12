@@ -269,3 +269,29 @@ class TestPolicyEdit:
             assert p.priority == 5
             assert p.action == 'quarantine'
             assert p.match_publisher == 'evilcorp'
+
+
+class TestDependencyRisk:
+    def test_counts_critical_high_for_extension(self, portal_app, portal_db, test_host):
+        from app.policy.runner import _extension_dependency_risk
+        from app.models import PackageInfo, Vulnerability, ScanReport
+        with portal_app.app_context():
+            sr = ScanReport(host_id=test_host.id, scan_data={'ides': []},
+                            total_ides=0, total_extensions=0, dangerous_extensions=0)
+            portal_db.session.add(sr); portal_db.session.flush()
+            pkg = PackageInfo(host_id=test_host.id, scan_report_id=sr.id, name='left-pad',
+                              version='1.0', package_manager='npm',
+                              source_type='extension', source_extension='evil.ext')
+            portal_db.session.add(pkg); portal_db.session.flush()
+            for sev in ('CRITICAL', 'HIGH', 'HIGH', 'low'):
+                portal_db.session.add(Vulnerability(
+                    host_id=test_host.id, package_info_id=pkg.id, package_name='left-pad',
+                    package_version='1.0', package_manager='npm', ecosystem='npm',
+                    vuln_id=f'CVE-{sev}', severity_label=sev, is_resolved=False))
+            portal_db.session.commit()
+            res = _extension_dependency_risk(test_host.id, 'evil.ext')
+            assert res['critical'] == 1
+            assert res['high'] == 2
+            assert len(res['examples']) == 3  # critical + 2 high
+            # unrelated extension id => nothing
+            assert _extension_dependency_risk(test_host.id, 'other.ext')['critical'] == 0

@@ -372,3 +372,28 @@ class TestSlackFormatting:
         sent = _json.loads(captured['data'])
         assert 'text' not in sent
         assert 'X-IDEViewer-Signature' in captured['headers']
+
+    def test_slack_payload_reads_envelope_and_enrichment(self, portal_app):
+        from app.jobs.webhook_delivery import _slack_payload
+        out = _slack_payload('policy.violation', {
+            'id': 'evt_1', 'type': 'policy.violation',
+            'data': {
+                'host': {'hostname': 'mac-2'},
+                'policy': {'name': 'testssh', 'action': 'block-alert'},
+                'extension': {
+                    'extension_id': 'anysphere.remote-ssh', 'version': '1.1.2',
+                    'publisher': 'anysphere', 'risk_level': 'high', 'ide': 'Cursor',
+                    'vulnerable_dependencies': {
+                        'critical': 2, 'high': 1,
+                        'examples': [{'vuln_id': 'CVE-2026-1', 'package': 'left-pad@1.0', 'severity': 'critical'}],
+                    },
+                },
+            },
+        })
+        t = out['text']
+        assert 'mac-2' in t                 # host unwrapped from envelope
+        assert 'anysphere.remote-ssh' in t  # extension
+        assert 'Cursor' in t                # IDE
+        assert 'testssh' in t               # policy name
+        assert '2 critical, 1 high' in t    # vuln summary
+        assert 'CVE-2026-1' in t            # example CVE
