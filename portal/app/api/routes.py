@@ -13,7 +13,7 @@ import traceback
 import logging
 
 from app import db
-from app.models import CustomerKey, Host, ScanReport, ExtensionInfo, SecretFinding, PackageInfo, ScanRequest, TamperAlert, Vulnerability, HookBypass, AIToolInfo
+from app.models import CustomerKey, Host, ScanReport, ExtensionInfo, SecretFinding, PackageInfo, ScanRequest, TamperAlert, Vulnerability, HookBypass, AIToolInfo, EnforcementAction
 from app.main.routes import calculate_risk_level
 from app.events import emit_event
 from app.policy.runner import evaluate_and_record, build_extensions_from_scan
@@ -746,8 +746,101 @@ def update_scan_request(request_id):
         scan_req.error_message = error_message
     
     db.session.commit()
-    
+
     return jsonify({'success': True, 'request': scan_req.to_dict()})
+
+
+@api_bp.route('/enforcement-actions/pending', methods=['GET'])
+def get_pending_enforcement_actions():
+    """Return pending enforcement actions for the authenticated host.
+
+    Called by the daemon (token auth). Hand-out flips each action to
+    ``dispatched`` so the same action is not executed on every poll; the
+    daemon reports the final status via the report endpoint. With customer-key
+    auth the result spans the key's hosts; with token auth it is scoped to
+    the one host.
+    """
+    key, host_from_token, error, status = authenticate_request()
+    if error:
+        return jsonify(error), status
+
+    q = EnforcementAction.query.join(Host).filter(
+        Host.customer_key_id == key.id,
+        EnforcementAction.status == EnforcementAction.STATUS_PENDING,
+    )
+    if host_from_token is not None:
+        q = q.filter(Host.id == host_from_token.id)
+    pending = q.all()
+
+    now = datetime.utcnow()
+    for a in pending:
+        a.status = EnforcementAction.STATUS_DISPATCHED
+        a.dispatched_at = now
+    db.session.commit()
+
+    return jsonify({'actions': [a.to_dict() for a in pending]})
+
+
+@api_bp.route('/enforcement-actions/<int:action_id>/report', methods=['POST'])
+def report_enforcement_action(action_id):
+    """Daemon reports the outcome of an enforcement action.
+
+    Body: {status: applied|failed|reverted, result_detail, quarantine_path,
+    original_path}. Token auth pins the action to the authenticated host.
+    """
+    key, host_from_token, error, status = authenticate_request()
+    if error:
+        return jsonify(error), status
+
+    action = EnforcementAction.query.get_or_404(action_id)
+
+    host = Host.query.get(action.host_id)
+    if not host or host.customer_key_id != key.id:
+        return jsonify({'error': 'Access denied'}), 403
+    if host_from_token is not None and host.id != host_from_token.id:
+        return jsonify({'error': 'Action does not belong to this host'}), 403
+
+    data = request.get_json() or {}
+    new_status = data.get('status')
+    valid = {
+        EnforcementAction.STATUS_APPLIED,
+        EnforcementAction.STATUS_FAILED,
+        EnforcementAction.STATUS_REVERTED,
+    }
+    if new_status not in valid:
+        return jsonify({'error': 'invalid status'}), 400
+
+    action.status = new_status
+    if data.get('result_detail'):
+        action.result_detail = str(data['result_detail'])[:2000]
+    if data.get('quarantine_path'):
+        action.quarantine_path = str(data['quarantine_path'])[:1000]
+    if data.get('original_path'):
+        action.original_path = str(data['original_path'])[:1000]
+    action.completed_at = datetime.utcnow()
+    key.last_used_at = datetime.utcnow()
+    db.session.commit()
+
+    emit_event(
+        'enforcement.completed',
+        customer_key_id=key.id,
+        data={
+            'action_id': action.id,
+            'action': action.action,
+            'status': action.status,
+            'result_detail': action.result_detail,
+            'host': {'id': host.public_id, 'hostname': host.hostname},
+            'extension': {
+                'extension_id': action.extension_id,
+                'name': action.extension_name,
+                'version': action.extension_version,
+                'ide_type': action.ide_type,
+            },
+            'completed_at': action.completed_at.isoformat() + 'Z' if action.completed_at else None,
+        },
+    )
+
+    return jsonify({'success': True, 'action': action.to_dict()})
 
 
 @api_bp.route('/heartbeat', methods=['POST'])

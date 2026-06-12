@@ -68,6 +68,8 @@ SUPPORTED_WEBHOOK_EVENTS = [
     ('extension.unpublished_detected', 'Extension removed from marketplace'),
     ('hook_bypass.detected', 'Git hook bypass detected'),
     ('policy.violation', 'Policy violation'),
+    ('enforcement.action_created', 'Enforcement action created'),
+    ('enforcement.completed', 'Enforcement action completed'),
 ]
 
 
@@ -97,7 +99,8 @@ class WebhookSubscriptionForm(FlaskForm):
 POLICY_ACTIONS = [
     ('allow', 'Allow (whitelist)'),
     ('warn', 'Warn'),
-    ('block-alert', 'Block (critical alert)'),
+    ('block-alert', 'Alert only (critical alert, no enforcement)'),
+    ('quarantine', 'Quarantine (alert + quarantine on endpoint)'),
 ]
 
 POLICY_RISK_LEVELS = [

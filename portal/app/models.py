@@ -819,7 +819,10 @@ class ExtensionPolicy(db.Model):
     ACTION_ALLOW = 'allow'
     ACTION_WARN = 'warn'
     ACTION_BLOCK_ALERT = 'block-alert'
-    VALID_ACTIONS = (ACTION_ALLOW, ACTION_WARN, ACTION_BLOCK_ALERT)
+    # Enforced action: alert AND create a quarantine EnforcementAction the
+    # daemon executes on the endpoint (opt-in; daemon also has a kill-switch).
+    ACTION_QUARANTINE = 'quarantine'
+    VALID_ACTIONS = (ACTION_ALLOW, ACTION_WARN, ACTION_BLOCK_ALERT, ACTION_QUARANTINE)
 
     id = db.Column(db.Integer, primary_key=True)
     public_id = db.Column(db.String(36), unique=True, nullable=False, index=True)
@@ -993,3 +996,83 @@ class ExtensionMetadata(db.Model):
     def __repr__(self):
         flag = ' UNPUBLISHED' if self.is_unpublished else ''
         return f'<ExtensionMetadata {self.marketplace}:{self.extension_id}@{self.version}{flag}>'
+
+
+class EnforcementAction(db.Model):
+    """A request for the daemon to act on an extension on one host.
+
+    Created either by a ``quarantine`` policy match (``created_by_user_id``
+    NULL) or manually by an admin. The daemon polls pending actions for its
+    host, executes them (v1: quarantine = move the extension dir aside;
+    restore = move it back), and reports the outcome. Reversible by design —
+    nothing is deleted.
+    """
+
+    __tablename__ = 'enforcement_actions'
+
+    ACTION_QUARANTINE = 'quarantine'
+    ACTION_RESTORE = 'restore'
+    VALID_ACTIONS = (ACTION_QUARANTINE, ACTION_RESTORE)
+
+    STATUS_PENDING = 'pending'
+    STATUS_DISPATCHED = 'dispatched'
+    STATUS_APPLIED = 'applied'
+    STATUS_FAILED = 'failed'
+    STATUS_REVERTED = 'reverted'
+    OPEN_STATUSES = (STATUS_PENDING, STATUS_DISPATCHED, STATUS_APPLIED)
+
+    id = db.Column(db.Integer, primary_key=True)
+    host_id = db.Column(db.Integer, db.ForeignKey('hosts.id'), nullable=False)
+    violation_id = db.Column(db.Integer, db.ForeignKey('policy_violations.id'), nullable=True)
+
+    action = db.Column(db.String(20), nullable=False, default=ACTION_QUARANTINE)
+    status = db.Column(db.String(20), nullable=False, default=STATUS_PENDING)
+
+    # Target extension (denormalised so the daemon can resolve it locally).
+    extension_id = db.Column(db.String(200), nullable=False)
+    extension_name = db.Column(db.String(200), nullable=True)
+    extension_version = db.Column(db.String(50), nullable=True)
+    ide_type = db.Column(db.String(50), nullable=True)  # e.g. 'vscode', 'cursor', 'intellij-idea'
+
+    # Outcome reported by the daemon.
+    original_path = db.Column(db.String(1000), nullable=True)
+    quarantine_path = db.Column(db.String(1000), nullable=True)
+    result_detail = db.Column(db.Text, nullable=True)
+
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)  # NULL = policy-driven
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    dispatched_at = db.Column(db.DateTime, nullable=True)
+    completed_at = db.Column(db.DateTime, nullable=True)
+
+    host = db.relationship('Host', backref=db.backref('enforcement_actions', lazy='dynamic',
+                                                       order_by='desc(EnforcementAction.created_at)'))
+    violation = db.relationship('PolicyViolation')
+    creator = db.relationship('User')
+
+    __table_args__ = (
+        db.Index('idx_enforcement_host_status', 'host_id', 'status'),
+        db.Index('idx_enforcement_violation', 'violation_id'),
+    )
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'host_id': self.host_id,
+            'violation_id': self.violation_id,
+            'action': self.action,
+            'status': self.status,
+            'extension_id': self.extension_id,
+            'extension_name': self.extension_name,
+            'extension_version': self.extension_version,
+            'ide_type': self.ide_type,
+            'original_path': self.original_path,
+            'quarantine_path': self.quarantine_path,
+            'result_detail': self.result_detail,
+            'created_by_user_id': self.created_by_user_id,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'dispatched_at': self.dispatched_at.isoformat() if self.dispatched_at else None,
+            'completed_at': self.completed_at.isoformat() if self.completed_at else None,
+        }
+
+    def __repr__(self):
+        return f'<EnforcementAction {self.id} {self.action} {self.extension_id} [{self.status}]>'

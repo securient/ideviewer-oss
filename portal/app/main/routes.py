@@ -13,10 +13,12 @@ from app.models import (
     ScanRequest, TamperAlert, Vulnerability, HookBypass, AIToolInfo,
     WebhookSubscription, WebhookDelivery,
     ExtensionPolicy, PolicyViolation,
-    ExtensionMetadata,
+    ExtensionMetadata, EnforcementAction,
 )
 from app.auth.forms import CustomerKeyForm, WebhookSubscriptionForm, ExtensionPolicyForm
 from app.marketplace import fetch_extension_details
+from app.events import emit_event
+from app.policy.runner import emit_enforcement_created
 
 main_bp = Blueprint('main', __name__)
 
@@ -1092,6 +1094,102 @@ def resolve_violation(violation_id):
     db.session.commit()
     flash('Violation resolved', 'success')
     return redirect(url_for('main.violations'))
+
+
+def _open_quarantine_action(host_id, extension_id, extension_version):
+    """Return an existing open quarantine action for this extension, or None."""
+    q = EnforcementAction.query.filter(
+        EnforcementAction.host_id == host_id,
+        EnforcementAction.extension_id == extension_id,
+        EnforcementAction.action == EnforcementAction.ACTION_QUARANTINE,
+        EnforcementAction.status.in_(EnforcementAction.OPEN_STATUSES),
+    )
+    if extension_version is None:
+        q = q.filter(EnforcementAction.extension_version.is_(None))
+    else:
+        q = q.filter(EnforcementAction.extension_version == extension_version)
+    return q.first()
+
+
+@main_bp.route('/violations/<int:violation_id>/quarantine', methods=['POST'])
+@login_required
+def quarantine_violation(violation_id):
+    """Manually request the daemon quarantine the violating extension."""
+    v = PolicyViolation.query.get_or_404(violation_id)
+    host = Host.query.get(v.host_id)
+    if not host or host.customer_key.user_id != current_user.id:
+        flash('Access denied', 'error')
+        return redirect(url_for('main.violations'))
+
+    if _open_quarantine_action(host.id, v.extension_id, v.extension_version) is not None:
+        flash('A quarantine action is already pending for this extension.', 'info')
+        return redirect(url_for('main.violations'))
+
+    action = EnforcementAction(
+        host_id=host.id,
+        violation_id=v.id,
+        action=EnforcementAction.ACTION_QUARANTINE,
+        status=EnforcementAction.STATUS_PENDING,
+        extension_id=v.extension_id,
+        extension_name=v.extension_name,
+        extension_version=v.extension_version,
+        ide_type=None,  # daemon resolves across IDEs by extension id
+        created_by_user_id=current_user.id,
+    )
+    db.session.add(action)
+    db.session.commit()
+    emit_enforcement_created(action, host, host.customer_key.id)
+    flash('Quarantine requested — the daemon will apply it on its next check-in.', 'success')
+    return redirect(url_for('main.violations'))
+
+
+@main_bp.route('/enforcement')
+@login_required
+def enforcement():
+    """List enforcement actions across the user's hosts."""
+    key_ids = [k.id for k in current_user.customer_keys]
+    host_ids = [h.id for h in Host.query.filter(Host.customer_key_id.in_(key_ids))]
+    actions = (
+        EnforcementAction.query
+        .filter(EnforcementAction.host_id.in_(host_ids))
+        .order_by(EnforcementAction.created_at.desc())
+        .limit(200)
+        .all()
+    )
+    return render_template('main/enforcement.html', actions=actions)
+
+
+@main_bp.route('/enforcement/<int:action_id>/restore', methods=['POST'])
+@login_required
+def restore_enforcement(action_id):
+    """Request the daemon move a quarantined extension back into place."""
+    a = EnforcementAction.query.get_or_404(action_id)
+    host = Host.query.get(a.host_id)
+    if not host or host.customer_key.user_id != current_user.id:
+        flash('Access denied', 'error')
+        return redirect(url_for('main.enforcement'))
+    if a.action != EnforcementAction.ACTION_QUARANTINE or a.status != EnforcementAction.STATUS_APPLIED:
+        flash('Only an applied quarantine can be restored.', 'error')
+        return redirect(url_for('main.enforcement'))
+
+    restore = EnforcementAction(
+        host_id=host.id,
+        violation_id=a.violation_id,
+        action=EnforcementAction.ACTION_RESTORE,
+        status=EnforcementAction.STATUS_PENDING,
+        extension_id=a.extension_id,
+        extension_name=a.extension_name,
+        extension_version=a.extension_version,
+        ide_type=a.ide_type,
+        original_path=a.original_path,
+        quarantine_path=a.quarantine_path,
+        created_by_user_id=current_user.id,
+    )
+    db.session.add(restore)
+    db.session.commit()
+    emit_enforcement_created(restore, host, host.customer_key.id)
+    flash('Restore requested — the daemon will move the extension back on its next check-in.', 'success')
+    return redirect(url_for('main.enforcement'))
 
 
 @main_bp.route('/alert/<int:alert_id>/acknowledge', methods=['POST'])
