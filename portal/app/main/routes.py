@@ -812,14 +812,21 @@ def delete_key(key_id):
         flash('Access denied', 'error')
         return redirect(url_for('main.keys'))
     
-    # Delete associated data
+    # Delete associated data, children first.
     for host in key.hosts:
-        ScanReport.query.filter_by(host_id=host.id).delete()
-        ExtensionInfo.query.filter_by(host_id=host.id).delete()
-        SecretFinding.query.filter_by(host_id=host.id).delete()
-        PackageInfo.query.filter_by(host_id=host.id).delete()
-    Host.query.filter_by(customer_key_id=key.id).delete()
-    
+        _purge_host_data(host.id)
+
+    # Webhook deliveries reference subscriptions; subscriptions and policies
+    # reference the key.
+    sub_ids = [s.id for s in WebhookSubscription.query.filter_by(customer_key_id=key.id)]
+    if sub_ids:
+        WebhookDelivery.query.filter(
+            WebhookDelivery.subscription_id.in_(sub_ids)
+        ).delete(synchronize_session=False)
+    WebhookSubscription.query.filter_by(customer_key_id=key.id).delete(synchronize_session=False)
+    ExtensionPolicy.query.filter_by(customer_key_id=key.id).delete(synchronize_session=False)
+    Host.query.filter_by(customer_key_id=key.id).delete(synchronize_session=False)
+
     db.session.delete(key)
     db.session.commit()
 
@@ -1301,6 +1308,26 @@ def revoke_host_token(host_id):
     return redirect(request.referrer or url_for('main.host_detail', host_id=host.public_id))
 
 
+def _purge_host_data(host_id):
+    """Delete every row that references a host, in FK-dependency order.
+
+    Children first: every *_info table references scan_reports, so
+    scan_reports is deleted LAST; enforcement_actions references
+    policy_violations, which references the host.
+    """
+    EnforcementAction.query.filter_by(host_id=host_id).delete(synchronize_session=False)
+    PolicyViolation.query.filter_by(host_id=host_id).delete(synchronize_session=False)
+    Vulnerability.query.filter_by(host_id=host_id).delete(synchronize_session=False)
+    ExtensionInfo.query.filter_by(host_id=host_id).delete(synchronize_session=False)
+    SecretFinding.query.filter_by(host_id=host_id).delete(synchronize_session=False)
+    PackageInfo.query.filter_by(host_id=host_id).delete(synchronize_session=False)
+    AIToolInfo.query.filter_by(host_id=host_id).delete(synchronize_session=False)
+    HookBypass.query.filter_by(host_id=host_id).delete(synchronize_session=False)
+    ScanRequest.query.filter_by(host_id=host_id).delete(synchronize_session=False)
+    TamperAlert.query.filter_by(host_id=host_id).delete(synchronize_session=False)
+    ScanReport.query.filter_by(host_id=host_id).delete(synchronize_session=False)
+
+
 @main_bp.route('/host/<host_id>/delete', methods=['POST'])
 @login_required
 def delete_host(host_id):
@@ -1311,18 +1338,7 @@ def delete_host(host_id):
         return redirect(url_for('main.dashboard'))
 
     hostname = host.hostname
-
-    # Delete all associated data
-    Vulnerability.query.filter_by(host_id=host.id).delete()
-    HookBypass.query.filter_by(host_id=host.id).delete()
-    ScanRequest.query.filter_by(host_id=host.id).delete()
-    ScanReport.query.filter_by(host_id=host.id).delete()
-    ExtensionInfo.query.filter_by(host_id=host.id).delete()
-    SecretFinding.query.filter_by(host_id=host.id).delete()
-    PackageInfo.query.filter_by(host_id=host.id).delete()
-    TamperAlert.query.filter_by(host_id=host.id).delete()
-    AIToolInfo.query.filter_by(host_id=host.id).delete()
-
+    _purge_host_data(host.id)
     db.session.delete(host)
     db.session.commit()
 

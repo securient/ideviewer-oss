@@ -104,10 +104,15 @@
                     <label class="form-label">Name</label>
                     {{ form.name(class="form-input", placeholder="e.g., Block evil publishers") }}
                 </div>
+                {% if form.customer_key_id.choices|length > 1 %}
                 <div class="form-group">
                     <label class="form-label">Customer key</label>
                     {{ form.customer_key_id(class="form-input") }}
                 </div>
+                {% else %}
+                {# Only one key — submit it silently instead of making the user pick. #}
+                <input type="hidden" name="customer_key_id" value="{{ form.customer_key_id.choices[0][0] if form.customer_key_id.choices else '' }}">
+                {% endif %}
                 <div class="form-group">
                     <label class="form-label">Priority <span style="color: var(--text-muted); font-weight: normal;">(lower wins)</span></label>
                     {{ form.priority(class="form-input") }}

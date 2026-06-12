@@ -199,3 +199,47 @@ class TestManualQuarantineRoute:
             assert a is not None
             assert a.action == EnforcementAction.ACTION_QUARANTINE
             assert a.created_by_user_id is not None  # manual
+
+
+class TestHostDeletion:
+    """Regression: deleting a host with dependent rows must not 500 on FK order."""
+
+    def test_delete_host_with_dependent_rows(
+        self, portal_app, portal_db, logged_in_client, test_host
+    ):
+        from app.models import (
+            ScanReport, AIToolInfo, PackageInfo, ExtensionPolicy,
+            PolicyViolation, EnforcementAction, Host,
+        )
+        portal_app.config['WTF_CSRF_ENABLED'] = False
+        with portal_app.app_context():
+            host_id = test_host.id
+            public_id = test_host.public_id
+            sr = ScanReport(host_id=host_id, scan_data={'ides': []},
+                            total_ides=0, total_extensions=0, dangerous_extensions=0)
+            portal_db.session.add(sr)
+            portal_db.session.flush()
+            # ai_tool_info -> scan_reports is the FK that produced the original 500
+            portal_db.session.add(AIToolInfo(host_id=host_id, scan_report_id=sr.id, tool_name='Claude Code'))
+            portal_db.session.add(PackageInfo(host_id=host_id, scan_report_id=sr.id,
+                                              name='x', version='1', package_manager='pip'))
+            pol = ExtensionPolicy(customer_key_id=test_host.customer_key_id, name='p',
+                                  priority=10, action='warn', match_publisher='evil')
+            portal_db.session.add(pol)
+            portal_db.session.flush()
+            v = PolicyViolation(host_id=host_id, policy_id=pol.id,
+                                extension_id='e', action_taken='warn')
+            portal_db.session.add(v)
+            portal_db.session.flush()
+            portal_db.session.add(EnforcementAction(host_id=host_id, violation_id=v.id,
+                                                    action='quarantine', status='pending',
+                                                    extension_id='e'))
+            portal_db.session.commit()
+
+        resp = logged_in_client.post(f'/host/{public_id}/delete')
+        assert resp.status_code in (302, 303)
+        with portal_app.app_context():
+            assert Host.query.get(host_id) is None
+            assert ScanReport.query.filter_by(host_id=host_id).count() == 0
+            assert EnforcementAction.query.filter_by(host_id=host_id).count() == 0
+            assert PolicyViolation.query.filter_by(host_id=host_id).count() == 0

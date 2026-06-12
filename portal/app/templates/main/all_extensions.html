@@ -56,6 +56,7 @@
                 <thead>
                     <tr style="border-bottom: 2px solid var(--border-color);">
                         <th style="text-align: left; padding: 0.75rem; color: var(--text-muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;">Extension</th>
+                        <th style="text-align: left; padding: 0.75rem; color: var(--text-muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;">ID <span style="text-transform: none; font-weight: 400; color: var(--text-muted);">(use in policies)</span></th>
                         <th style="text-align: left; padding: 0.75rem; color: var(--text-muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;">IDE</th>
                         <th style="text-align: left; padding: 0.75rem; color: var(--text-muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;">Version</th>
                         <th style="text-align: left; padding: 0.75rem; color: var(--text-muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;">Publisher</th>
@@ -76,6 +77,9 @@
                                 <i class="fas fa-puzzle-piece" style="margin-right: 0.375rem; font-size: 0.8125rem;"></i>
                                 {{ ext.name }}
                             </a>
+                        </td>
+                        <td style="padding: 0.75rem; color: var(--text-secondary); font-family: var(--font-mono); font-size: 0.75rem;">
+                            <code class="mono" style="user-select: all;" title="Copy into a policy's Extension ID field">{{ ext.extension_id }}</code>
                         </td>
                         <td style="padding: 0.75rem; color: var(--text-secondary); font-size: 0.8125rem;">
                             <i class="fas fa-code" style="margin-right: 0.25rem; font-size: 0.75rem;"></i>
