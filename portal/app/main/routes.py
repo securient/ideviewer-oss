@@ -889,6 +889,7 @@ def create_webhook():
     sub = WebhookSubscription(
         customer_key_id=key.id,
         name=form.name.data,
+        type=form.type.data,
         url=form.url.data,
         event_types=form.event_types.data,
         created_by_user_id=current_user.id,
@@ -919,6 +920,7 @@ def edit_webhook(public_id):
                     flash(f'{field}: {err}', 'error')
             return render_template('main/webhook_edit.html', form=form, sub=sub)
         sub.name = form.name.data
+        sub.type = form.type.data
         sub.url = form.url.data
         sub.event_types = form.event_types.data
         db.session.commit()

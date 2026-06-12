@@ -80,7 +80,7 @@ def _attempt_delivery(delivery_id: int) -> None:
     db.session.commit()
 
     try:
-        status_code, response_body = _send(sub.url, sub.secret, delivery.payload, delivery.event_type, delivery.event_id)
+        status_code, response_body = _send(sub.url, sub.secret, delivery.payload, delivery.event_type, delivery.event_id, getattr(sub, 'type', 'generic'))
         delivery.response_code = status_code
         delivery.response_body = (response_body or '')[:RESPONSE_BODY_TRUNCATE]
         if 200 <= status_code < 300:
@@ -116,21 +116,36 @@ def _attempt_delivery(delivery_id: int) -> None:
     enqueue_in(delay, deliver_webhook, delivery.id)
 
 
+PAGERDUTY_ENQUEUE_URL = 'https://events.pagerduty.com/v2/enqueue'
+
+
 def _send(
     url: str,
     secret: str,
     payload: dict,
     event_type: str,
     event_id: str,
+    wtype: str = 'generic',
 ) -> Tuple[int, str]:
-    # Slack Incoming Webhooks reject anything that isn't a Slack-shaped body
-    # (HTTP 400 "no_text"). Detect them and send a formatted text message
-    # instead of our generic signed envelope. Slack ignores extra headers and
-    # doesn't verify the HMAC, so we send a plain JSON message.
-    if 'hooks.slack.com' in url:
+    # Slack: send a Slack-shaped message. Explicit type wins; we also keep the
+    # hooks.slack.com sniff as a fallback for older subs with no type set.
+    if wtype == 'slack' or (wtype != 'pagerduty' and 'hooks.slack.com' in url):
         body = json.dumps(_slack_payload(event_type, payload))
         response = requests.post(
             url,
+            data=body,
+            headers={'Content-Type': 'application/json',
+                     'User-Agent': 'IDEViewer-Webhook/1.0'},
+            timeout=HTTP_TIMEOUT_SECONDS,
+        )
+        return response.status_code, response.text
+
+    # PagerDuty Events API v2: `url` holds the routing (integration) key; we
+    # POST a v2 event to the fixed enqueue endpoint.
+    if wtype == 'pagerduty':
+        body = json.dumps(_pagerduty_payload(event_type, payload, url))
+        response = requests.post(
+            PAGERDUTY_ENQUEUE_URL,
             data=body,
             headers={'Content-Type': 'application/json',
                      'User-Agent': 'IDEViewer-Webhook/1.0'},
@@ -238,3 +253,35 @@ def _slack_payload(event_type: str, payload: dict) -> dict:
         text = f"*{event_type}*\n```{json.dumps(d, indent=2)[:1500]}```"
 
     return {"text": "IDEViewer — " + text}
+
+
+def _pagerduty_payload(event_type: str, payload: dict, routing_key: str) -> dict:
+    """Render an event as a PagerDuty Events API v2 'trigger' (with routing_key)."""
+    d = payload.get('data') if isinstance(payload.get('data'), dict) else payload
+    host = d.get('host') or {}
+    hostname = host.get('hostname', 'unknown host')
+    ext = d.get('extension') or {}
+    ext_id = ext.get('extension_id') or ext.get('id') or ext.get('name') or ''
+
+    summary = f"IDEViewer: {event_type} on {hostname}"
+    if ext_id:
+        summary += f" — {ext_id}"
+
+    # PagerDuty severity must be one of critical|error|warning|info.
+    risk = (ext.get('risk_level') or d.get('severity') or '').lower()
+    severity = {'critical': 'critical', 'high': 'error',
+                'medium': 'warning', 'low': 'info'}.get(risk, 'warning')
+
+    return {
+        'routing_key': routing_key,
+        'event_action': 'trigger',
+        'payload': {
+            'summary': summary[:1024],
+            'source': hostname,
+            'severity': severity,
+            'component': ext_id or 'ideviewer',
+            'group': event_type.split('.')[0],
+            'class': event_type,
+            'custom_details': d,
+        },
+    }

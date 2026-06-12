@@ -80,6 +80,13 @@ SUPPORTED_WEBHOOK_EVENTS = [
 ]
 
 
+WEBHOOK_TYPES = [
+    ('generic', 'Generic (signed JSON)'),
+    ('slack', 'Slack'),
+    ('pagerduty', 'PagerDuty'),
+]
+
+
 class WebhookSubscriptionForm(FlaskForm):
     """Form for creating/editing an outbound webhook subscription."""
 
@@ -87,9 +94,11 @@ class WebhookSubscriptionForm(FlaskForm):
         DataRequired(),
         Length(min=1, max=100),
     ])
-    url = URLField('Endpoint URL', validators=[
+    type = SelectField('Type', choices=WEBHOOK_TYPES, validators=[DataRequired()])
+    # For slack/generic this is a URL; for pagerduty it's the Events API v2
+    # routing (integration) key. Validation is type-aware in validate().
+    url = StringField('Endpoint URL / routing key', validators=[
         DataRequired(),
-        URL(require_tld=False, message='Must be a valid URL'),
         Length(max=500),
     ])
     customer_key_id = SelectField('Customer key', coerce=int, validators=[DataRequired()])
@@ -101,6 +110,21 @@ class WebhookSubscriptionForm(FlaskForm):
         validators=[DataRequired(message='Select at least one event type')],
     )
     submit = SubmitField('Save')
+
+    def validate(self, extra_validators=None):
+        if not super().validate(extra_validators=extra_validators):
+            return False
+        # PagerDuty uses a routing key (not a URL); slack/generic need a URL.
+        if self.type.data == 'pagerduty':
+            if len((self.url.data or '').strip()) < 8:
+                self.url.errors.append('Enter your PagerDuty Events API v2 routing key')
+                return False
+        else:
+            u = (self.url.data or '').strip().lower()
+            if not (u.startswith('http://') or u.startswith('https://')):
+                self.url.errors.append('Must be an http(s) URL')
+                return False
+        return True
 
 
 POLICY_ACTIONS = [

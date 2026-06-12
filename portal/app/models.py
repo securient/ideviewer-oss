@@ -655,7 +655,16 @@ class WebhookSubscription(db.Model):
     customer_key_id = db.Column(db.Integer, db.ForeignKey('customer_keys.id'), nullable=False, index=True)
 
     name = db.Column(db.String(100), nullable=False)
+    # For slack/generic this is the endpoint URL; for pagerduty it's the
+    # Events API v2 routing (integration) key.
     url = db.Column(db.String(500), nullable=False)
+
+    # Delivery type — drives payload formatting in the delivery worker.
+    TYPE_GENERIC = 'generic'
+    TYPE_SLACK = 'slack'
+    TYPE_PAGERDUTY = 'pagerduty'
+    VALID_TYPES = (TYPE_GENERIC, TYPE_SLACK, TYPE_PAGERDUTY)
+    type = db.Column(db.String(20), nullable=False, default=TYPE_GENERIC)
 
     # JSON array of event-type strings; ["*"] subscribes to all.
     event_types = db.Column(db.JSON, nullable=False)
@@ -717,6 +726,7 @@ class WebhookSubscription(db.Model):
             'id': self.public_id,
             'name': self.name,
             'url': self.url,
+            'type': self.type or 'generic',
             'event_types': self.event_types or [],
             'secret': self.secret if reveal_secret else None,
             'is_active': self.is_active,

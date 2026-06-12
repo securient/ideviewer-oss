@@ -425,7 +425,7 @@ class TestWebhookEdit:
             portal_db.session.commit()
             pid = s.public_id
         resp = logged_in_client.post(f'/webhooks/{pid}/edit', data={
-            'name': 'w2', 'url': 'https://y.example.com/h',
+            'name': 'w2', 'type': 'generic', 'url': 'https://y.example.com/h',
             'customer_key_id': str(test_customer_key.id),
             'event_types': ['extension.installed', 'secret.detected']})
         assert resp.status_code in (302, 303)
@@ -433,3 +433,52 @@ class TestWebhookEdit:
             s = WebhookSubscription.query.filter_by(public_id=pid).first()
             assert s.name == 'w2'
             assert set(s.event_types) == {'extension.installed', 'secret.detected'}
+
+
+class TestWebhookTypes:
+    def test_send_routes_pagerduty(self, portal_app):
+        import json as _json
+        from app.jobs.webhook_delivery import _send, PAGERDUTY_ENQUEUE_URL
+        captured = {}
+
+        def fake_post(url, data=None, headers=None, timeout=None):
+            captured['url'] = url
+            captured['data'] = data
+            m = MagicMock(); m.status_code = 202; m.text = '{"status":"success"}'
+            return m
+
+        with patch("app.jobs.webhook_delivery.requests.post", side_effect=fake_post):
+            _send('R0UTINGKEY0000000000000000000000', 'secret',
+                  {'data': {'host': {'hostname': 'mac'},
+                            'extension': {'extension_id': 'e', 'risk_level': 'critical'}}},
+                  'policy.violation', 'evt', 'pagerduty')
+        assert captured['url'] == PAGERDUTY_ENQUEUE_URL
+        body = _json.loads(captured['data'])
+        assert body['routing_key'] == 'R0UTINGKEY0000000000000000000000'
+        assert body['event_action'] == 'trigger'
+        assert body['payload']['severity'] == 'critical'
+        assert body['payload']['source'] == 'mac'
+
+    def test_create_slack_and_pagerduty_store_type(self, portal_app, portal_db, logged_in_client, test_customer_key):
+        from app.models import WebhookSubscription
+        portal_app.config['WTF_CSRF_ENABLED'] = False
+        logged_in_client.post('/webhooks/create', data={
+            'name': 's', 'type': 'slack', 'url': 'https://hooks.slack.com/services/x',
+            'customer_key_id': str(test_customer_key.id), 'event_types': ['policy.violation']})
+        logged_in_client.post('/webhooks/create', data={
+            'name': 'p', 'type': 'pagerduty', 'url': 'R0UTINGKEY0000000000000000000000',
+            'customer_key_id': str(test_customer_key.id), 'event_types': ['policy.violation']})
+        with portal_app.app_context():
+            subs = {s.name: s for s in WebhookSubscription.query.all()}
+            assert subs['s'].type == 'slack'
+            assert subs['p'].type == 'pagerduty'
+            assert subs['p'].url == 'R0UTINGKEY0000000000000000000000'
+
+    def test_create_generic_rejects_non_url(self, portal_app, portal_db, logged_in_client, test_customer_key):
+        from app.models import WebhookSubscription
+        portal_app.config['WTF_CSRF_ENABLED'] = False
+        logged_in_client.post('/webhooks/create', data={
+            'name': 'bad', 'type': 'generic', 'url': 'not-a-url',
+            'customer_key_id': str(test_customer_key.id), 'event_types': ['policy.violation']})
+        with portal_app.app_context():
+            assert WebhookSubscription.query.filter_by(name='bad').count() == 0

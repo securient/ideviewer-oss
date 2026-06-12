@@ -45,10 +45,9 @@
                     <thead>
                         <tr>
                             <th>Name</th>
-                            <th>URL</th>
+                            <th>Type</th>
                             <th>Events</th>
                             <th>Status</th>
-                            <th>Failures</th>
                             <th>Actions</th>
                         </tr>
                     </thead>
@@ -58,7 +57,7 @@
                             <td style="font-weight: 500;">
                                 <a href="{{ url_for('main.webhook_detail', public_id=sub.public_id) }}">{{ sub.name }}</a>
                             </td>
-                            <td><code class="mono" style="font-size: 0.8125rem;">{{ sub.url }}</code></td>
+                            <td><span class="badge badge-low">{{ {'slack': 'Slack', 'pagerduty': 'PagerDuty', 'generic': 'Generic'}.get(sub.type, 'Generic') }}</span></td>
                             <td style="white-space: nowrap;">
                                 <span style="color: var(--text-secondary); font-size: 0.8125rem;">
                                     {% if '*' in sub.event_types %}All events{% else %}{{ sub.event_types|length }} event{{ '' if sub.event_types|length == 1 else 's' }}{% endif %}
@@ -70,13 +69,6 @@
                                 <span class="badge badge-low"><i class="fas fa-check"></i> Active</span>
                                 {% else %}
                                 <span class="badge badge-high"><i class="fas fa-pause"></i> Paused</span>
-                                {% endif %}
-                            </td>
-                            <td>
-                                {% if sub.consecutive_failures > 0 %}
-                                <span class="badge badge-high">{{ sub.consecutive_failures }}</span>
-                                {% else %}
-                                <span style="color: var(--text-muted);">0</span>
                                 {% endif %}
                             </td>
                             <td>
@@ -124,8 +116,13 @@
                     {{ form.name(class="form-input", placeholder="e.g., Slack #security") }}
                 </div>
                 <div class="form-group">
-                    <label class="form-label" for="url">Endpoint URL</label>
-                    {{ form.url(class="form-input", placeholder="https://your-app.example.com/webhook") }}
+                    <label class="form-label" for="type">Type</label>
+                    {{ form.type(class="form-input") }}
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="url">Endpoint URL / routing key</label>
+                    {{ form.url(class="form-input", placeholder="Slack/Generic: https://… · PagerDuty: Events API v2 routing key") }}
+                    <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">For PagerDuty, paste your Events API v2 integration (routing) key instead of a URL.</p>
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="customer_key_id">Customer key</label>

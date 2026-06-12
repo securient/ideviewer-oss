@@ -22,8 +22,13 @@
                 {{ form.name(class="form-input") }}
             </div>
             <div class="form-group">
-                <label class="form-label">Endpoint URL</label>
+                <label class="form-label">Type</label>
+                {{ form.type(class="form-input") }}
+            </div>
+            <div class="form-group">
+                <label class="form-label">Endpoint URL / routing key</label>
                 {{ form.url(class="form-input") }}
+                <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">For PagerDuty, this is your Events API v2 routing (integration) key.</p>
             </div>
             <div class="form-group">
                 <label class="form-label">Event types</label>
