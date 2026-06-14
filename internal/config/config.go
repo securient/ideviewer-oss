@@ -22,7 +22,11 @@ type Config struct {
 	HostToken           string `json:"host_token,omitempty"`
 	ScanIntervalMinutes int    `json:"scan_interval_minutes"`
 	HostID              string `json:"host_id,omitempty"`
-	Signature           string `json:"signature,omitempty"`
+	// EnforcementEnabled is the local kill-switch for the enforcement plane.
+	// The daemon refuses to apply any quarantine/restore action unless this
+	// is explicitly true. omitempty keeps existing signed configs valid.
+	EnforcementEnabled bool   `json:"enforcement_enabled,omitempty"`
+	Signature          string `json:"signature,omitempty"`
 }
 
 // configPath returns the config file path, checking system dir first

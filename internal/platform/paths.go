@@ -159,6 +159,11 @@ func BypassesDir() string {
 	return filepath.Join(HomeDir(), ".ideviewer", "bypasses")
 }
 
+// QuarantineDir returns the directory where quarantined extensions are moved.
+func QuarantineDir() string {
+	return filepath.Join(HomeDir(), ".ideviewer", "quarantine")
+}
+
 // BypassesPendingFile returns the path to the pending bypasses file.
 func BypassesPendingFile() string {
 	return filepath.Join(BypassesDir(), "pending.jsonl")

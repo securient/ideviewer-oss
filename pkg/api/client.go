@@ -238,3 +238,32 @@ func (c *Client) SendHookBypass(data map[string]any) (map[string]any, error) {
 	data["platform"] = c.platform
 	return c.doRequest("POST", "/api/hook-bypass", data)
 }
+
+// GetPendingEnforcementActions fetches enforcement actions the portal wants
+// this host to apply (quarantine/restore).
+func (c *Client) GetPendingEnforcementActions() ([]map[string]any, error) {
+	result, err := c.doRequest("GET", "/api/enforcement-actions/pending", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	actions, ok := result["actions"].([]any)
+	if !ok {
+		return nil, nil
+	}
+
+	var out []map[string]any
+	for _, a := range actions {
+		if m, ok := a.(map[string]any); ok {
+			out = append(out, m)
+		}
+	}
+	return out, nil
+}
+
+// ReportEnforcementResult reports the outcome of an enforcement action back
+// to the portal (status: applied | failed | reverted).
+func (c *Client) ReportEnforcementResult(actionID int, params map[string]any) (map[string]any, error) {
+	path := fmt.Sprintf("/api/enforcement-actions/%d/report", actionID)
+	return c.doRequest("POST", path, params)
+}

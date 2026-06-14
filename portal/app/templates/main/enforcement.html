@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+
+{% block title %}Enforcement Actions - IDE Viewer{% endblock %}
+
+{% block content %}
+<div class="fade-in">
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 2rem;">
+        <div>
+            <h1 style="font-size: 1.75rem; font-weight: 700; margin-bottom: 0.25rem;">Enforcement Actions</h1>
+            <p style="color: var(--text-secondary);">Quarantine / restore requests dispatched to daemons. Quarantine is reversible — nothing is deleted.</p>
+        </div>
+        <div>
+            <a href="{{ url_for('main.violations') }}" class="btn btn-sm btn-secondary"><i class="fas fa-triangle-exclamation"></i> Violations</a>
+        </div>
+    </div>
+
+    <div class="card">
+        {% if actions %}
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Created</th>
+                        <th>Host</th>
+                        <th>Extension</th>
+                        <th>Action</th>
+                        <th>Status</th>
+                        <th>Detail</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for a in actions %}
+                    <tr>
+                        <td style="white-space: nowrap; font-size: 0.8125rem;">{{ a.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                        <td><a href="{{ url_for('main.host_detail', host_id=a.host.public_id) }}">{{ a.host.hostname }}</a></td>
+                        <td>
+                            <code class="mono" style="font-size: 0.8125rem;">{{ a.extension_id }}</code>
+                            {% if a.extension_version %}<span style="color: var(--text-muted);">@{{ a.extension_version }}</span>{% endif %}
+                            {% if a.ide_type %}<div style="font-size: 0.75rem; color: var(--text-muted);">{{ a.ide_type }}</div>{% endif %}
+                        </td>
+                        <td>
+                            {% if a.action == 'quarantine' %}
+                                <span class="badge badge-critical">quarantine</span>
+                            {% else %}
+                                <span class="badge badge-low">restore</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if a.status == 'applied' %}
+                                <span class="badge badge-high"><i class="fas fa-ban"></i> applied</span>
+                            {% elif a.status == 'reverted' %}
+                                <span class="badge badge-low"><i class="fas fa-rotate-left"></i> reverted</span>
+                            {% elif a.status == 'failed' %}
+                                <span class="badge badge-critical"><i class="fas fa-xmark"></i> failed</span>
+                            {% elif a.status == 'dispatched' %}
+                                <span class="badge badge-medium"><i class="fas fa-paper-plane"></i> dispatched</span>
+                            {% else %}
+                                <span class="badge badge-medium"><i class="fas fa-clock"></i> pending</span>
+                            {% endif %}
+                        </td>
+                        <td style="font-size: 0.8125rem; color: var(--text-muted); max-width: 320px;">{{ a.result_detail or '—' }}</td>
+                        <td style="white-space: nowrap;">
+                            {% if a.action == 'quarantine' and a.status == 'applied' %}
+                            <form method="POST" action="{{ url_for('main.restore_enforcement', action_id=a.id) }}" style="display: inline;"
+                                  onsubmit="return confirm('Restore {{ a.extension_id }} on {{ a.host.hostname }}?');">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <button type="submit" class="btn btn-sm btn-secondary" title="Restore extension"><i class="fas fa-rotate-left"></i> Restore</button>
+                            </form>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <i class="fas fa-shield-halved"></i>
+            <h3 style="margin-bottom: 0.5rem;">No enforcement actions yet</h3>
+            <p>Quarantine actions appear here when a <code>quarantine</code> policy matches or you quarantine a violation manually.</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

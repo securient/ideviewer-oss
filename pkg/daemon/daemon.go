@@ -31,8 +31,24 @@ type Daemon struct {
 	watcher      *watcher.Watcher
 	scanInterval time.Duration
 	shutdown     chan struct{}
+	resultMu     sync.RWMutex // guards lastResult
 	lastResult   *scanner.ScanResult
 	hashes       *scanHashes
+}
+
+// setResult stores the latest scan result under the result lock.
+func (d *Daemon) setResult(r *scanner.ScanResult) {
+	d.resultMu.Lock()
+	d.lastResult = r
+	d.resultMu.Unlock()
+}
+
+// snapshotResult returns the most recent scan result (may be nil) under a
+// read lock. Callers must not mutate the returned value.
+func (d *Daemon) snapshotResult() *scanner.ScanResult {
+	d.resultMu.RLock()
+	defer d.resultMu.RUnlock()
+	return d.lastResult
 }
 
 // New creates a Daemon from the given config. The scanner must be provided
@@ -111,12 +127,14 @@ func (d *Daemon) Start(runOnce bool) error {
 	tamperTicker := time.NewTicker(1 * time.Minute)
 	bypassTicker := time.NewTicker(30 * time.Second)
 	pollTicker := time.NewTicker(5 * time.Second)
+	enforcementTicker := time.NewTicker(10 * time.Second)
 
 	defer scanTicker.Stop()
 	defer heartbeatTicker.Stop()
 	defer tamperTicker.Stop()
 	defer bypassTicker.Stop()
 	defer pollTicker.Stop()
+	defer enforcementTicker.Stop()
 
 	for {
 		select {
@@ -139,6 +157,9 @@ func (d *Daemon) Start(runOnce bool) error {
 
 		case <-pollTicker.C:
 			d.checkOnDemandScans()
+
+		case <-enforcementTicker.C:
+			d.checkEnforcementActions()
 		}
 	}
 }
@@ -211,7 +232,7 @@ func (d *Daemon) runScan() {
 	}
 
 	if ideRes != nil {
-		d.lastResult = ideRes
+		d.setResult(ideRes)
 		totalExts := 0
 		for _, ide := range ideRes.IDEs {
 			totalExts += len(ide.Extensions)

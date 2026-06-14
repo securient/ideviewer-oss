@@ -49,6 +49,8 @@
                                     <span class="badge badge-low">allow</span>
                                 {% elif p.action == 'warn' %}
                                     <span class="badge badge-medium">warn</span>
+                                {% elif p.action == 'quarantine' %}
+                                    <span class="badge badge-critical">quarantine</span>
                                 {% else %}
                                     <span class="badge badge-critical">block-alert</span>
                                 {% endif %}
@@ -62,6 +64,9 @@
                             </td>
                             <td>
                                 <div style="display: flex; gap: 0.5rem;">
+                                    <a href="{{ url_for('main.edit_policy', public_id=p.public_id) }}" class="btn btn-sm btn-secondary" title="Edit">
+                                        <i class="fas fa-pen"></i>
+                                    </a>
                                     <form method="POST" action="{{ url_for('main.toggle_policy', public_id=p.public_id) }}" style="display: inline;">
                                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                         <button type="submit" class="btn btn-sm btn-secondary" title="{{ 'Pause' if p.is_active else 'Resume' }}">
@@ -104,10 +109,15 @@
                     <label class="form-label">Name</label>
                     {{ form.name(class="form-input", placeholder="e.g., Block evil publishers") }}
                 </div>
+                {% if form.customer_key_id.choices|length > 1 %}
                 <div class="form-group">
                     <label class="form-label">Customer key</label>
                     {{ form.customer_key_id(class="form-input") }}
                 </div>
+                {% else %}
+                {# Only one key — submit it silently instead of making the user pick. #}
+                <input type="hidden" name="customer_key_id" value="{{ form.customer_key_id.choices[0][0] if form.customer_key_id.choices else '' }}">
+                {% endif %}
                 <div class="form-group">
                     <label class="form-label">Priority <span style="color: var(--text-muted); font-weight: normal;">(lower wins)</span></label>
                     {{ form.priority(class="form-input") }}

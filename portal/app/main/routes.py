@@ -13,10 +13,12 @@ from app.models import (
     ScanRequest, TamperAlert, Vulnerability, HookBypass, AIToolInfo,
     WebhookSubscription, WebhookDelivery,
     ExtensionPolicy, PolicyViolation,
-    ExtensionMetadata,
+    ExtensionMetadata, EnforcementAction,
 )
 from app.auth.forms import CustomerKeyForm, WebhookSubscriptionForm, ExtensionPolicyForm
 from app.marketplace import fetch_extension_details
+from app.events import emit_event
+from app.policy.runner import emit_enforcement_created
 
 main_bp = Blueprint('main', __name__)
 
@@ -640,6 +642,7 @@ def host_detail(host_id):
                 extensions.append({
                     'ide_name': ide_name,
                     'ide_version': ide_version,
+                    'extension_id': ext.get('id') or ext.get('extension_id') or '',
                     'name': ext.get('name', 'Unknown'),
                     'version': ext.get('version', 'Unknown'),
                     'publisher': ext.get('publisher', 'Unknown'),
@@ -810,14 +813,21 @@ def delete_key(key_id):
         flash('Access denied', 'error')
         return redirect(url_for('main.keys'))
     
-    # Delete associated data
+    # Delete associated data, children first.
     for host in key.hosts:
-        ScanReport.query.filter_by(host_id=host.id).delete()
-        ExtensionInfo.query.filter_by(host_id=host.id).delete()
-        SecretFinding.query.filter_by(host_id=host.id).delete()
-        PackageInfo.query.filter_by(host_id=host.id).delete()
-    Host.query.filter_by(customer_key_id=key.id).delete()
-    
+        _purge_host_data(host.id)
+
+    # Webhook deliveries reference subscriptions; subscriptions and policies
+    # reference the key.
+    sub_ids = [s.id for s in WebhookSubscription.query.filter_by(customer_key_id=key.id)]
+    if sub_ids:
+        WebhookDelivery.query.filter(
+            WebhookDelivery.subscription_id.in_(sub_ids)
+        ).delete(synchronize_session=False)
+    WebhookSubscription.query.filter_by(customer_key_id=key.id).delete(synchronize_session=False)
+    ExtensionPolicy.query.filter_by(customer_key_id=key.id).delete(synchronize_session=False)
+    Host.query.filter_by(customer_key_id=key.id).delete(synchronize_session=False)
+
     db.session.delete(key)
     db.session.commit()
 
@@ -879,6 +889,7 @@ def create_webhook():
     sub = WebhookSubscription(
         customer_key_id=key.id,
         name=form.name.data,
+        type=form.type.data,
         url=form.url.data,
         event_types=form.event_types.data,
         created_by_user_id=current_user.id,
@@ -887,6 +898,36 @@ def create_webhook():
     db.session.commit()
     flash(f'Webhook "{sub.name}" created. Copy the secret below — it will not be shown again.', 'success')
     return redirect(url_for('main.webhooks', reveal=sub.public_id))
+
+
+@main_bp.route('/webhooks/<public_id>/edit', methods=['GET', 'POST'])
+@login_required
+def edit_webhook(public_id):
+    """Edit a webhook's name, URL, and subscribed event types."""
+    sub = _user_subscription_or_404(public_id)
+    if sub is None:
+        return redirect(url_for('main.webhooks'))
+
+    form = WebhookSubscriptionForm(obj=sub)
+    form.customer_key_id.choices = [
+        (k.id, k.name) for k in current_user.customer_keys.filter_by(is_active=True)
+    ]
+    if request.method == 'POST':
+        form.customer_key_id.data = sub.customer_key_id  # key is not editable
+        if not form.validate_on_submit():
+            for field, errors in form.errors.items():
+                for err in errors:
+                    flash(f'{field}: {err}', 'error')
+            return render_template('main/webhook_edit.html', form=form, sub=sub)
+        sub.name = form.name.data
+        sub.type = form.type.data
+        sub.url = form.url.data
+        sub.event_types = form.event_types.data
+        db.session.commit()
+        flash(f'Webhook "{sub.name}" updated', 'success')
+        return redirect(url_for('main.webhooks'))
+
+    return render_template('main/webhook_edit.html', form=form, sub=sub)
 
 
 @main_bp.route('/webhooks/<public_id>')
@@ -1056,12 +1097,53 @@ def delete_policy(public_id):
     if policy is None:
         return redirect(url_for('main.policies'))
     name = policy.name
-    # Delete associated violations first to satisfy FK.
+    # Unlink enforcement actions from this policy's violations (their
+    # violation_id FK would block the violation delete), then delete the
+    # violations themselves.
+    vids = [v.id for v in PolicyViolation.query.filter_by(policy_id=policy.id)]
+    if vids:
+        EnforcementAction.query.filter(
+            EnforcementAction.violation_id.in_(vids)
+        ).update({'violation_id': None}, synchronize_session=False)
     PolicyViolation.query.filter_by(policy_id=policy.id).delete()
     db.session.delete(policy)
     db.session.commit()
     flash(f'Policy "{name}" deleted', 'success')
     return redirect(url_for('main.policies'))
+
+
+@main_bp.route('/policies/<public_id>/edit', methods=['GET', 'POST'])
+@login_required
+def edit_policy(public_id):
+    """Edit an existing extension policy (all fields except the customer key)."""
+    policy = _user_policy_or_404(public_id)
+    if policy is None:
+        return redirect(url_for('main.policies'))
+
+    form = ExtensionPolicyForm(obj=policy)
+    form.customer_key_id.choices = [
+        (k.id, k.name) for k in current_user.customer_keys.filter_by(is_active=True)
+    ]
+
+    if request.method == 'POST':
+        form.customer_key_id.data = policy.customer_key_id  # key is not editable
+        if not form.validate_on_submit():
+            for field, errors in form.errors.items():
+                for err in errors:
+                    flash(f'{field}: {err}', 'error')
+            return render_template('main/policy_edit.html', form=form, policy=policy)
+        policy.name = form.name.data
+        policy.priority = form.priority.data
+        policy.action = form.action.data
+        policy.match_publisher = form.match_publisher.data or None
+        policy.match_extension_id = form.match_extension_id.data or None
+        policy.match_permission_glob = form.match_permission_glob.data or None
+        policy.match_risk_level = form.match_risk_level.data or None
+        db.session.commit()
+        flash(f'Policy "{policy.name}" updated', 'success')
+        return redirect(url_for('main.policies'))
+
+    return render_template('main/policy_edit.html', form=form, policy=policy)
 
 
 @main_bp.route('/violations')
@@ -1094,6 +1176,102 @@ def resolve_violation(violation_id):
     return redirect(url_for('main.violations'))
 
 
+def _open_quarantine_action(host_id, extension_id, extension_version):
+    """Return an existing open quarantine action for this extension, or None."""
+    q = EnforcementAction.query.filter(
+        EnforcementAction.host_id == host_id,
+        EnforcementAction.extension_id == extension_id,
+        EnforcementAction.action == EnforcementAction.ACTION_QUARANTINE,
+        EnforcementAction.status.in_(EnforcementAction.OPEN_STATUSES),
+    )
+    if extension_version is None:
+        q = q.filter(EnforcementAction.extension_version.is_(None))
+    else:
+        q = q.filter(EnforcementAction.extension_version == extension_version)
+    return q.first()
+
+
+@main_bp.route('/violations/<int:violation_id>/quarantine', methods=['POST'])
+@login_required
+def quarantine_violation(violation_id):
+    """Manually request the daemon quarantine the violating extension."""
+    v = PolicyViolation.query.get_or_404(violation_id)
+    host = Host.query.get(v.host_id)
+    if not host or host.customer_key.user_id != current_user.id:
+        flash('Access denied', 'error')
+        return redirect(url_for('main.violations'))
+
+    if _open_quarantine_action(host.id, v.extension_id, v.extension_version) is not None:
+        flash('A quarantine action is already pending for this extension.', 'info')
+        return redirect(url_for('main.violations'))
+
+    action = EnforcementAction(
+        host_id=host.id,
+        violation_id=v.id,
+        action=EnforcementAction.ACTION_QUARANTINE,
+        status=EnforcementAction.STATUS_PENDING,
+        extension_id=v.extension_id,
+        extension_name=v.extension_name,
+        extension_version=v.extension_version,
+        ide_type=None,  # daemon resolves across IDEs by extension id
+        created_by_user_id=current_user.id,
+    )
+    db.session.add(action)
+    db.session.commit()
+    emit_enforcement_created(action, host, host.customer_key.id)
+    flash('Quarantine requested — the daemon will apply it on its next check-in.', 'success')
+    return redirect(url_for('main.violations'))
+
+
+@main_bp.route('/enforcement')
+@login_required
+def enforcement():
+    """List enforcement actions across the user's hosts."""
+    key_ids = [k.id for k in current_user.customer_keys]
+    host_ids = [h.id for h in Host.query.filter(Host.customer_key_id.in_(key_ids))]
+    actions = (
+        EnforcementAction.query
+        .filter(EnforcementAction.host_id.in_(host_ids))
+        .order_by(EnforcementAction.created_at.desc())
+        .limit(200)
+        .all()
+    )
+    return render_template('main/enforcement.html', actions=actions)
+
+
+@main_bp.route('/enforcement/<int:action_id>/restore', methods=['POST'])
+@login_required
+def restore_enforcement(action_id):
+    """Request the daemon move a quarantined extension back into place."""
+    a = EnforcementAction.query.get_or_404(action_id)
+    host = Host.query.get(a.host_id)
+    if not host or host.customer_key.user_id != current_user.id:
+        flash('Access denied', 'error')
+        return redirect(url_for('main.enforcement'))
+    if a.action != EnforcementAction.ACTION_QUARANTINE or a.status != EnforcementAction.STATUS_APPLIED:
+        flash('Only an applied quarantine can be restored.', 'error')
+        return redirect(url_for('main.enforcement'))
+
+    restore = EnforcementAction(
+        host_id=host.id,
+        violation_id=a.violation_id,
+        action=EnforcementAction.ACTION_RESTORE,
+        status=EnforcementAction.STATUS_PENDING,
+        extension_id=a.extension_id,
+        extension_name=a.extension_name,
+        extension_version=a.extension_version,
+        ide_type=a.ide_type,
+        original_path=a.original_path,
+        quarantine_path=a.quarantine_path,
+        created_by_user_id=current_user.id,
+    )
+    db.session.add(restore)
+    db.session.commit()
+    emit_enforcement_created(restore, host, host.customer_key.id)
+    flash('Restore requested — the daemon will move the extension back on its next check-in.', 'success')
+    return redirect(url_for('main.enforcement'))
+
+
 @main_bp.route('/alert/<int:alert_id>/acknowledge', methods=['POST'])
 @login_required
 def acknowledge_alert(alert_id):
@@ -1110,9 +1288,91 @@ def acknowledge_alert(alert_id):
     alert.acknowledged_by = current_user.id
     alert.acknowledged_at = datetime.utcnow()
     db.session.commit()
-    
+
     flash('Alert acknowledged', 'success')
     return redirect(url_for('main.dashboard'))
+
+
+# ── Notifications (bell dropdown) ────────────────────────────────────────
+
+def _user_host_ids():
+    key_ids = [k.id for k in current_user.customer_keys]
+    return [h.id for h in Host.query.filter(Host.customer_key_id.in_(key_ids))]
+
+
+# Friendlier labels/icons per alert type for the notifications feed.
+_ALERT_META = {
+    'policy_violation':   {'label': 'Policy violation',   'icon': 'fa-gavel',                'category': 'policy'},
+    'file_modified':      {'label': 'File modified',       'icon': 'fa-file-pen',             'category': 'integrity'},
+    'file_deleted':       {'label': 'File deleted',        'icon': 'fa-file-circle-xmark',    'category': 'integrity'},
+    'daemon_stopping':    {'label': 'Daemon stopping',     'icon': 'fa-circle-stop',          'category': 'integrity'},
+    'uninstall_attempt':  {'label': 'Uninstall attempt',   'icon': 'fa-triangle-exclamation', 'category': 'integrity'},
+    'host_deregistered':  {'label': 'Host deregistered',   'icon': 'fa-plug-circle-xmark',    'category': 'integrity'},
+}
+
+
+@main_bp.route('/notifications')
+@login_required
+def notifications():
+    """JSON feed for the bell dropdown.
+
+    Returns unread alerts by default; ?include_read=1 also returns recently
+    acknowledged ones (for the "show read" view). ``count`` is always the
+    unread count, so the badge is unaffected by the toggle.
+    """
+    host_ids = _user_host_ids()
+    include_read = request.args.get('include_read') == '1'
+    base = TamperAlert.query.filter(TamperAlert.host_id.in_(host_ids))
+    unread_count = base.filter(TamperAlert.is_acknowledged == False).count()  # noqa: E712
+    q = base if include_read else base.filter(TamperAlert.is_acknowledged == False)  # noqa: E712
+    items = q.order_by(TamperAlert.created_at.desc()).limit(30).all()
+    host_name = {h.id: h.hostname for h in Host.query.filter(Host.id.in_(host_ids))}
+    return jsonify({
+        'count': unread_count,
+        'include_read': include_read,
+        'items': [{
+            'id': a.id,
+            'alert_type': a.alert_type,
+            'label': _ALERT_META.get(a.alert_type, {}).get('label', a.alert_type.replace('_', ' ').title()),
+            'icon': _ALERT_META.get(a.alert_type, {}).get('icon', 'fa-bell'),
+            'category': _ALERT_META.get(a.alert_type, {}).get('category', 'alert'),
+            'severity': a.severity,
+            'details': (a.details or '')[:200],
+            'hostname': host_name.get(a.host_id, 'unknown host'),
+            'created_at': a.created_at.isoformat() + 'Z' if a.created_at else None,
+            'read': bool(a.is_acknowledged),
+        } for a in items],
+    })
+
+
+@main_bp.route('/notifications/<int:alert_id>/read', methods=['POST'])
+@login_required
+def notification_read(alert_id):
+    alert = TamperAlert.query.get_or_404(alert_id)
+    host = Host.query.get(alert.host_id)
+    if not host or host.customer_key.user_id != current_user.id:
+        return jsonify({'error': 'access denied'}), 403
+    alert.is_acknowledged = True
+    alert.acknowledged_by = current_user.id
+    alert.acknowledged_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify({'success': True})
+
+
+@main_bp.route('/notifications/read-all', methods=['POST'])
+@login_required
+def notifications_read_all():
+    host_ids = _user_host_ids()
+    TamperAlert.query.filter(
+        TamperAlert.host_id.in_(host_ids),
+        TamperAlert.is_acknowledged == False,  # noqa: E712
+    ).update(
+        {'is_acknowledged': True, 'acknowledged_by': current_user.id,
+         'acknowledged_at': datetime.utcnow()},
+        synchronize_session=False,
+    )
+    db.session.commit()
+    return jsonify({'success': True})
 
 
 @main_bp.route('/host/<host_id>/trigger-scan', methods=['POST'])
@@ -1203,6 +1463,26 @@ def revoke_host_token(host_id):
     return redirect(request.referrer or url_for('main.host_detail', host_id=host.public_id))
 
 
+def _purge_host_data(host_id):
+    """Delete every row that references a host, in FK-dependency order.
+
+    Children first: every *_info table references scan_reports, so
+    scan_reports is deleted LAST; enforcement_actions references
+    policy_violations, which references the host.
+    """
+    EnforcementAction.query.filter_by(host_id=host_id).delete(synchronize_session=False)
+    PolicyViolation.query.filter_by(host_id=host_id).delete(synchronize_session=False)
+    Vulnerability.query.filter_by(host_id=host_id).delete(synchronize_session=False)
+    ExtensionInfo.query.filter_by(host_id=host_id).delete(synchronize_session=False)
+    SecretFinding.query.filter_by(host_id=host_id).delete(synchronize_session=False)
+    PackageInfo.query.filter_by(host_id=host_id).delete(synchronize_session=False)
+    AIToolInfo.query.filter_by(host_id=host_id).delete(synchronize_session=False)
+    HookBypass.query.filter_by(host_id=host_id).delete(synchronize_session=False)
+    ScanRequest.query.filter_by(host_id=host_id).delete(synchronize_session=False)
+    TamperAlert.query.filter_by(host_id=host_id).delete(synchronize_session=False)
+    ScanReport.query.filter_by(host_id=host_id).delete(synchronize_session=False)
+
+
 @main_bp.route('/host/<host_id>/delete', methods=['POST'])
 @login_required
 def delete_host(host_id):
@@ -1213,18 +1493,7 @@ def delete_host(host_id):
         return redirect(url_for('main.dashboard'))
 
     hostname = host.hostname
-
-    # Delete all associated data
-    Vulnerability.query.filter_by(host_id=host.id).delete()
-    HookBypass.query.filter_by(host_id=host.id).delete()
-    ScanRequest.query.filter_by(host_id=host.id).delete()
-    ScanReport.query.filter_by(host_id=host.id).delete()
-    ExtensionInfo.query.filter_by(host_id=host.id).delete()
-    SecretFinding.query.filter_by(host_id=host.id).delete()
-    PackageInfo.query.filter_by(host_id=host.id).delete()
-    TamperAlert.query.filter_by(host_id=host.id).delete()
-    AIToolInfo.query.filter_by(host_id=host.id).delete()
-
+    _purge_host_data(host.id)
     db.session.delete(host)
     db.session.commit()
 

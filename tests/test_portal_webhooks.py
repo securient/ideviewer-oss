@@ -314,3 +314,171 @@ class TestUI:
         resp = logged_in_client.get("/webhooks")
         assert resp.status_code == 200
         assert b"Outbound Webhooks" in resp.data
+
+
+class TestSlackFormatting:
+    def test_slack_payload_policy_violation(self, portal_app):
+        from app.jobs.webhook_delivery import _slack_payload
+        out = _slack_payload('policy.violation', {
+            'host': {'hostname': 'mac-1'},
+            'policy': {'name': 'p', 'action': 'block-alert'},
+            'extension': {'extension_id': 'evil.x', 'version': '1.0'},
+        })
+        assert 'text' in out
+        assert 'evil.x' in out['text']
+        assert 'mac-1' in out['text']
+
+    def test_slack_payload_unknown_event_fallback(self, portal_app):
+        from app.jobs.webhook_delivery import _slack_payload
+        out = _slack_payload('weird.event', {'foo': 'bar'})
+        assert 'text' in out and 'weird.event' in out['text']
+
+    def test_send_uses_slack_format_for_slack_url(self, portal_app):
+        import json as _json
+        from app.jobs.webhook_delivery import _send
+        captured = {}
+
+        def fake_post(url, data=None, headers=None, timeout=None):
+            captured['data'] = data
+            captured['headers'] = headers or {}
+            m = MagicMock()
+            m.status_code = 200
+            m.text = 'ok'
+            return m
+
+        with patch("app.jobs.webhook_delivery.requests.post", side_effect=fake_post):
+            _send('https://hooks.slack.com/services/T/B/x', 'secret',
+                  {'host': {'hostname': 'h'}, 'extension': {'extension_id': 'e'}},
+                  'policy.violation', 'evt1')
+        sent = _json.loads(captured['data'])
+        assert 'text' in sent
+        assert 'X-IDEViewer-Signature' not in captured['headers']
+
+    def test_send_uses_generic_format_for_non_slack_url(self, portal_app):
+        import json as _json
+        from app.jobs.webhook_delivery import _send
+        captured = {}
+
+        def fake_post(url, data=None, headers=None, timeout=None):
+            captured['data'] = data
+            captured['headers'] = headers or {}
+            m = MagicMock()
+            m.status_code = 200
+            m.text = 'ok'
+            return m
+
+        with patch("app.jobs.webhook_delivery.requests.post", side_effect=fake_post):
+            _send('https://example.com/hook', 'secret', {'a': 1}, 'policy.violation', 'evt1')
+        sent = _json.loads(captured['data'])
+        assert 'text' not in sent
+        assert 'X-IDEViewer-Signature' in captured['headers']
+
+    def test_slack_payload_reads_envelope_and_enrichment(self, portal_app):
+        from app.jobs.webhook_delivery import _slack_payload
+        out = _slack_payload('policy.violation', {
+            'id': 'evt_1', 'type': 'policy.violation',
+            'data': {
+                'host': {'hostname': 'mac-2'},
+                'policy': {'name': 'testssh', 'action': 'block-alert'},
+                'extension': {
+                    'extension_id': 'anysphere.remote-ssh', 'version': '1.1.2',
+                    'publisher': 'anysphere', 'risk_level': 'high', 'ide': 'Cursor',
+                    'vulnerable_dependencies': {
+                        'critical': 2, 'high': 1,
+                        'examples': [{'vuln_id': 'CVE-2026-1', 'package': 'left-pad@1.0', 'severity': 'critical'}],
+                    },
+                },
+            },
+        })
+        t = out['text']
+        assert 'mac-2' in t                 # host unwrapped from envelope
+        assert 'anysphere.remote-ssh' in t  # extension
+        assert 'Cursor' in t                # IDE
+        assert 'testssh' in t               # policy name
+        assert '2 critical, 1 high' in t    # vuln summary
+        assert 'CVE-2026-1' in t            # example CVE
+
+    def test_slack_extension_installed(self, portal_app):
+        from app.jobs.webhook_delivery import _slack_payload
+        out = _slack_payload('extension.installed', {'data': {
+            'host': {'hostname': 'mac'},
+            'extension': {'extension_id': 'evil.x', 'version': '1.0', 'ide': 'Cursor', 'publisher': 'evil'}}})
+        t = out['text'].lower()
+        assert 'installed' in t and 'evil.x' in out['text'] and 'mac' in out['text']
+
+    def test_slack_secret_detected(self, portal_app):
+        from app.jobs.webhook_delivery import _slack_payload
+        out = _slack_payload('secret.detected', {'data': {
+            'host': {'hostname': 'mac'},
+            'secret': {'secret_type': 'aws_key', 'file_path': '/x/.env', 'source': 'filesystem'}}})
+        assert 'aws_key' in out['text'] and '/x/.env' in out['text']
+
+
+class TestWebhookEdit:
+    def test_edit_updates_events(self, portal_app, portal_db, logged_in_client, test_customer_key):
+        from app.models import WebhookSubscription
+        portal_app.config['WTF_CSRF_ENABLED'] = False
+        with portal_app.app_context():
+            s = WebhookSubscription(customer_key_id=test_customer_key.id, name='w',
+                                    url='https://x.example.com/h', event_types=['policy.violation'])
+            portal_db.session.add(s)
+            portal_db.session.commit()
+            pid = s.public_id
+        resp = logged_in_client.post(f'/webhooks/{pid}/edit', data={
+            'name': 'w2', 'type': 'generic', 'url': 'https://y.example.com/h',
+            'customer_key_id': str(test_customer_key.id),
+            'event_types': ['extension.installed', 'secret.detected']})
+        assert resp.status_code in (302, 303)
+        with portal_app.app_context():
+            s = WebhookSubscription.query.filter_by(public_id=pid).first()
+            assert s.name == 'w2'
+            assert set(s.event_types) == {'extension.installed', 'secret.detected'}
+
+
+class TestWebhookTypes:
+    def test_send_routes_pagerduty(self, portal_app):
+        import json as _json
+        from app.jobs.webhook_delivery import _send, PAGERDUTY_ENQUEUE_URL
+        captured = {}
+
+        def fake_post(url, data=None, headers=None, timeout=None):
+            captured['url'] = url
+            captured['data'] = data
+            m = MagicMock(); m.status_code = 202; m.text = '{"status":"success"}'
+            return m
+
+        with patch("app.jobs.webhook_delivery.requests.post", side_effect=fake_post):
+            _send('R0UTINGKEY0000000000000000000000', 'secret',
+                  {'data': {'host': {'hostname': 'mac'},
+                            'extension': {'extension_id': 'e', 'risk_level': 'critical'}}},
+                  'policy.violation', 'evt', 'pagerduty')
+        assert captured['url'] == PAGERDUTY_ENQUEUE_URL
+        body = _json.loads(captured['data'])
+        assert body['routing_key'] == 'R0UTINGKEY0000000000000000000000'
+        assert body['event_action'] == 'trigger'
+        assert body['payload']['severity'] == 'critical'
+        assert body['payload']['source'] == 'mac'
+
+    def test_create_slack_and_pagerduty_store_type(self, portal_app, portal_db, logged_in_client, test_customer_key):
+        from app.models import WebhookSubscription
+        portal_app.config['WTF_CSRF_ENABLED'] = False
+        logged_in_client.post('/webhooks/create', data={
+            'name': 's', 'type': 'slack', 'url': 'https://hooks.slack.com/services/x',
+            'customer_key_id': str(test_customer_key.id), 'event_types': ['policy.violation']})
+        logged_in_client.post('/webhooks/create', data={
+            'name': 'p', 'type': 'pagerduty', 'url': 'R0UTINGKEY0000000000000000000000',
+            'customer_key_id': str(test_customer_key.id), 'event_types': ['policy.violation']})
+        with portal_app.app_context():
+            subs = {s.name: s for s in WebhookSubscription.query.all()}
+            assert subs['s'].type == 'slack'
+            assert subs['p'].type == 'pagerduty'
+            assert subs['p'].url == 'R0UTINGKEY0000000000000000000000'
+
+    def test_create_generic_rejects_non_url(self, portal_app, portal_db, logged_in_client, test_customer_key):
+        from app.models import WebhookSubscription
+        portal_app.config['WTF_CSRF_ENABLED'] = False
+        logged_in_client.post('/webhooks/create', data={
+            'name': 'bad', 'type': 'generic', 'url': 'not-a-url',
+            'customer_key_id': str(test_customer_key.id), 'event_types': ['policy.violation']})
+        with portal_app.app_context():
+            assert WebhookSubscription.query.filter_by(name='bad').count() == 0

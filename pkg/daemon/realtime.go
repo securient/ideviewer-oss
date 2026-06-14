@@ -21,7 +21,7 @@ func (d *Daemon) handleRealtimeEvents(events []watcher.ChangeEvent) {
 	}
 
 	if ideRes != nil {
-		d.lastResult = ideRes
+		d.setResult(ideRes)
 		totalExts := 0
 		for _, ide := range ideRes.IDEs {
 			totalExts += len(ide.Extensions)

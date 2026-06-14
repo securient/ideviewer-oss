@@ -26,6 +26,7 @@ func init() {
 	registerCmd.Flags().StringP("customer-key", "k", "", "Customer key (UUID)")
 	registerCmd.Flags().StringP("portal-url", "p", "", "Portal URL")
 	registerCmd.Flags().IntP("interval", "i", 30, "Full scan interval in minutes (default: 30, real-time monitoring runs independently)")
+	registerCmd.Flags().Bool("enable-enforcement", false, "Allow the daemon to quarantine extensions flagged by 'quarantine' policies (off by default)")
 	_ = registerCmd.MarkFlagRequired("customer-key")
 	_ = registerCmd.MarkFlagRequired("portal-url")
 }
@@ -34,6 +35,7 @@ func runRegister(cmd *cobra.Command, args []string) error {
 	customerKey, _ := cmd.Flags().GetString("customer-key")
 	portalURL, _ := cmd.Flags().GetString("portal-url")
 	interval, _ := cmd.Flags().GetInt("interval")
+	enableEnforcement, _ := cmd.Flags().GetBool("enable-enforcement")
 
 	fmt.Println("=== IDE Viewer Registration ===")
 	fmt.Printf("Portal:   %s\n", portalURL)
@@ -94,6 +96,7 @@ func runRegister(cmd *cobra.Command, args []string) error {
 		CustomerKey:         customerKey,
 		HostToken:           hostToken,
 		ScanIntervalMinutes: interval,
+		EnforcementEnabled:  enableEnforcement,
 	}
 	// Save to user-level config dir (daemon runs as user via LaunchAgent)
 	if err := config.Save(cfg); err != nil {

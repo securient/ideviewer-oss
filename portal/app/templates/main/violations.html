@@ -10,6 +10,7 @@
             <p style="color: var(--text-secondary);">Extensions that match an active warn or block-alert policy.</p>
         </div>
         <div>
+            <a href="{{ url_for('main.enforcement') }}" class="btn btn-sm btn-secondary"><i class="fas fa-shield-halved"></i> Enforcement actions</a>
             {% if show_resolved %}
                 <a href="{{ url_for('main.violations') }}" class="btn btn-sm btn-secondary"><i class="fas fa-filter"></i> Unresolved only</a>
             {% else %}
@@ -52,6 +53,8 @@
                                 <span class="badge badge-low">allow</span>
                             {% elif v.action_taken == 'warn' %}
                                 <span class="badge badge-medium">warn</span>
+                            {% elif v.action_taken == 'quarantine' %}
+                                <span class="badge badge-critical">quarantine</span>
                             {% else %}
                                 <span class="badge badge-critical">block-alert</span>
                             {% endif %}
@@ -70,8 +73,13 @@
                                 <span class="badge badge-high"><i class="fas fa-exclamation"></i> Open</span>
                             {% endif %}
                         </td>
-                        <td>
+                        <td style="white-space: nowrap;">
                             {% if not v.is_resolved %}
+                            <form method="POST" action="{{ url_for('main.quarantine_violation', violation_id=v.id) }}" style="display: inline;"
+                                  onsubmit="return confirm('Quarantine {{ v.extension_id }} on {{ v.host.hostname }}? The daemon will move it aside (reversible).');">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <button type="submit" class="btn btn-sm btn-danger" title="Quarantine on endpoint"><i class="fas fa-ban"></i></button>
+                            </form>
                             <form method="POST" action="{{ url_for('main.resolve_violation', violation_id=v.id) }}" style="display: inline;">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                 <button type="submit" class="btn btn-sm btn-secondary" title="Mark resolved"><i class="fas fa-check"></i></button>
