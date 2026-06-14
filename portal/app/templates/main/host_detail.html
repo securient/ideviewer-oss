@@ -300,6 +300,14 @@
                     • <i class="fas fa-bolt" style="color: #22c55e; font-size: 0.75rem;"></i> Last live update: <span class="local-time" data-utc="{{ host.last_realtime_event.isoformat() + 'Z' }}">{{ host.last_realtime_event.strftime('%Y-%m-%d %H:%M') }}</span>
                     {% endif %}
                 </p>
+                <p style="margin-top: 0.4rem;">
+                    <a href="{{ url_for('main.host_sbom', host_id=host.public_id) }}" class="btn btn-sm btn-secondary" title="CycloneDX SBOM">
+                        <i class="fas fa-file-code"></i> SBOM
+                    </a>
+                    <a href="{{ url_for('main.host_sbom', host_id=host.public_id, sign=1) }}" class="btn btn-sm btn-secondary" title="Signed SBOM attestation (ed25519)">
+                        <i class="fas fa-file-signature"></i> Signed SBOM
+                    </a>
+                </p>
                 <p style="color: var(--text-secondary); font-size: 0.8125rem; margin-top: 0.25rem;">
                     <i class="fas fa-key" style="font-size: 0.75rem;"></i>
                     Token:

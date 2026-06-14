@@ -602,6 +602,28 @@ def all_hook_bypasses():
                            all_hosts=sorted(all_host_names))
 
 
+@main_bp.route('/host/<host_id>/sbom')
+@login_required
+def host_sbom(host_id):
+    """Download a CycloneDX SBOM for the host (B11). ?sign=1 signs it (attestation)."""
+    host = Host.query.filter_by(public_id=host_id).first_or_404()
+    if host.customer_key.user_id != current_user.id:
+        flash('Access denied', 'error')
+        return redirect(url_for('main.dashboard'))
+
+    from app.sbom import build_cyclonedx, sign_attestation
+    sbom = build_cyclonedx(host)
+    payload = sign_attestation(sbom) if request.args.get('sign') == '1' else sbom
+    record_audit('sbom.export', target_type='host', target_id=host.public_id,
+                 detail=f'Exported SBOM ({len(sbom.get("components", []))} components)')
+    fname = f'sbom-{host.hostname}.cdx.json'
+    return current_app.response_class(
+        response=jsonify(payload).get_data(),
+        mimetype='application/json',
+        headers={'Content-Disposition': f'attachment; filename="{fname}"'},
+    )
+
+
 @main_bp.route('/host/<host_id>')
 @login_required
 def host_detail(host_id):
