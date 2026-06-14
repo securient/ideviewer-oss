@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"slices"
 	"sync"
 	"syscall"
 	"time"
@@ -34,6 +35,7 @@ type Daemon struct {
 	resultMu     sync.RWMutex // guards lastResult
 	lastResult   *scanner.ScanResult
 	hashes       *scanHashes
+	nonceCache   *api.NonceCache // rejects replayed signed-command nonces
 }
 
 // setResult stores the latest scan result under the result lock.
@@ -73,7 +75,21 @@ func New(cfg *config.Config, ideScanner *scanner.Scanner) (*Daemon, error) {
 		scanInterval: time.Duration(interval) * time.Minute,
 		shutdown:     make(chan struct{}),
 		hashes:       &scanHashes{},
+		nonceCache:   api.NewNonceCache(),
 	}, nil
+}
+
+// pinCommandKeyFromResponse persists the portal's command-signing public key
+// from an enroll/register response, if present and not already pinned.
+func (d *Daemon) pinCommandKeyFromResponse(resp map[string]any) {
+	if d.config == nil {
+		return
+	}
+	pub, _ := resp["command_public_key"].(string)
+	if pub == "" || slices.Contains(d.config.CommandPublicKeys, pub) {
+		return
+	}
+	d.config.CommandPublicKeys = append(d.config.CommandPublicKeys, pub)
 }
 
 // Start runs the daemon loop. If runOnce is true it performs a single scan
@@ -183,15 +199,15 @@ func (d *Daemon) runScan() {
 	log.Println("Starting scan...")
 
 	var (
-		wg       sync.WaitGroup
-		ideRes   *scanner.ScanResult
-		secRes   *secrets.SecretsResult
-		depRes   *dependencies.DependencyResult
-		aiRes    *aitools.AIToolResult
-		ideErr   error
-		secErr   error
-		depErr   error
-		aiErr    error
+		wg     sync.WaitGroup
+		ideRes *scanner.ScanResult
+		secRes *secrets.SecretsResult
+		depRes *dependencies.DependencyResult
+		aiRes  *aitools.AIToolResult
+		ideErr error
+		secErr error
+		depErr error
+		aiErr  error
 	)
 
 	wg.Add(4)
@@ -327,6 +343,8 @@ func (d *Daemon) withReauth(call func() error) error {
 			d.apiClient.SetHostToken(tok)
 			if d.config != nil {
 				d.config.HostToken = tok
+				// Refresh the pinned command-signing key on re-enroll too.
+				d.pinCommandKeyFromResponse(regResult)
 				if saveErr := config.Save(d.config); saveErr != nil {
 					log.Printf("warn: could not persist new host token: %v", saveErr)
 				}

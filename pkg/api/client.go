@@ -239,26 +239,28 @@ func (c *Client) SendHookBypass(data map[string]any) (map[string]any, error) {
 	return c.doRequest("POST", "/api/hook-bypass", data)
 }
 
-// GetPendingEnforcementActions fetches enforcement actions the portal wants
-// this host to apply (quarantine/restore).
-func (c *Client) GetPendingEnforcementActions() ([]map[string]any, error) {
-	result, err := c.doRequest("GET", "/api/enforcement-actions/pending", nil)
+// GetPendingEnforcementActions fetches the signed command envelope the portal
+// wants this host to apply (quarantine/restore). It returns the raw envelope;
+// the caller MUST verify the signature (api.VerifyEnvelope) before acting on
+// any action — verification is intentionally not done here so the client never
+// implies trust in an unverified command.
+func (c *Client) GetPendingEnforcementActions() (map[string]any, error) {
+	return c.doRequest("GET", "/api/enforcement-actions/pending", nil)
+}
+
+// GetSigningKey fetches the portal's current command-signing public key so the
+// daemon can pin (or refresh) it. Returns (keyID, publicKeyB64).
+func (c *Client) GetSigningKey() (string, string, error) {
+	result, err := c.doRequest("GET", "/api/signing-key", nil)
 	if err != nil {
-		return nil, err
+		return "", "", err
 	}
-
-	actions, ok := result["actions"].([]any)
-	if !ok {
-		return nil, nil
+	keyID, _ := result["key_id"].(string)
+	pub, _ := result["public_key_b64"].(string)
+	if pub == "" {
+		return "", "", fmt.Errorf("portal returned no signing key")
 	}
-
-	var out []map[string]any
-	for _, a := range actions {
-		if m, ok := a.(map[string]any); ok {
-			out = append(out, m)
-		}
-	}
-	return out, nil
+	return keyID, pub, nil
 }
 
 // ReportEnforcementResult reports the outcome of an enforcement action back

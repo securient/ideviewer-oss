@@ -88,6 +88,21 @@ func runRegister(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Capture the portal's command-signing public key so the daemon can verify
+	// signed enforcement commands. Pinned at enrollment; refreshable later.
+	var commandKeys []string
+	if pub, ok := regResult["command_public_key"].(string); ok && pub != "" {
+		commandKeys = []string{pub}
+		colorDim.Println("  Command signing key pinned")
+	}
+
+	// Enforcement mode: --enable-enforcement opts into "verified" (act on
+	// signed commands); otherwise leave unset so the daemon's default applies.
+	enforcementMode := ""
+	if enableEnforcement {
+		enforcementMode = "verified"
+	}
+
 	// Step 3: Save configuration.
 	fmt.Println()
 	colorCyan.Println("Step 3: Saving configuration...")
@@ -97,6 +112,8 @@ func runRegister(cmd *cobra.Command, args []string) error {
 		HostToken:           hostToken,
 		ScanIntervalMinutes: interval,
 		EnforcementEnabled:  enableEnforcement,
+		EnforcementMode:     enforcementMode,
+		CommandPublicKeys:   commandKeys,
 	}
 	// Save to user-level config dir (daemon runs as user via LaunchAgent)
 	if err := config.Save(cfg); err != nil {
@@ -252,4 +269,3 @@ func startDaemonService() bool {
 	colorGreen.Printf("  Daemon started as background process (PID %d)\n", proc.Process.Pid)
 	return true
 }
-

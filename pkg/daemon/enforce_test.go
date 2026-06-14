@@ -1,11 +1,20 @@
 package daemon
 
 import (
+	"crypto/ed25519"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/securient/ideviewer-oss/internal/config"
+	"github.com/securient/ideviewer-oss/pkg/api"
 	"github.com/securient/ideviewer-oss/pkg/scanner"
 )
 
@@ -118,9 +127,125 @@ func TestQuarantineUnknownExtension(t *testing.T) {
 	}
 }
 
-func TestKillSwitchDisabledIsNoOp(t *testing.T) {
-	// EnforcementEnabled=false and a nil API client: must return without
-	// panicking and without touching the network.
-	d := &Daemon{config: &config.Config{EnforcementEnabled: false}}
+func TestEnforcementModeOffIsNoOp(t *testing.T) {
+	// Mode "off" must skip polling entirely. We point the client at a server
+	// that fails the test if it is ever called.
+	called := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	d := &Daemon{
+		config:     &config.Config{EnforcementMode: "off"},
+		apiClient:  api.NewClientWithToken(srv.URL, "cust", "tok"),
+		nonceCache: api.NewNonceCache(),
+	}
 	d.checkEnforcementActions()
+	if called {
+		t.Error("mode=off must not poll the portal")
+	}
+}
+
+func TestCheckEnforcementActions_NilClientIsSafe(t *testing.T) {
+	d := &Daemon{config: &config.Config{EnforcementMode: "verified"}}
+	d.checkEnforcementActions() // must not panic with a nil apiClient
+}
+
+// signEnvelope builds a signed command envelope the way the portal does.
+func signEnvelope(t *testing.T, priv ed25519.PrivateKey, pub ed25519.PublicKey, actions []map[string]any) map[string]any {
+	t.Helper()
+	body, _ := json.Marshal(map[string]any{"actions": actions})
+	bodyB64 := base64.StdEncoding.EncodeToString(body)
+	issued := time.Now().Unix()
+	nonce := "nonce-" + t.Name()
+	sig := ed25519.Sign(priv, fmt.Appendf(nil, "%d.%s.%s", issued, nonce, bodyB64))
+	return map[string]any{
+		"actions": actions,
+		"sig": map[string]any{
+			"key_id":        api.CommandKeyID(pub),
+			"alg":           "ed25519",
+			"issued_at":     issued,
+			"nonce":         nonce,
+			"body_b64":      bodyB64,
+			"signature_b64": base64.StdEncoding.EncodeToString(sig),
+		},
+	}
+}
+
+// enforceServer stands in for the portal: it serves a (caller-built) envelope
+// at the pending endpoint and records the reported status.
+func enforceServer(t *testing.T, envelope map[string]any, reported *string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/enforcement-actions/pending"):
+			_ = json.NewEncoder(w).Encode(envelope)
+		case strings.Contains(r.URL.Path, "/enforcement-actions/") && strings.HasSuffix(r.URL.Path, "/report"):
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if s, ok := body["status"].(string); ok {
+				*reported = s
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"success": true})
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{})
+		}
+	}))
+}
+
+func TestCheckEnforcementActions_VerifiedExecutes(t *testing.T) {
+	d, _, extPath := newEnforceFixture(t, false)
+	pub, priv, _ := ed25519.GenerateKey(nil)
+
+	envelope := signEnvelope(t, priv, pub, []map[string]any{
+		{"id": 7, "action": "quarantine", "extension_id": "evil.ext", "ide_type": "vscode"},
+	})
+	var reported string
+	srv := enforceServer(t, envelope, &reported)
+	defer srv.Close()
+
+	d.config.EnforcementMode = "verified"
+	d.config.CommandPublicKeys = []string{base64.StdEncoding.EncodeToString(pub)}
+	d.apiClient = api.NewClientWithToken(srv.URL, "cust", "tok")
+	d.nonceCache = api.NewNonceCache()
+
+	d.checkEnforcementActions()
+
+	if _, err := os.Stat(extPath); !os.IsNotExist(err) {
+		t.Errorf("verified command should have quarantined the extension")
+	}
+	if reported != "applied" {
+		t.Errorf("reported status = %q, want applied", reported)
+	}
+}
+
+func TestCheckEnforcementActions_ForgedRejected(t *testing.T) {
+	d, _, extPath := newEnforceFixture(t, false)
+	pub, priv, _ := ed25519.GenerateKey(nil)
+
+	envelope := signEnvelope(t, priv, pub, []map[string]any{
+		{"id": 7, "action": "quarantine", "extension_id": "evil.ext", "ide_type": "vscode"},
+	})
+	var reported string
+	srv := enforceServer(t, envelope, &reported)
+	defer srv.Close()
+
+	d.config.EnforcementMode = "verified"
+	// Pin a DIFFERENT key than the one that signed the command.
+	otherPub, _, _ := ed25519.GenerateKey(nil)
+	d.config.CommandPublicKeys = []string{base64.StdEncoding.EncodeToString(otherPub)}
+	d.apiClient = api.NewClientWithToken(srv.URL, "cust", "tok")
+	d.nonceCache = api.NewNonceCache()
+
+	d.checkEnforcementActions()
+
+	if _, err := os.Stat(extPath); err != nil {
+		t.Errorf("forged/unverifiable command must NOT move the extension: %v", err)
+	}
+	if reported == "applied" {
+		t.Error("an unverified command must never be reported as applied")
+	}
 }

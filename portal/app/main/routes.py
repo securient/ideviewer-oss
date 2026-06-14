@@ -1308,6 +1308,8 @@ _ALERT_META = {
     'daemon_stopping':    {'label': 'Daemon stopping',     'icon': 'fa-circle-stop',          'category': 'integrity'},
     'uninstall_attempt':  {'label': 'Uninstall attempt',   'icon': 'fa-triangle-exclamation', 'category': 'integrity'},
     'host_deregistered':  {'label': 'Host deregistered',   'icon': 'fa-plug-circle-xmark',    'category': 'integrity'},
+    'host.silent':        {'label': 'Host went silent',    'icon': 'fa-link-slash',           'category': 'integrity'},
+    'command_unverified': {'label': 'Unverified command',  'icon': 'fa-shield-halved',        'category': 'integrity'},
 }
 
 

@@ -12,7 +12,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/securient/ideviewer-oss/internal/config"
 	"github.com/securient/ideviewer-oss/internal/platform"
+	"github.com/securient/ideviewer-oss/pkg/api"
 	"github.com/securient/ideviewer-oss/pkg/scanner"
 )
 
@@ -25,32 +27,115 @@ type quarantineManifest struct {
 	QuarantinedAt string `json:"quarantined_at"`
 }
 
-// checkEnforcementActions polls the portal for pending enforcement actions and
-// applies each. The local kill-switch (EnforcementEnabled) is the first gate:
-// when disabled the daemon never even polls, so a compromised/misconfigured
-// portal cannot move files on this host.
-func (d *Daemon) checkEnforcementActions() {
-	if d.config == nil || !d.config.EnforcementEnabled {
-		return
-	}
-	if d.apiClient == nil {
-		return
-	}
+// Enforcement modes (see config.Config.EnforcementMode).
+const (
+	enforcementOff      = "off"
+	enforcementVerified = "verified"
+)
 
-	var pending []map[string]any
+// resolveEnforcementMode maps config (including the legacy EnforcementEnabled
+// boolean) to an effective mode. Default is "verified": the daemon executes
+// only commands whose signature verifies against a pinned key. There is no
+// "execute unsigned" mode — a missing/forged signature always blocks execution,
+// which is strictly safer than the old boolean kill-switch.
+func (d *Daemon) resolveEnforcementMode() string {
+	switch strings.ToLower(strings.TrimSpace(d.config.EnforcementMode)) {
+	case enforcementOff:
+		return enforcementOff
+	case enforcementVerified:
+		return enforcementVerified
+	}
+	// Mode unset (older config): default to verified. An unset legacy
+	// EnforcementEnabled=false host stays effectively off in practice until it
+	// has both a pinned key and validly-signed commands to act on.
+	return enforcementVerified
+}
+
+// checkEnforcementActions polls the portal for the signed command envelope and
+// executes the actions inside it — but ONLY after verifying the envelope's
+// ed25519 signature against a pinned key. Mode "off" is an explicit opt-out
+// that skips polling entirely.
+func (d *Daemon) checkEnforcementActions() {
+	if d.config == nil || d.apiClient == nil {
+		return
+	}
+	if d.resolveEnforcementMode() == enforcementOff {
+		return
+	}
+	// Self-heal: a daemon enrolled before signing existed has no pinned key.
+	// Fetch it once so enforcement can become active without a re-register.
+	d.ensureCommandKey()
+
+	var envelope map[string]any
 	err := d.withReauth(func() error {
 		var callErr error
-		pending, callErr = d.apiClient.GetPendingEnforcementActions()
+		envelope, callErr = d.apiClient.GetPendingEnforcementActions()
 		return callErr
 	})
 	if err != nil {
 		log.Printf("Error checking enforcement actions: %v", err)
 		return
 	}
+	if envelope == nil {
+		return
+	}
 
-	for _, act := range pending {
+	// Verify before acting on anything. If verification fails while the portal
+	// did hand out actions, surface it as a tamper signal (could be a spoofed
+	// portal, a key mismatch, or an unconfigured host).
+	body, verr := api.VerifyEnvelope(envelope, d.config.CommandPublicKeys, time.Now(), d.nonceCache)
+	if verr != nil {
+		if envelopeHasActions(envelope) {
+			log.Printf("Refusing unverified enforcement command: %v", verr)
+			_ = d.withReauth(func() error {
+				_, e := d.apiClient.SendTamperAlert("command_unverified",
+					fmt.Sprintf("enforcement command failed signature verification: %v", verr))
+				return e
+			})
+		}
+		return
+	}
+
+	actions, perr := api.ParseEnforcementActions(body)
+	if perr != nil {
+		log.Printf("Error parsing enforcement command body: %v", perr)
+		return
+	}
+	for _, act := range actions {
 		d.executeEnforcementAction(act)
 	}
+}
+
+// ensureCommandKey lazily pins the portal's command-signing key when the config
+// has none (e.g. a daemon that enrolled before signing existed). Best-effort:
+// if the fetch fails, verification simply keeps failing and no action runs.
+func (d *Daemon) ensureCommandKey() {
+	if d.config == nil || len(d.config.CommandPublicKeys) > 0 || d.apiClient == nil {
+		return
+	}
+	var pub string
+	err := d.withReauth(func() error {
+		var e error
+		_, pub, e = d.apiClient.GetSigningKey()
+		return e
+	})
+	if err != nil || pub == "" {
+		return
+	}
+	d.config.CommandPublicKeys = []string{pub}
+	if saveErr := config.Save(d.config); saveErr != nil {
+		log.Printf("warn: could not persist command signing key: %v", saveErr)
+	}
+}
+
+// envelopeHasActions reports whether the (unverified) envelope claims any
+// actions, used only to decide whether a verification failure is worth alarming
+// on (vs. a routine empty poll from a host with no pinned key yet).
+func envelopeHasActions(env map[string]any) bool {
+	if acts, ok := env["actions"].([]any); ok {
+		return len(acts) > 0
+	}
+	return false
 }
 
 func (d *Daemon) executeEnforcementAction(act map[string]any) {

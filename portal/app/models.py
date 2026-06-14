@@ -134,6 +134,12 @@ class Host(db.Model):
     is_active = db.Column(db.Boolean, default=True)
     last_realtime_event = db.Column(db.DateTime)  # Last real-time filesystem change event
 
+    # Server-side integrity monitoring (Phase 1 B2). A host whose daemon stops
+    # heartbeating is "silent" — the server raises one alert on the ok->silent
+    # transition (deduped via this state) and resets it when a heartbeat returns.
+    heartbeat_alarm_state = db.Column(db.String(16), default='ok')  # 'ok' | 'silent'
+    silent_since = db.Column(db.DateTime, nullable=True)
+
     # Per-host enrollment token (T1.3). Only the sha256 hex digest is stored;
     # plaintext is returned exactly once at issue time.
     token_hash = db.Column(db.String(64), nullable=True, index=True)
