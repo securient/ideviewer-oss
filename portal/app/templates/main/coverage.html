@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+
+{% block title %}Fleet Coverage - IDE Viewer{% endblock %}
+
+{% block content %}
+<div class="fade-in">
+    <div style="margin-bottom: 1.5rem;">
+        <h1 style="font-size: 1.75rem; font-weight: 700; margin-bottom: 0.25rem;">Fleet Coverage</h1>
+        <p style="color: var(--text-secondary);">Which machines that should run the daemon actually are. Roster is manual for now (MDM/SCIM auto-population is a follow-up).</p>
+    </div>
+
+    {% for s in stats %}
+    <div class="card" style="margin-bottom: 1.5rem;">
+        <div class="card-header">
+            <h2 class="card-title"><i class="fas fa-network-wired" style="color: var(--accent-primary);"></i> {{ s.key_name }}</h2>
+            <span class="badge {{ 'badge-low' if (s.coverage_pct or 0) >= 90 else 'badge-high' }}">
+                {% if s.coverage_pct is not none %}{{ s.coverage_pct }}% covered{% else %}no roster{% endif %}
+            </span>
+        </div>
+        <p style="color: var(--text-secondary); font-size: 0.875rem;">
+            Roster: {{ s.expected_count }} · Reporting: {{ s.reporting_count }}
+            · Covered: {{ s.covered|length }} · Missing: {{ s.missing|length }} · Unmanaged: {{ s.unmanaged|length }}
+        </p>
+        {% if s.missing %}
+        <p style="margin-top: 0.5rem;"><strong style="color: var(--danger);">Missing (on roster, not reporting):</strong>
+            {% for h in s.missing %}<span class="badge badge-high" style="margin:0.1rem;">{{ h }}</span>{% endfor %}
+        </p>
+        {% endif %}
+        {% if s.unmanaged %}
+        <p style="margin-top: 0.5rem;"><strong style="color: var(--warning, #d97706);">Unmanaged (reporting, not on roster):</strong>
+            {% for h in s.unmanaged %}<span class="badge badge-medium" style="margin:0.1rem;">{{ h }}</span>{% endfor %}
+        </p>
+        {% endif %}
+    </div>
+    {% else %}
+    <div class="card"><div class="empty-state"><i class="fas fa-network-wired"></i><h3>No customer keys</h3></div></div>
+    {% endfor %}
+
+    {% if keys %}
+    <div class="card" style="max-width: 560px;">
+        <div class="card-header"><h2 class="card-title"><i class="fas fa-plus-circle" style="color: var(--success);"></i> Add to roster</h2></div>
+        <form method="POST" action="{{ url_for('main.coverage_add') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="form-group">
+                <label class="form-label">Customer key</label>
+                <select name="customer_key_id" class="form-input">
+                    {% for kid, kname in keys %}<option value="{{ kid }}">{{ kname }}</option>{% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Hostnames (one per line or comma-separated)</label>
+                <textarea name="hostnames" class="form-input" rows="4" placeholder="laptop-01&#10;laptop-02"></textarea>
+            </div>
+            <button type="submit" class="btn btn-primary">Add hosts</button>
+        </form>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

@@ -1242,3 +1242,31 @@ class RemediationPlaybook(db.Model):
 
     def __repr__(self):
         return f'<RemediationPlaybook {self.name} {self.trigger_event}->{self.action} [{self.mode}]>'
+
+
+class ExpectedHost(db.Model):
+    """Authoritative roster entry for fleet coverage reporting (Phase 1 B12).
+
+    "Coverage" = which machines that SHOULD run the daemon actually are. Without
+    the org/SCIM model (deferred with B9), the roster is populated manually (or
+    by bulk paste); MDM/IdP auto-population is the follow-up. A reporting Host
+    whose hostname isn't on the roster is "unmanaged"; a roster entry with no
+    reporting host is a coverage gap.
+    """
+
+    __tablename__ = 'expected_hosts'
+
+    id = db.Column(db.Integer, primary_key=True)
+    customer_key_id = db.Column(db.Integer, db.ForeignKey('customer_keys.id'), nullable=False)
+    hostname = db.Column(db.String(255), nullable=False)
+    source = db.Column(db.String(20), default='manual')  # manual | mdm | scim
+    added_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    customer_key = db.relationship('CustomerKey', backref=db.backref('expected_hosts', lazy='dynamic'))
+
+    __table_args__ = (
+        db.UniqueConstraint('customer_key_id', 'hostname', name='uq_expected_key_host'),
+    )
+
+    def __repr__(self):
+        return f'<ExpectedHost {self.hostname}>'

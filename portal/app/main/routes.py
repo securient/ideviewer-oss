@@ -14,7 +14,7 @@ from app.models import (
     WebhookSubscription, WebhookDelivery,
     ExtensionPolicy, PolicyViolation,
     ExtensionMetadata, EnforcementAction,
-    User, AuditLog, RemediationPlaybook,
+    User, AuditLog, RemediationPlaybook, ExpectedHost,
 )
 from app.auth.forms import (
     CustomerKeyForm, WebhookSubscriptionForm, ExtensionPolicyForm,
@@ -1285,6 +1285,61 @@ def audit_log():
     """Admin-only view of the append-only audit trail."""
     entries = AuditLog.query.order_by(AuditLog.created_at.desc()).limit(300).all()
     return render_template('main/audit.html', entries=entries)
+
+
+@main_bp.route('/coverage')
+@login_required
+def coverage():
+    """Fleet coverage: roster vs reporting hosts (B12)."""
+    from app.coverage import coverage_for_user
+    stats = coverage_for_user(current_user)
+    keys = [(k.id, k.name) for k in current_user.customer_keys.filter_by(is_active=True)]
+    return render_template('main/coverage.html', stats=stats, keys=keys)
+
+
+@main_bp.route('/coverage/add', methods=['POST'])
+@login_required
+@require_role(User.ROLE_ADMIN)
+def coverage_add():
+    """Add one or more expected hostnames (newline/comma separated) to a roster."""
+    try:
+        key_id = int(request.form.get('customer_key_id', '0'))
+    except (TypeError, ValueError):
+        key_id = 0
+    key = CustomerKey.query.get_or_404(key_id)
+    if key.user_id != current_user.id:
+        flash('Access denied', 'error')
+        return redirect(url_for('main.coverage'))
+
+    raw = request.form.get('hostnames', '')
+    names = {n.strip() for n in raw.replace(',', '\n').splitlines() if n.strip()}
+    added = 0
+    for name in names:
+        if ExpectedHost.query.filter_by(customer_key_id=key.id, hostname=name).first():
+            continue
+        db.session.add(ExpectedHost(customer_key_id=key.id, hostname=name, source='manual'))
+        added += 1
+    if added:
+        db.session.flush()
+        record_audit('coverage.roster_add', target_type='customer_key', target_id=key.id,
+                     detail=f'Added {added} expected host(s) to roster', commit=False)
+        db.session.commit()
+    flash(f'Added {added} host(s) to the roster', 'success')
+    return redirect(url_for('main.coverage'))
+
+
+@main_bp.route('/coverage/<int:expected_id>/delete', methods=['POST'])
+@login_required
+@require_role(User.ROLE_ADMIN)
+def coverage_delete(expected_id):
+    e = ExpectedHost.query.get_or_404(expected_id)
+    if e.customer_key.user_id != current_user.id:
+        flash('Access denied', 'error')
+        return redirect(url_for('main.coverage'))
+    db.session.delete(e)
+    db.session.commit()
+    flash('Roster entry removed', 'success')
+    return redirect(url_for('main.coverage'))
 
 
 @main_bp.route('/playbooks')
