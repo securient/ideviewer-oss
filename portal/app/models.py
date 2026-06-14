@@ -1193,3 +1193,52 @@ class AuditLog(db.Model):
 
     def __repr__(self):
         return f'<AuditLog {self.action} by {self.actor}>'
+
+
+class RemediationPlaybook(db.Model):
+    """Automated detect->respond playbook (Phase 1 B10 SOAR).
+
+    When a trigger event fires for a tenant, matching playbooks run their action
+    (auto-quarantine via the existing enforcement channel, or notify-only).
+    Safety by default: playbooks are created in ``dry_run`` mode (they log/emit
+    what they WOULD do but take no action) and must be explicitly switched to
+    ``active``; auto-quarantine is rate-limited per hour to bound blast radius.
+    Every decision is written to the audit log.
+    """
+
+    __tablename__ = 'remediation_playbooks'
+
+    TRIGGER_THREAT_MATCHED = 'extension.threat_matched'
+    TRIGGER_POLICY_VIOLATION = 'policy.violation'
+    VALID_TRIGGERS = (TRIGGER_THREAT_MATCHED, TRIGGER_POLICY_VIOLATION)
+
+    ACTION_AUTO_QUARANTINE = 'auto_quarantine'
+    ACTION_NOTIFY_ONLY = 'notify_only'
+    VALID_ACTIONS = (ACTION_AUTO_QUARANTINE, ACTION_NOTIFY_ONLY)
+
+    MODE_DRY_RUN = 'dry_run'
+    MODE_ACTIVE = 'active'
+    VALID_MODES = (MODE_DRY_RUN, MODE_ACTIVE)
+
+    id = db.Column(db.Integer, primary_key=True)
+    public_id = db.Column(db.String(36), unique=True, nullable=False, index=True)
+    customer_key_id = db.Column(db.Integer, db.ForeignKey('customer_keys.id'), nullable=False)
+    name = db.Column(db.String(100), nullable=False)
+    trigger_event = db.Column(db.String(80), nullable=False)
+    action = db.Column(db.String(40), nullable=False, default=ACTION_NOTIFY_ONLY)
+    mode = db.Column(db.String(20), nullable=False, default=MODE_DRY_RUN)
+    min_severity = db.Column(db.String(20), default='high')  # low|medium|high|critical
+    max_actions_per_hour = db.Column(db.Integer, default=5)
+    is_active = db.Column(db.Boolean, default=True)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    customer_key = db.relationship('CustomerKey', backref=db.backref('playbooks', lazy='dynamic'))
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        if not self.public_id:
+            self.public_id = str(uuid.uuid4())
+
+    def __repr__(self):
+        return f'<RemediationPlaybook {self.name} {self.trigger_event}->{self.action} [{self.mode}]>'

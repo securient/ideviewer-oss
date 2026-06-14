@@ -14,9 +14,12 @@ from app.models import (
     WebhookSubscription, WebhookDelivery,
     ExtensionPolicy, PolicyViolation,
     ExtensionMetadata, EnforcementAction,
-    User, AuditLog,
+    User, AuditLog, RemediationPlaybook,
 )
-from app.auth.forms import CustomerKeyForm, WebhookSubscriptionForm, ExtensionPolicyForm
+from app.auth.forms import (
+    CustomerKeyForm, WebhookSubscriptionForm, ExtensionPolicyForm,
+    RemediationPlaybookForm,
+)
 from app.marketplace import fetch_extension_details
 from app.events import emit_event
 from app.audit import record_audit, require_role
@@ -1260,6 +1263,96 @@ def audit_log():
     """Admin-only view of the append-only audit trail."""
     entries = AuditLog.query.order_by(AuditLog.created_at.desc()).limit(300).all()
     return render_template('main/audit.html', entries=entries)
+
+
+@main_bp.route('/playbooks')
+@login_required
+def playbooks():
+    """List SOAR remediation playbooks for the user's keys."""
+    key_ids = [k.id for k in current_user.customer_keys]
+    items = (RemediationPlaybook.query
+             .filter(RemediationPlaybook.customer_key_id.in_(key_ids))
+             .order_by(RemediationPlaybook.created_at.desc()).all())
+    form = RemediationPlaybookForm()
+    form.customer_key_id.choices = [
+        (k.id, k.name) for k in current_user.customer_keys.filter_by(is_active=True)
+    ]
+    return render_template('main/playbooks.html', playbooks=items, form=form)
+
+
+@main_bp.route('/playbooks/create', methods=['POST'])
+@login_required
+@require_role(User.ROLE_ADMIN)
+def create_playbook():
+    form = RemediationPlaybookForm()
+    form.customer_key_id.choices = [
+        (k.id, k.name) for k in current_user.customer_keys.filter_by(is_active=True)
+    ]
+    if not form.validate_on_submit():
+        for field, errors in form.errors.items():
+            for err in errors:
+                flash(f'{field}: {err}', 'error')
+        return redirect(url_for('main.playbooks'))
+    key = CustomerKey.query.get_or_404(form.customer_key_id.data)
+    if key.user_id != current_user.id:
+        flash('Access denied', 'error')
+        return redirect(url_for('main.playbooks'))
+    pb = RemediationPlaybook(
+        customer_key_id=key.id, name=form.name.data,
+        trigger_event=form.trigger_event.data, action=form.action.data,
+        mode=form.mode.data, min_severity=form.min_severity.data,
+        max_actions_per_hour=form.max_actions_per_hour.data,
+        created_by_user_id=current_user.id,
+    )
+    db.session.add(pb)
+    db.session.flush()
+    record_audit('playbook.create', target_type='playbook', target_id=pb.public_id,
+                 detail=f'Created playbook "{pb.name}" ({pb.action}/{pb.mode})', commit=False)
+    db.session.commit()
+    flash(f'Playbook "{pb.name}" created', 'success')
+    return redirect(url_for('main.playbooks'))
+
+
+def _user_playbook_or_404(public_id):
+    pb = RemediationPlaybook.query.filter_by(public_id=public_id).first_or_404()
+    if pb.customer_key.user_id != current_user.id:
+        return None
+    return pb
+
+
+@main_bp.route('/playbooks/<public_id>/toggle-mode', methods=['POST'])
+@login_required
+@require_role(User.ROLE_ADMIN)
+def toggle_playbook_mode(public_id):
+    """Flip a playbook between dry_run and active (the human-approval gate)."""
+    pb = _user_playbook_or_404(public_id)
+    if pb is None:
+        flash('Access denied', 'error')
+        return redirect(url_for('main.playbooks'))
+    pb.mode = (RemediationPlaybook.MODE_ACTIVE if pb.mode == RemediationPlaybook.MODE_DRY_RUN
+               else RemediationPlaybook.MODE_DRY_RUN)
+    db.session.commit()
+    record_audit('playbook.mode_change', target_type='playbook', target_id=pb.public_id,
+                 detail=f'Playbook "{pb.name}" mode set to {pb.mode}')
+    flash(f'Playbook "{pb.name}" is now {pb.mode}', 'success')
+    return redirect(url_for('main.playbooks'))
+
+
+@main_bp.route('/playbooks/<public_id>/delete', methods=['POST'])
+@login_required
+@require_role(User.ROLE_ADMIN)
+def delete_playbook(public_id):
+    pb = _user_playbook_or_404(public_id)
+    if pb is None:
+        flash('Access denied', 'error')
+        return redirect(url_for('main.playbooks'))
+    name = pb.name
+    record_audit('playbook.delete', target_type='playbook', target_id=pb.public_id,
+                 detail=f'Deleted playbook "{name}"', commit=False)
+    db.session.delete(pb)
+    db.session.commit()
+    flash(f'Playbook "{name}" deleted', 'success')
+    return redirect(url_for('main.playbooks'))
 
 
 @main_bp.route('/enforcement/<int:action_id>/restore', methods=['POST'])

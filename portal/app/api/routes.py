@@ -747,10 +747,14 @@ def submit_report():
                    data={'host': {'id': host.public_id, 'hostname': host.hostname}, 'secret': s})
 
     # B5: surface threat-intel matches (known-bad / typosquat extensions).
+    # B10: run any SOAR playbooks bound to the threat-matched trigger.
+    from app.soar import run_playbooks_for_event
     for tm in threat_matched_extensions:
         emit_event('extension.threat_matched', customer_key_id=key.id,
                    data={'host': {'id': host.public_id, 'hostname': host.hostname},
                          'extension': tm})
+        run_playbooks_for_event('extension.threat_matched', key.id, host, tm,
+                                tm.get('severity', 'high'))
 
     # B8: recompute and persist the composite host risk score from current state.
     try:
