@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+
+{% block title %}Audit Log - IDE Viewer{% endblock %}
+
+{% block content %}
+<div class="fade-in">
+    <div style="margin-bottom: 1.5rem;">
+        <h1 style="font-size: 1.75rem; font-weight: 700; margin-bottom: 0.25rem;">Audit Log</h1>
+        <p style="color: var(--text-secondary);">Append-only record of security-relevant actions (most recent first).</p>
+    </div>
+
+    <div class="card">
+        {% if entries %}
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>When</th>
+                        <th>Actor</th>
+                        <th>Action</th>
+                        <th>Target</th>
+                        <th>Detail</th>
+                        <th>IP</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for e in entries %}
+                    <tr>
+                        <td style="white-space: nowrap;">
+                            <span class="local-time" data-utc="{{ e.created_at.isoformat() + 'Z' if e.created_at else '' }}">
+                                {{ e.created_at.strftime('%Y-%m-%d %H:%M') if e.created_at else '' }}
+                            </span>
+                        </td>
+                        <td>{{ e.actor or 'system' }}</td>
+                        <td><code class="mono" style="font-size: 0.75rem;">{{ e.action }}</code></td>
+                        <td style="font-size: 0.8125rem; color: var(--text-secondary);">
+                            {{ e.target_type or '' }}{% if e.target_id %} <code>{{ e.target_id }}</code>{% endif %}
+                        </td>
+                        <td style="font-size: 0.8125rem;">{{ e.detail or '' }}</td>
+                        <td style="font-size: 0.75rem; color: var(--text-muted);">{{ e.ip_address or '' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <i class="fas fa-clipboard-list"></i>
+            <h3 style="margin-bottom: 0.5rem;">No audit entries yet</h3>
+            <p>Security-relevant actions (policy/webhook/key changes, enforcement) will appear here.</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

@@ -24,14 +24,35 @@ class User(UserMixin, db.Model):
     
     must_change_password = db.Column(db.Boolean, default=False)  # Force password change on first login
 
+    # Role-based access control (Phase 1 B9). admin = full control, analyst =
+    # operate (resolve/ack/enforce) but not destructive admin, viewer =
+    # read-only. Existing/first accounts default to admin.
+    ROLE_ADMIN = 'admin'
+    ROLE_ANALYST = 'analyst'
+    ROLE_VIEWER = 'viewer'
+    VALID_ROLES = (ROLE_ADMIN, ROLE_ANALYST, ROLE_VIEWER)
+    role = db.Column(db.String(20), default='admin', nullable=False)
+
     # OAuth fields
     oauth_provider = db.Column(db.String(50))  # 'google', 'github', etc.
     oauth_id = db.Column(db.String(255))  # Provider's user ID
     avatar_url = db.Column(db.String(500))  # Profile picture URL
-    
+
     # Relationships
     customer_keys = db.relationship('CustomerKey', backref='owner', lazy='dynamic')
-    
+
+    def has_role(self, *roles) -> bool:
+        return (self.role or 'admin') in roles
+
+    @property
+    def can_operate(self) -> bool:
+        """Analyst-or-above: resolve/ack/enforce, but not destructive admin."""
+        return (self.role or 'admin') in (self.ROLE_ADMIN, self.ROLE_ANALYST)
+
+    @property
+    def is_admin(self) -> bool:
+        return (self.role or 'admin') == self.ROLE_ADMIN
+
     def set_password(self, password):
         """Hash and set password."""
         self.password_hash = generate_password_hash(password)
@@ -1129,3 +1150,46 @@ class ExtensionPrevalence(db.Model):
 
     def __repr__(self):
         return f'<ExtensionPrevalence {self.extension_id} count={self.host_count}>'
+
+
+class AuditLog(db.Model):
+    """Append-only audit trail of security-relevant actions (Phase 1 B9).
+
+    Every mutating, attributable action (policy/webhook/key changes,
+    enforcement, token revocation, alert resolution) writes one row. Rows are
+    never updated or deleted in normal operation — this is the record of "who
+    did what" that automated remediation (B10) and any compliance story depend
+    on. The actor's username/email is snapshotted so the entry survives user
+    deletion.
+    """
+
+    __tablename__ = 'audit_logs'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    actor = db.Column(db.String(200))          # snapshot of username/email (or 'system')
+    action = db.Column(db.String(80), nullable=False)  # e.g. 'policy.create'
+    target_type = db.Column(db.String(50))     # e.g. 'policy', 'host', 'webhook'
+    target_id = db.Column(db.String(100))
+    detail = db.Column(db.Text)
+    ip_address = db.Column(db.String(45))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        db.Index('idx_audit_action', 'action'),
+    )
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'actor': self.actor,
+            'action': self.action,
+            'target_type': self.target_type,
+            'target_id': self.target_id,
+            'detail': self.detail,
+            'ip_address': self.ip_address,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+    def __repr__(self):
+        return f'<AuditLog {self.action} by {self.actor}>'

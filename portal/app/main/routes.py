@@ -14,10 +14,12 @@ from app.models import (
     WebhookSubscription, WebhookDelivery,
     ExtensionPolicy, PolicyViolation,
     ExtensionMetadata, EnforcementAction,
+    User, AuditLog,
 )
 from app.auth.forms import CustomerKeyForm, WebhookSubscriptionForm, ExtensionPolicyForm
 from app.marketplace import fetch_extension_details
 from app.events import emit_event
+from app.audit import record_audit, require_role
 from app.policy.runner import emit_enforcement_created
 
 main_bp = Blueprint('main', __name__)
@@ -804,14 +806,17 @@ def toggle_key(key_id):
 
 @main_bp.route('/keys/<int:key_id>/delete', methods=['POST'])
 @login_required
+@require_role(User.ROLE_ADMIN)
 def delete_key(key_id):
     """Delete a customer key."""
-    
+
     key = CustomerKey.query.get_or_404(key_id)
-    
+
     if key.user_id != current_user.id:
         flash('Access denied', 'error')
         return redirect(url_for('main.keys'))
+    record_audit('key.delete', target_type='customer_key', target_id=key.id,
+                 detail=f'Deleted key "{key.name}" and all associated data', commit=False)
     
     # Delete associated data, children first.
     for host in key.hosts:
@@ -1073,6 +1078,9 @@ def create_policy():
         created_by_user_id=current_user.id,
     )
     db.session.add(policy)
+    db.session.flush()
+    record_audit('policy.create', target_type='policy', target_id=policy.public_id,
+                 detail=f'Created policy "{policy.name}" (action={policy.action})', commit=False)
     db.session.commit()
     flash(f'Policy "{policy.name}" created', 'success')
     return redirect(url_for('main.policies'))
@@ -1092,11 +1100,14 @@ def toggle_policy(public_id):
 
 @main_bp.route('/policies/<public_id>/delete', methods=['POST'])
 @login_required
+@require_role(User.ROLE_ADMIN)
 def delete_policy(public_id):
     policy = _user_policy_or_404(public_id)
     if policy is None:
         return redirect(url_for('main.policies'))
     name = policy.name
+    record_audit('policy.delete', target_type='policy', target_id=policy.public_id,
+                 detail=f'Deleted policy "{name}"', commit=False)
     # Unlink enforcement actions from this policy's violations (their
     # violation_id FK would block the violation delete), then delete the
     # violations themselves.
@@ -1193,6 +1204,7 @@ def _open_quarantine_action(host_id, extension_id, extension_version):
 
 @main_bp.route('/violations/<int:violation_id>/quarantine', methods=['POST'])
 @login_required
+@require_role(User.ROLE_ADMIN, User.ROLE_ANALYST)
 def quarantine_violation(violation_id):
     """Manually request the daemon quarantine the violating extension."""
     v = PolicyViolation.query.get_or_404(violation_id)
@@ -1218,6 +1230,8 @@ def quarantine_violation(violation_id):
     )
     db.session.add(action)
     db.session.commit()
+    record_audit('enforcement.quarantine', target_type='host', target_id=host.public_id,
+                 detail=f'Manual quarantine requested for {v.extension_id} on {host.hostname}')
     emit_enforcement_created(action, host, host.customer_key.id)
     flash('Quarantine requested — the daemon will apply it on its next check-in.', 'success')
     return redirect(url_for('main.violations'))
@@ -1239,8 +1253,18 @@ def enforcement():
     return render_template('main/enforcement.html', actions=actions)
 
 
+@main_bp.route('/audit')
+@login_required
+@require_role(User.ROLE_ADMIN)
+def audit_log():
+    """Admin-only view of the append-only audit trail."""
+    entries = AuditLog.query.order_by(AuditLog.created_at.desc()).limit(300).all()
+    return render_template('main/audit.html', entries=entries)
+
+
 @main_bp.route('/enforcement/<int:action_id>/restore', methods=['POST'])
 @login_required
+@require_role(User.ROLE_ADMIN, User.ROLE_ANALYST)
 def restore_enforcement(action_id):
     """Request the daemon move a quarantined extension back into place."""
     a = EnforcementAction.query.get_or_404(action_id)
@@ -1267,6 +1291,8 @@ def restore_enforcement(action_id):
     )
     db.session.add(restore)
     db.session.commit()
+    record_audit('enforcement.restore', target_type='host', target_id=host.public_id,
+                 detail=f'Restore requested for {a.extension_id} on {host.hostname}')
     emit_enforcement_created(restore, host, host.customer_key.id)
     flash('Restore requested — the daemon will move the extension back on its next check-in.', 'success')
     return redirect(url_for('main.enforcement'))
