@@ -1,0 +1,26 @@
+{
+  "_comment": "Versioned threat-intelligence feed for IDEViewer (Phase 1 B5). Operator-curated, intended to be fed from OSV / GitHub Advisory / marketplace-takedown signals over time. The portal loads this at runtime (portal/app/threat_intel.py) and evaluates every reported extension against it during scan-report ingestion. Bump `version` whenever the indicators change; the daemon push-distribution of this feed (signed via the Phase 1 B1 command channel) is a follow-up — today evaluation is server-side only.",
+  "version": "2026.06.1",
+  "updated_at": "2026-06-13",
+  "malicious_publishers": [
+    "evilcorp",
+    "totally-legit-tools"
+  ],
+  "banned_extension_ids": [
+    "ms-vscode.example-malware",
+    "darkpub.crypto-stealer"
+  ],
+  "typosquat_targets": [
+    "ms-python.python",
+    "ms-vscode.cpptools",
+    "dbaeumer.vscode-eslint",
+    "esbenp.prettier-vscode",
+    "github.copilot",
+    "github.vscode-pull-request-github",
+    "ms-azuretools.vscode-docker",
+    "redhat.vscode-yaml",
+    "ms-vscode-remote.remote-ssh",
+    "ritwickdey.liveserver"
+  ],
+  "malicious_file_hashes": []
+}

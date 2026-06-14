@@ -283,7 +283,16 @@
                 {% endif %}
             </div>
             <div style="flex: 1;">
-                <h1 style="font-size: 1.75rem; font-weight: 700; margin-bottom: 0.25rem;">{{ host.hostname }}</h1>
+                <h1 style="font-size: 1.75rem; font-weight: 700; margin-bottom: 0.25rem;">
+                    {{ host.hostname }}
+                    {% if host.risk_score is not none %}
+                    {% set _lvl = host.risk_level_composite or 'low' %}
+                    <span class="badge badge-{{ _lvl }}" title="Composite risk score (permissions + threat intel + CVEs + secrets + unpublished)"
+                          style="font-size: 0.75rem; vertical-align: middle; margin-left: 0.5rem;">
+                        Risk {{ host.risk_score }}/100 · {{ _lvl|upper }}
+                    </span>
+                    {% endif %}
+                </h1>
                 <p style="color: var(--text-secondary);">
                     {{ host.ip_address or 'Unknown IP' }} • {{ host.platform or 'Unknown Platform' }}
                     • Last seen: <span class="local-time" data-utc="{{ host.last_seen_at.isoformat() + 'Z' if host.last_seen_at else '' }}">{{ host.last_seen_at.strftime('%Y-%m-%d %H:%M') if host.last_seen_at else 'Never' }}</span>

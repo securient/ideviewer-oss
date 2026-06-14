@@ -235,6 +235,12 @@ def _slack_payload(event_type: str, payload: dict) -> dict:
                 f"• Type: *{sec.get('secret_type', '?')}*   •   Source: {sec.get('source', '?')}\n"
                 f"• Location: `{sec.get('file_path', '?')}`"
                 + (f" ({sec.get('variable_name')})" if sec.get('variable_name') else ""))
+    elif event_type == 'extension.threat_matched':
+        ind = ext.get('indicator_type', 'threat')
+        detail = ext.get('detail', '')
+        text = (f":no_entry_sign: *Threat-intel match* ({ind}) on *{hostname}*\n"
+                f"• {ext_label}" + (f"  _{ide}_" if ide else "") +
+                (f"\n• {detail}" if detail else ""))
     elif event_type == 'extension.unpublished_detected':
         text = f":package: *Extension removed from marketplace* — {ext_label} (host *{hostname}*)"
     elif event_type == 'tamper_alert.created':

@@ -140,6 +140,12 @@ class Host(db.Model):
     heartbeat_alarm_state = db.Column(db.String(16), default='ok')  # 'ok' | 'silent'
     silent_since = db.Column(db.DateTime, nullable=True)
 
+    # Composite risk score v2 (Phase 1 B8). Denormalized 0-100 score + level,
+    # recomputed from current state on each scan-report ingestion. See
+    # app/risk_score.py for the (explainable, additive) model.
+    risk_score = db.Column(db.Integer, nullable=True)
+    risk_level_composite = db.Column(db.String(16), nullable=True)
+
     # Per-host enrollment token (T1.3). Only the sha256 hex digest is stored;
     # plaintext is returned exactly once at issue time.
     token_hash = db.Column(db.String(64), nullable=True, index=True)

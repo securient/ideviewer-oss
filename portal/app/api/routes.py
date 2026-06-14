@@ -19,6 +19,8 @@ from app.models import CustomerKey, Host, ScanReport, ExtensionInfo, SecretFindi
 from app.main.routes import calculate_risk_level
 from app.events import emit_event
 from app.signing import sign_envelope, public_key_info
+from app import threat_intel
+from app.risk_score import score_host
 from app.policy.runner import evaluate_and_record, build_extensions_from_scan
 from app.jobs.extension_enrich import enqueue_pending_enrichments
 from app.queue import is_async, enqueue
@@ -453,20 +455,35 @@ def submit_report():
     # Count dangerous extensions
     dangerous_count = 0
     high_risk_extensions = []
+    threat_matched_extensions = []  # B5: known-bad / typosquat matches
     for ide in scan_data.get('ides', []):
         for ext in (ide.get('extensions') or []):
             permissions = (ext.get('permissions') or [])
             risk = calculate_risk_level(permissions)
+            ext_id = ext.get('id') or ext.get('extension_id')
             if risk in ['high', 'critical']:
                 dangerous_count += 1
                 high_risk_extensions.append({
-                    'extension_id': ext.get('id') or ext.get('extension_id'),
+                    'extension_id': ext_id,
                     'name': ext.get('name'),
                     'version': ext.get('version'),
                     'publisher': ext.get('publisher'),
                     'ide': ide.get('name'),
                     'risk_level': risk,
                     'permissions': permissions,
+                })
+            # B5: evaluate against the threat-intel feed.
+            for m in threat_intel.evaluate_extension(ext_id, ext.get('publisher'), ext.get('name')):
+                threat_matched_extensions.append({
+                    'extension_id': ext_id,
+                    'name': ext.get('name'),
+                    'version': ext.get('version'),
+                    'publisher': ext.get('publisher'),
+                    'ide': ide.get('name'),
+                    'indicator_type': m['indicator_type'],
+                    'indicator': m['indicator'],
+                    'detail': m['detail'],
+                    'severity': m['severity'],
                 })
 
     # Capture the previous scan's extensions for install/remove/update
@@ -728,6 +745,22 @@ def submit_report():
     for s in new_secret_events:
         emit_event('secret.detected', customer_key_id=key.id,
                    data={'host': {'id': host.public_id, 'hostname': host.hostname}, 'secret': s})
+
+    # B5: surface threat-intel matches (known-bad / typosquat extensions).
+    for tm in threat_matched_extensions:
+        emit_event('extension.threat_matched', customer_key_id=key.id,
+                   data={'host': {'id': host.public_id, 'hostname': host.hostname},
+                         'extension': tm})
+
+    # B8: recompute and persist the composite host risk score from current state.
+    try:
+        scored = score_host(host)
+        host.risk_score = scored['score']
+        host.risk_level_composite = scored['level']
+        db.session.commit()
+    except Exception as e:  # never fail ingestion on a scoring hiccup
+        db.session.rollback()
+        vuln_logger.error("composite risk scoring failed for host %s: %s", host.id, e)
 
     response_payload = {
         'success': True,

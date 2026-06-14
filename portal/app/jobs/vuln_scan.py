@@ -47,6 +47,14 @@ def _run(host_id, db, Host) -> Dict[str, Any]:
         return {"skipped": True, "reason": "host not found", "host_id": host_id}
     try:
         count = _scan_impl(host, db)
+        # Refresh the composite risk score now that CVE load is known (B8).
+        try:
+            from app.risk_score import score_host
+            scored = score_host(host)
+            host.risk_score = scored['score']
+            host.risk_level_composite = scored['level']
+        except Exception:
+            pass  # scoring must never fail the vuln scan
         db.session.commit()
     except Exception:
         db.session.rollback()

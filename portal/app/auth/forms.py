@@ -69,6 +69,7 @@ SUPPORTED_WEBHOOK_EVENTS = [
     ('extension.removed', 'Extension removed / uninstalled'),
     ('secret.detected', 'Plaintext secret detected'),
     ('extension.high_risk_detected', 'High-risk extension detected'),
+    ('extension.threat_matched', 'Known-bad / typosquat extension (threat intel)'),
     ('extension.unpublished_detected', 'Extension removed from marketplace'),
     # Policy & enforcement
     ('policy.violation', 'Policy violation'),
