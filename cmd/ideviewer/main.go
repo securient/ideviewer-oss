@@ -53,6 +53,7 @@ func init() {
 	rootCmd.AddCommand(updateCmd)
 	rootCmd.AddCommand(checkExtCmd)
 	rootCmd.AddCommand(installExtCmd)
+	rootCmd.AddCommand(behaviorScanCmd)
 }
 
 func main() {
