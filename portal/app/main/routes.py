@@ -1310,6 +1310,8 @@ _ALERT_META = {
     'host_deregistered':  {'label': 'Host deregistered',   'icon': 'fa-plug-circle-xmark',    'category': 'integrity'},
     'host.silent':        {'label': 'Host went silent',    'icon': 'fa-link-slash',           'category': 'integrity'},
     'command_unverified': {'label': 'Unverified command',  'icon': 'fa-shield-halved',        'category': 'integrity'},
+    'anomaly.new_risky_extension': {'label': 'New risky extension in fleet', 'icon': 'fa-bug',          'category': 'anomaly'},
+    'anomaly.rapid_propagation':   {'label': 'Rapid fleet propagation',      'icon': 'fa-diagram-project', 'category': 'anomaly'},
 }
 
 

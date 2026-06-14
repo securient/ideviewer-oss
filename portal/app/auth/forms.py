@@ -78,6 +78,9 @@ SUPPORTED_WEBHOOK_EVENTS = [
     # Integrity / tamper
     ('tamper_alert.created', 'Tamper alert created'),
     ('hook_bypass.detected', 'Git hook bypass detected'),
+    # Fleet drift / anomaly (B7)
+    ('anomaly.new_risky_extension', 'New risky extension in fleet'),
+    ('anomaly.rapid_propagation', 'Extension spreading rapidly across fleet'),
 ]
 
 

@@ -21,6 +21,9 @@ DAILY_REFRESH_INTERVAL_SECONDS = 24 * 60 * 60
 INTEGRITY_SWEEP_JOB_ID = "host-integrity-sweep"
 INTEGRITY_SWEEP_INTERVAL_SECONDS = 60
 
+DRIFT_SWEEP_JOB_ID = "fleet-drift-sweep"
+DRIFT_SWEEP_INTERVAL_SECONDS = 300
+
 
 def _reschedule(scheduler, job_id, func, interval, first_delay, timeout):
     """(Re)register a recurring job under a stable id, removing any duplicate."""
@@ -51,6 +54,7 @@ def main() -> int:
 
     from app.jobs.extension_refresh import refresh_stale_extension_metadata
     from app.jobs.integrity_monitor import sweep_host_integrity
+    from app.jobs.drift_monitor import detect_fleet_anomalies
 
     conn = redis.from_url(redis_url)
     queue = Queue("default", connection=conn)
@@ -60,6 +64,8 @@ def main() -> int:
                 DAILY_REFRESH_INTERVAL_SECONDS, first_delay=60, timeout=600)
     _reschedule(scheduler, INTEGRITY_SWEEP_JOB_ID, sweep_host_integrity,
                 INTEGRITY_SWEEP_INTERVAL_SECONDS, first_delay=30, timeout=120)
+    _reschedule(scheduler, DRIFT_SWEEP_JOB_ID, detect_fleet_anomalies,
+                DRIFT_SWEEP_INTERVAL_SECONDS, first_delay=90, timeout=300)
 
     scheduler.run()
     return 0

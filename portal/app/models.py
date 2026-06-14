@@ -1098,3 +1098,34 @@ class EnforcementAction(db.Model):
 
     def __repr__(self):
         return f'<EnforcementAction {self.id} {self.action} {self.extension_id} [{self.status}]>'
+
+
+class ExtensionPrevalence(db.Model):
+    """Per-tenant fleet prevalence of an extension, for drift/anomaly detection
+    (Phase 1 B7).
+
+    One row per (customer_key, extension_id). A scheduled sweep recomputes how
+    many of the tenant's hosts currently have each extension and compares it to
+    the previous sweep's count, so the server can spot fleet-level signals that
+    no single host's events reveal: an extension propagating across many hosts
+    in a short window (worm-like), or a brand-new high-risk extension appearing.
+    """
+
+    __tablename__ = 'extension_prevalence'
+
+    id = db.Column(db.Integer, primary_key=True)
+    customer_key_id = db.Column(db.Integer, db.ForeignKey('customer_keys.id'), nullable=False)
+    extension_id = db.Column(db.String(200), nullable=False)
+    host_count = db.Column(db.Integer, default=0, nullable=False)
+    prev_host_count = db.Column(db.Integer, default=0, nullable=False)
+    max_risk_level = db.Column(db.String(20))  # highest risk seen across hosts
+    first_seen_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        db.UniqueConstraint('customer_key_id', 'extension_id', name='uq_prevalence_key_ext'),
+        db.Index('idx_prevalence_key', 'customer_key_id'),
+    )
+
+    def __repr__(self):
+        return f'<ExtensionPrevalence {self.extension_id} count={self.host_count}>'
