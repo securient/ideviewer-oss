@@ -14,10 +14,15 @@ from app.models import (
     WebhookSubscription, WebhookDelivery,
     ExtensionPolicy, PolicyViolation,
     ExtensionMetadata, EnforcementAction,
+    User, AuditLog, RemediationPlaybook, ExpectedHost,
 )
-from app.auth.forms import CustomerKeyForm, WebhookSubscriptionForm, ExtensionPolicyForm
+from app.auth.forms import (
+    CustomerKeyForm, WebhookSubscriptionForm, ExtensionPolicyForm,
+    RemediationPlaybookForm,
+)
 from app.marketplace import fetch_extension_details
 from app.events import emit_event
+from app.audit import record_audit, require_role
 from app.policy.runner import emit_enforcement_created
 
 main_bp = Blueprint('main', __name__)
@@ -597,6 +602,28 @@ def all_hook_bypasses():
                            all_hosts=sorted(all_host_names))
 
 
+@main_bp.route('/host/<host_id>/sbom')
+@login_required
+def host_sbom(host_id):
+    """Download a CycloneDX SBOM for the host (B11). ?sign=1 signs it (attestation)."""
+    host = Host.query.filter_by(public_id=host_id).first_or_404()
+    if host.customer_key.user_id != current_user.id:
+        flash('Access denied', 'error')
+        return redirect(url_for('main.dashboard'))
+
+    from app.sbom import build_cyclonedx, sign_attestation
+    sbom = build_cyclonedx(host)
+    payload = sign_attestation(sbom) if request.args.get('sign') == '1' else sbom
+    record_audit('sbom.export', target_type='host', target_id=host.public_id,
+                 detail=f'Exported SBOM ({len(sbom.get("components", []))} components)')
+    fname = f'sbom-{host.hostname}.cdx.json'
+    return current_app.response_class(
+        response=jsonify(payload).get_data(),
+        mimetype='application/json',
+        headers={'Content-Disposition': f'attachment; filename="{fname}"'},
+    )
+
+
 @main_bp.route('/host/<host_id>')
 @login_required
 def host_detail(host_id):
@@ -804,14 +831,17 @@ def toggle_key(key_id):
 
 @main_bp.route('/keys/<int:key_id>/delete', methods=['POST'])
 @login_required
+@require_role(User.ROLE_ADMIN)
 def delete_key(key_id):
     """Delete a customer key."""
-    
+
     key = CustomerKey.query.get_or_404(key_id)
-    
+
     if key.user_id != current_user.id:
         flash('Access denied', 'error')
         return redirect(url_for('main.keys'))
+    record_audit('key.delete', target_type='customer_key', target_id=key.id,
+                 detail=f'Deleted key "{key.name}" and all associated data', commit=False)
     
     # Delete associated data, children first.
     for host in key.hosts:
@@ -1073,6 +1103,9 @@ def create_policy():
         created_by_user_id=current_user.id,
     )
     db.session.add(policy)
+    db.session.flush()
+    record_audit('policy.create', target_type='policy', target_id=policy.public_id,
+                 detail=f'Created policy "{policy.name}" (action={policy.action})', commit=False)
     db.session.commit()
     flash(f'Policy "{policy.name}" created', 'success')
     return redirect(url_for('main.policies'))
@@ -1092,11 +1125,14 @@ def toggle_policy(public_id):
 
 @main_bp.route('/policies/<public_id>/delete', methods=['POST'])
 @login_required
+@require_role(User.ROLE_ADMIN)
 def delete_policy(public_id):
     policy = _user_policy_or_404(public_id)
     if policy is None:
         return redirect(url_for('main.policies'))
     name = policy.name
+    record_audit('policy.delete', target_type='policy', target_id=policy.public_id,
+                 detail=f'Deleted policy "{name}"', commit=False)
     # Unlink enforcement actions from this policy's violations (their
     # violation_id FK would block the violation delete), then delete the
     # violations themselves.
@@ -1193,6 +1229,7 @@ def _open_quarantine_action(host_id, extension_id, extension_version):
 
 @main_bp.route('/violations/<int:violation_id>/quarantine', methods=['POST'])
 @login_required
+@require_role(User.ROLE_ADMIN, User.ROLE_ANALYST)
 def quarantine_violation(violation_id):
     """Manually request the daemon quarantine the violating extension."""
     v = PolicyViolation.query.get_or_404(violation_id)
@@ -1218,6 +1255,8 @@ def quarantine_violation(violation_id):
     )
     db.session.add(action)
     db.session.commit()
+    record_audit('enforcement.quarantine', target_type='host', target_id=host.public_id,
+                 detail=f'Manual quarantine requested for {v.extension_id} on {host.hostname}')
     emit_enforcement_created(action, host, host.customer_key.id)
     flash('Quarantine requested — the daemon will apply it on its next check-in.', 'success')
     return redirect(url_for('main.violations'))
@@ -1239,8 +1278,163 @@ def enforcement():
     return render_template('main/enforcement.html', actions=actions)
 
 
+@main_bp.route('/audit')
+@login_required
+@require_role(User.ROLE_ADMIN)
+def audit_log():
+    """Admin-only view of the append-only audit trail."""
+    entries = AuditLog.query.order_by(AuditLog.created_at.desc()).limit(300).all()
+    return render_template('main/audit.html', entries=entries)
+
+
+@main_bp.route('/coverage')
+@login_required
+def coverage():
+    """Fleet coverage: roster vs reporting hosts (B12)."""
+    from app.coverage import coverage_for_user
+    stats = coverage_for_user(current_user)
+    keys = [(k.id, k.name) for k in current_user.customer_keys.filter_by(is_active=True)]
+    return render_template('main/coverage.html', stats=stats, keys=keys)
+
+
+@main_bp.route('/coverage/add', methods=['POST'])
+@login_required
+@require_role(User.ROLE_ADMIN)
+def coverage_add():
+    """Add one or more expected hostnames (newline/comma separated) to a roster."""
+    try:
+        key_id = int(request.form.get('customer_key_id', '0'))
+    except (TypeError, ValueError):
+        key_id = 0
+    key = CustomerKey.query.get_or_404(key_id)
+    if key.user_id != current_user.id:
+        flash('Access denied', 'error')
+        return redirect(url_for('main.coverage'))
+
+    raw = request.form.get('hostnames', '')
+    names = {n.strip() for n in raw.replace(',', '\n').splitlines() if n.strip()}
+    added = 0
+    for name in names:
+        if ExpectedHost.query.filter_by(customer_key_id=key.id, hostname=name).first():
+            continue
+        db.session.add(ExpectedHost(customer_key_id=key.id, hostname=name, source='manual'))
+        added += 1
+    if added:
+        db.session.flush()
+        record_audit('coverage.roster_add', target_type='customer_key', target_id=key.id,
+                     detail=f'Added {added} expected host(s) to roster', commit=False)
+        db.session.commit()
+    flash(f'Added {added} host(s) to the roster', 'success')
+    return redirect(url_for('main.coverage'))
+
+
+@main_bp.route('/coverage/<int:expected_id>/delete', methods=['POST'])
+@login_required
+@require_role(User.ROLE_ADMIN)
+def coverage_delete(expected_id):
+    e = ExpectedHost.query.get_or_404(expected_id)
+    if e.customer_key.user_id != current_user.id:
+        flash('Access denied', 'error')
+        return redirect(url_for('main.coverage'))
+    db.session.delete(e)
+    db.session.commit()
+    flash('Roster entry removed', 'success')
+    return redirect(url_for('main.coverage'))
+
+
+@main_bp.route('/playbooks')
+@login_required
+def playbooks():
+    """List SOAR remediation playbooks for the user's keys."""
+    key_ids = [k.id for k in current_user.customer_keys]
+    items = (RemediationPlaybook.query
+             .filter(RemediationPlaybook.customer_key_id.in_(key_ids))
+             .order_by(RemediationPlaybook.created_at.desc()).all())
+    form = RemediationPlaybookForm()
+    form.customer_key_id.choices = [
+        (k.id, k.name) for k in current_user.customer_keys.filter_by(is_active=True)
+    ]
+    return render_template('main/playbooks.html', playbooks=items, form=form)
+
+
+@main_bp.route('/playbooks/create', methods=['POST'])
+@login_required
+@require_role(User.ROLE_ADMIN)
+def create_playbook():
+    form = RemediationPlaybookForm()
+    form.customer_key_id.choices = [
+        (k.id, k.name) for k in current_user.customer_keys.filter_by(is_active=True)
+    ]
+    if not form.validate_on_submit():
+        for field, errors in form.errors.items():
+            for err in errors:
+                flash(f'{field}: {err}', 'error')
+        return redirect(url_for('main.playbooks'))
+    key = CustomerKey.query.get_or_404(form.customer_key_id.data)
+    if key.user_id != current_user.id:
+        flash('Access denied', 'error')
+        return redirect(url_for('main.playbooks'))
+    pb = RemediationPlaybook(
+        customer_key_id=key.id, name=form.name.data,
+        trigger_event=form.trigger_event.data, action=form.action.data,
+        mode=form.mode.data, min_severity=form.min_severity.data,
+        max_actions_per_hour=form.max_actions_per_hour.data,
+        created_by_user_id=current_user.id,
+    )
+    db.session.add(pb)
+    db.session.flush()
+    record_audit('playbook.create', target_type='playbook', target_id=pb.public_id,
+                 detail=f'Created playbook "{pb.name}" ({pb.action}/{pb.mode})', commit=False)
+    db.session.commit()
+    flash(f'Playbook "{pb.name}" created', 'success')
+    return redirect(url_for('main.playbooks'))
+
+
+def _user_playbook_or_404(public_id):
+    pb = RemediationPlaybook.query.filter_by(public_id=public_id).first_or_404()
+    if pb.customer_key.user_id != current_user.id:
+        return None
+    return pb
+
+
+@main_bp.route('/playbooks/<public_id>/toggle-mode', methods=['POST'])
+@login_required
+@require_role(User.ROLE_ADMIN)
+def toggle_playbook_mode(public_id):
+    """Flip a playbook between dry_run and active (the human-approval gate)."""
+    pb = _user_playbook_or_404(public_id)
+    if pb is None:
+        flash('Access denied', 'error')
+        return redirect(url_for('main.playbooks'))
+    pb.mode = (RemediationPlaybook.MODE_ACTIVE if pb.mode == RemediationPlaybook.MODE_DRY_RUN
+               else RemediationPlaybook.MODE_DRY_RUN)
+    db.session.commit()
+    record_audit('playbook.mode_change', target_type='playbook', target_id=pb.public_id,
+                 detail=f'Playbook "{pb.name}" mode set to {pb.mode}')
+    flash(f'Playbook "{pb.name}" is now {pb.mode}', 'success')
+    return redirect(url_for('main.playbooks'))
+
+
+@main_bp.route('/playbooks/<public_id>/delete', methods=['POST'])
+@login_required
+@require_role(User.ROLE_ADMIN)
+def delete_playbook(public_id):
+    pb = _user_playbook_or_404(public_id)
+    if pb is None:
+        flash('Access denied', 'error')
+        return redirect(url_for('main.playbooks'))
+    name = pb.name
+    record_audit('playbook.delete', target_type='playbook', target_id=pb.public_id,
+                 detail=f'Deleted playbook "{name}"', commit=False)
+    db.session.delete(pb)
+    db.session.commit()
+    flash(f'Playbook "{name}" deleted', 'success')
+    return redirect(url_for('main.playbooks'))
+
+
 @main_bp.route('/enforcement/<int:action_id>/restore', methods=['POST'])
 @login_required
+@require_role(User.ROLE_ADMIN, User.ROLE_ANALYST)
 def restore_enforcement(action_id):
     """Request the daemon move a quarantined extension back into place."""
     a = EnforcementAction.query.get_or_404(action_id)
@@ -1267,6 +1461,8 @@ def restore_enforcement(action_id):
     )
     db.session.add(restore)
     db.session.commit()
+    record_audit('enforcement.restore', target_type='host', target_id=host.public_id,
+                 detail=f'Restore requested for {a.extension_id} on {host.hostname}')
     emit_enforcement_created(restore, host, host.customer_key.id)
     flash('Restore requested — the daemon will move the extension back on its next check-in.', 'success')
     return redirect(url_for('main.enforcement'))
@@ -1308,6 +1504,10 @@ _ALERT_META = {
     'daemon_stopping':    {'label': 'Daemon stopping',     'icon': 'fa-circle-stop',          'category': 'integrity'},
     'uninstall_attempt':  {'label': 'Uninstall attempt',   'icon': 'fa-triangle-exclamation', 'category': 'integrity'},
     'host_deregistered':  {'label': 'Host deregistered',   'icon': 'fa-plug-circle-xmark',    'category': 'integrity'},
+    'host.silent':        {'label': 'Host went silent',    'icon': 'fa-link-slash',           'category': 'integrity'},
+    'command_unverified': {'label': 'Unverified command',  'icon': 'fa-shield-halved',        'category': 'integrity'},
+    'anomaly.new_risky_extension': {'label': 'New risky extension in fleet', 'icon': 'fa-bug',          'category': 'anomaly'},
+    'anomaly.rapid_propagation':   {'label': 'Rapid fleet propagation',      'icon': 'fa-diagram-project', 'category': 'anomaly'},
 }
 
 

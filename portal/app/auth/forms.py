@@ -69,6 +69,7 @@ SUPPORTED_WEBHOOK_EVENTS = [
     ('extension.removed', 'Extension removed / uninstalled'),
     ('secret.detected', 'Plaintext secret detected'),
     ('extension.high_risk_detected', 'High-risk extension detected'),
+    ('extension.threat_matched', 'Known-bad / typosquat extension (threat intel)'),
     ('extension.unpublished_detected', 'Extension removed from marketplace'),
     # Policy & enforcement
     ('policy.violation', 'Policy violation'),
@@ -77,6 +78,12 @@ SUPPORTED_WEBHOOK_EVENTS = [
     # Integrity / tamper
     ('tamper_alert.created', 'Tamper alert created'),
     ('hook_bypass.detected', 'Git hook bypass detected'),
+    # Fleet drift / anomaly (B7)
+    ('anomaly.new_risky_extension', 'New risky extension in fleet'),
+    ('anomaly.rapid_propagation', 'Extension spreading rapidly across fleet'),
+    # SOAR automation (B10)
+    ('soar.notified', 'SOAR playbook notified'),
+    ('soar.simulated', 'SOAR playbook simulated (dry-run)'),
 ]
 
 
@@ -141,6 +148,37 @@ POLICY_RISK_LEVELS = [
     ('high', 'High or higher'),
     ('critical', 'Critical only'),
 ]
+
+
+PLAYBOOK_TRIGGERS = [
+    ('extension.threat_matched', 'Threat-intel match (known-bad / typosquat)'),
+]
+PLAYBOOK_ACTIONS = [
+    ('notify_only', 'Notify only'),
+    ('auto_quarantine', 'Auto-quarantine the extension'),
+]
+PLAYBOOK_MODES = [
+    ('dry_run', 'Dry run (simulate, no action)'),
+    ('active', 'Active (take action)'),
+]
+
+
+class RemediationPlaybookForm(FlaskForm):
+    """Form for creating a SOAR remediation playbook (B10)."""
+
+    name = StringField('Name', validators=[DataRequired(), Length(min=1, max=100)])
+    customer_key_id = SelectField('Customer key', coerce=int, validators=[DataRequired()])
+    trigger_event = SelectField('Trigger', choices=PLAYBOOK_TRIGGERS, validators=[DataRequired()])
+    action = SelectField('Action', choices=PLAYBOOK_ACTIONS, validators=[DataRequired()])
+    mode = SelectField('Mode', choices=PLAYBOOK_MODES, validators=[DataRequired()])
+    min_severity = SelectField('Minimum severity', choices=[
+        ('low', 'Low or higher'), ('medium', 'Medium or higher'),
+        ('high', 'High or higher'), ('critical', 'Critical only'),
+    ], default='high')
+    max_actions_per_hour = IntegerField('Max actions/hour', default=5, validators=[
+        NumberRange(min=1, max=1000),
+    ])
+    submit = SubmitField('Save playbook')
 
 
 class ExtensionPolicyForm(FlaskForm):

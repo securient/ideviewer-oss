@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+
+{% block title %}Remediation Playbooks - IDE Viewer{% endblock %}
+
+{% block content %}
+<div class="fade-in">
+    <div style="margin-bottom: 1.5rem;">
+        <h1 style="font-size: 1.75rem; font-weight: 700; margin-bottom: 0.25rem;">Remediation Playbooks</h1>
+        <p style="color: var(--text-secondary);">Automated detect &rarr; respond (SOAR). Playbooks start in <strong>dry run</strong> and must be switched to <strong>active</strong> to take action.</p>
+    </div>
+
+    <div style="display: grid; grid-template-columns: 1fr 360px; gap: 2rem;">
+        <div class="card">
+            <div class="card-header"><h2 class="card-title"><i class="fas fa-robot" style="color: var(--accent-primary);"></i> Your Playbooks</h2></div>
+            {% if playbooks %}
+            <div class="table-container">
+                <table>
+                    <thead><tr><th>Name</th><th>Trigger</th><th>Action</th><th>Mode</th><th>Min severity</th><th>Actions</th></tr></thead>
+                    <tbody>
+                    {% for pb in playbooks %}
+                        <tr>
+                            <td style="font-weight: 500;">{{ pb.name }}</td>
+                            <td><code class="mono" style="font-size: 0.7rem;">{{ pb.trigger_event }}</code></td>
+                            <td>{{ pb.action }}</td>
+                            <td>
+                                {% if pb.mode == 'active' %}
+                                <span class="badge badge-high">active</span>
+                                {% else %}
+                                <span class="badge badge-low">dry run</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ pb.min_severity }}</td>
+                            <td>
+                                <div style="display:flex; gap:0.5rem;">
+                                    <form method="POST" action="{{ url_for('main.toggle_playbook_mode', public_id=pb.public_id) }}" style="display:inline;">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                        <button type="submit" class="btn btn-sm btn-secondary">{{ 'Set dry run' if pb.mode == 'active' else 'Activate' }}</button>
+                                    </form>
+                                    <form method="POST" action="{{ url_for('main.delete_playbook', public_id=pb.public_id) }}" style="display:inline;" onsubmit="return confirm('Delete this playbook?');">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                        <button type="submit" class="btn btn-sm btn-danger"><i class="fas fa-trash"></i></button>
+                                    </form>
+                                </div>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="empty-state"><i class="fas fa-robot"></i><h3 style="margin-bottom:0.5rem;">No playbooks yet</h3><p>Create one to automate responses to threat-intel matches.</p></div>
+            {% endif %}
+        </div>
+
+        <div class="card" style="height: fit-content;">
+            <div class="card-header"><h2 class="card-title"><i class="fas fa-plus-circle" style="color: var(--success);"></i> Create Playbook</h2></div>
+            <form method="POST" action="{{ url_for('main.create_playbook') }}">
+                {{ form.hidden_tag() }}
+                <div class="form-group"><label class="form-label">Name</label>{{ form.name(class="form-input", placeholder="e.g., Quarantine known-bad extensions") }}</div>
+                <div class="form-group"><label class="form-label">Customer key</label>{{ form.customer_key_id(class="form-input") }}</div>
+                <div class="form-group"><label class="form-label">Trigger</label>{{ form.trigger_event(class="form-input") }}</div>
+                <div class="form-group"><label class="form-label">Action</label>{{ form.action(class="form-input") }}</div>
+                <div class="form-group"><label class="form-label">Mode</label>{{ form.mode(class="form-input") }}
+                    <p style="font-size:0.75rem;color:var(--text-muted);margin-top:0.25rem;">Start in dry run; activate once you trust it.</p></div>
+                <div class="form-group"><label class="form-label">Minimum severity</label>{{ form.min_severity(class="form-input") }}</div>
+                <div class="form-group"><label class="form-label">Max actions/hour</label>{{ form.max_actions_per_hour(class="form-input") }}</div>
+                {{ form.submit(class="btn btn-primary", style="width: 100%;") }}
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

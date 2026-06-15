@@ -18,6 +18,29 @@ log = logging.getLogger("ideviewer.scheduler")
 DAILY_REFRESH_JOB_ID = "extension-metadata-daily-refresh"
 DAILY_REFRESH_INTERVAL_SECONDS = 24 * 60 * 60
 
+INTEGRITY_SWEEP_JOB_ID = "host-integrity-sweep"
+INTEGRITY_SWEEP_INTERVAL_SECONDS = 60
+
+DRIFT_SWEEP_JOB_ID = "fleet-drift-sweep"
+DRIFT_SWEEP_INTERVAL_SECONDS = 300
+
+
+def _reschedule(scheduler, job_id, func, interval, first_delay, timeout):
+    """(Re)register a recurring job under a stable id, removing any duplicate."""
+    for existing in scheduler.get_jobs():
+        if existing.id == job_id:
+            log.info("removing existing scheduled job %s", existing.id)
+            scheduler.cancel(existing)
+    scheduler.schedule(
+        scheduled_time=datetime.utcnow() + timedelta(seconds=first_delay),
+        func=func,
+        interval=interval,
+        repeat=None,  # forever
+        id=job_id,
+        timeout=timeout,
+    )
+    log.info("scheduled %s every %ds (first run in %ds)", job_id, interval, first_delay)
+
 
 def main() -> int:
     redis_url = os.environ.get("REDIS_URL")
@@ -30,30 +53,19 @@ def main() -> int:
     from rq_scheduler import Scheduler
 
     from app.jobs.extension_refresh import refresh_stale_extension_metadata
+    from app.jobs.integrity_monitor import sweep_host_integrity
+    from app.jobs.drift_monitor import detect_fleet_anomalies
 
     conn = redis.from_url(redis_url)
     queue = Queue("default", connection=conn)
     scheduler = Scheduler(queue=queue, connection=conn)
 
-    # Wipe any previously-scheduled instance of this job so restarts
-    # don't accumulate copies.
-    for existing in scheduler.get_jobs():
-        if existing.id == DAILY_REFRESH_JOB_ID:
-            log.info("removing existing scheduled job %s", existing.id)
-            scheduler.cancel(existing)
-
-    scheduler.schedule(
-        scheduled_time=datetime.utcnow() + timedelta(seconds=60),
-        func=refresh_stale_extension_metadata,
-        interval=DAILY_REFRESH_INTERVAL_SECONDS,
-        repeat=None,  # forever
-        id=DAILY_REFRESH_JOB_ID,
-        timeout=600,
-    )
-    log.info(
-        "scheduled %s every %ds (first run in 60s)",
-        DAILY_REFRESH_JOB_ID, DAILY_REFRESH_INTERVAL_SECONDS,
-    )
+    _reschedule(scheduler, DAILY_REFRESH_JOB_ID, refresh_stale_extension_metadata,
+                DAILY_REFRESH_INTERVAL_SECONDS, first_delay=60, timeout=600)
+    _reschedule(scheduler, INTEGRITY_SWEEP_JOB_ID, sweep_host_integrity,
+                INTEGRITY_SWEEP_INTERVAL_SECONDS, first_delay=30, timeout=120)
+    _reschedule(scheduler, DRIFT_SWEEP_JOB_ID, detect_fleet_anomalies,
+                DRIFT_SWEEP_INTERVAL_SECONDS, first_delay=90, timeout=300)
 
     scheduler.run()
     return 0

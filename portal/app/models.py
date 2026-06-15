@@ -24,14 +24,35 @@ class User(UserMixin, db.Model):
     
     must_change_password = db.Column(db.Boolean, default=False)  # Force password change on first login
 
+    # Role-based access control (Phase 1 B9). admin = full control, analyst =
+    # operate (resolve/ack/enforce) but not destructive admin, viewer =
+    # read-only. Existing/first accounts default to admin.
+    ROLE_ADMIN = 'admin'
+    ROLE_ANALYST = 'analyst'
+    ROLE_VIEWER = 'viewer'
+    VALID_ROLES = (ROLE_ADMIN, ROLE_ANALYST, ROLE_VIEWER)
+    role = db.Column(db.String(20), default='admin', nullable=False)
+
     # OAuth fields
     oauth_provider = db.Column(db.String(50))  # 'google', 'github', etc.
     oauth_id = db.Column(db.String(255))  # Provider's user ID
     avatar_url = db.Column(db.String(500))  # Profile picture URL
-    
+
     # Relationships
     customer_keys = db.relationship('CustomerKey', backref='owner', lazy='dynamic')
-    
+
+    def has_role(self, *roles) -> bool:
+        return (self.role or 'admin') in roles
+
+    @property
+    def can_operate(self) -> bool:
+        """Analyst-or-above: resolve/ack/enforce, but not destructive admin."""
+        return (self.role or 'admin') in (self.ROLE_ADMIN, self.ROLE_ANALYST)
+
+    @property
+    def is_admin(self) -> bool:
+        return (self.role or 'admin') == self.ROLE_ADMIN
+
     def set_password(self, password):
         """Hash and set password."""
         self.password_hash = generate_password_hash(password)
@@ -133,6 +154,18 @@ class Host(db.Model):
     daemon_version = db.Column(db.String(50))  # Daemon version
     is_active = db.Column(db.Boolean, default=True)
     last_realtime_event = db.Column(db.DateTime)  # Last real-time filesystem change event
+
+    # Server-side integrity monitoring (Phase 1 B2). A host whose daemon stops
+    # heartbeating is "silent" — the server raises one alert on the ok->silent
+    # transition (deduped via this state) and resets it when a heartbeat returns.
+    heartbeat_alarm_state = db.Column(db.String(16), default='ok')  # 'ok' | 'silent'
+    silent_since = db.Column(db.DateTime, nullable=True)
+
+    # Composite risk score v2 (Phase 1 B8). Denormalized 0-100 score + level,
+    # recomputed from current state on each scan-report ingestion. See
+    # app/risk_score.py for the (explainable, additive) model.
+    risk_score = db.Column(db.Integer, nullable=True)
+    risk_level_composite = db.Column(db.String(16), nullable=True)
 
     # Per-host enrollment token (T1.3). Only the sha256 hex digest is stored;
     # plaintext is returned exactly once at issue time.
@@ -1086,3 +1119,154 @@ class EnforcementAction(db.Model):
 
     def __repr__(self):
         return f'<EnforcementAction {self.id} {self.action} {self.extension_id} [{self.status}]>'
+
+
+class ExtensionPrevalence(db.Model):
+    """Per-tenant fleet prevalence of an extension, for drift/anomaly detection
+    (Phase 1 B7).
+
+    One row per (customer_key, extension_id). A scheduled sweep recomputes how
+    many of the tenant's hosts currently have each extension and compares it to
+    the previous sweep's count, so the server can spot fleet-level signals that
+    no single host's events reveal: an extension propagating across many hosts
+    in a short window (worm-like), or a brand-new high-risk extension appearing.
+    """
+
+    __tablename__ = 'extension_prevalence'
+
+    id = db.Column(db.Integer, primary_key=True)
+    customer_key_id = db.Column(db.Integer, db.ForeignKey('customer_keys.id'), nullable=False)
+    extension_id = db.Column(db.String(200), nullable=False)
+    host_count = db.Column(db.Integer, default=0, nullable=False)
+    prev_host_count = db.Column(db.Integer, default=0, nullable=False)
+    max_risk_level = db.Column(db.String(20))  # highest risk seen across hosts
+    first_seen_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        db.UniqueConstraint('customer_key_id', 'extension_id', name='uq_prevalence_key_ext'),
+        db.Index('idx_prevalence_key', 'customer_key_id'),
+    )
+
+    def __repr__(self):
+        return f'<ExtensionPrevalence {self.extension_id} count={self.host_count}>'
+
+
+class AuditLog(db.Model):
+    """Append-only audit trail of security-relevant actions (Phase 1 B9).
+
+    Every mutating, attributable action (policy/webhook/key changes,
+    enforcement, token revocation, alert resolution) writes one row. Rows are
+    never updated or deleted in normal operation — this is the record of "who
+    did what" that automated remediation (B10) and any compliance story depend
+    on. The actor's username/email is snapshotted so the entry survives user
+    deletion.
+    """
+
+    __tablename__ = 'audit_logs'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    actor = db.Column(db.String(200))          # snapshot of username/email (or 'system')
+    action = db.Column(db.String(80), nullable=False)  # e.g. 'policy.create'
+    target_type = db.Column(db.String(50))     # e.g. 'policy', 'host', 'webhook'
+    target_id = db.Column(db.String(100))
+    detail = db.Column(db.Text)
+    ip_address = db.Column(db.String(45))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        db.Index('idx_audit_action', 'action'),
+    )
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'actor': self.actor,
+            'action': self.action,
+            'target_type': self.target_type,
+            'target_id': self.target_id,
+            'detail': self.detail,
+            'ip_address': self.ip_address,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+    def __repr__(self):
+        return f'<AuditLog {self.action} by {self.actor}>'
+
+
+class RemediationPlaybook(db.Model):
+    """Automated detect->respond playbook (Phase 1 B10 SOAR).
+
+    When a trigger event fires for a tenant, matching playbooks run their action
+    (auto-quarantine via the existing enforcement channel, or notify-only).
+    Safety by default: playbooks are created in ``dry_run`` mode (they log/emit
+    what they WOULD do but take no action) and must be explicitly switched to
+    ``active``; auto-quarantine is rate-limited per hour to bound blast radius.
+    Every decision is written to the audit log.
+    """
+
+    __tablename__ = 'remediation_playbooks'
+
+    TRIGGER_THREAT_MATCHED = 'extension.threat_matched'
+    TRIGGER_POLICY_VIOLATION = 'policy.violation'
+    VALID_TRIGGERS = (TRIGGER_THREAT_MATCHED, TRIGGER_POLICY_VIOLATION)
+
+    ACTION_AUTO_QUARANTINE = 'auto_quarantine'
+    ACTION_NOTIFY_ONLY = 'notify_only'
+    VALID_ACTIONS = (ACTION_AUTO_QUARANTINE, ACTION_NOTIFY_ONLY)
+
+    MODE_DRY_RUN = 'dry_run'
+    MODE_ACTIVE = 'active'
+    VALID_MODES = (MODE_DRY_RUN, MODE_ACTIVE)
+
+    id = db.Column(db.Integer, primary_key=True)
+    public_id = db.Column(db.String(36), unique=True, nullable=False, index=True)
+    customer_key_id = db.Column(db.Integer, db.ForeignKey('customer_keys.id'), nullable=False)
+    name = db.Column(db.String(100), nullable=False)
+    trigger_event = db.Column(db.String(80), nullable=False)
+    action = db.Column(db.String(40), nullable=False, default=ACTION_NOTIFY_ONLY)
+    mode = db.Column(db.String(20), nullable=False, default=MODE_DRY_RUN)
+    min_severity = db.Column(db.String(20), default='high')  # low|medium|high|critical
+    max_actions_per_hour = db.Column(db.Integer, default=5)
+    is_active = db.Column(db.Boolean, default=True)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    customer_key = db.relationship('CustomerKey', backref=db.backref('playbooks', lazy='dynamic'))
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        if not self.public_id:
+            self.public_id = str(uuid.uuid4())
+
+    def __repr__(self):
+        return f'<RemediationPlaybook {self.name} {self.trigger_event}->{self.action} [{self.mode}]>'
+
+
+class ExpectedHost(db.Model):
+    """Authoritative roster entry for fleet coverage reporting (Phase 1 B12).
+
+    "Coverage" = which machines that SHOULD run the daemon actually are. Without
+    the org/SCIM model (deferred with B9), the roster is populated manually (or
+    by bulk paste); MDM/IdP auto-population is the follow-up. A reporting Host
+    whose hostname isn't on the roster is "unmanaged"; a roster entry with no
+    reporting host is a coverage gap.
+    """
+
+    __tablename__ = 'expected_hosts'
+
+    id = db.Column(db.Integer, primary_key=True)
+    customer_key_id = db.Column(db.Integer, db.ForeignKey('customer_keys.id'), nullable=False)
+    hostname = db.Column(db.String(255), nullable=False)
+    source = db.Column(db.String(20), default='manual')  # manual | mdm | scim
+    added_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    customer_key = db.relationship('CustomerKey', backref=db.backref('expected_hosts', lazy='dynamic'))
+
+    __table_args__ = (
+        db.UniqueConstraint('customer_key_id', 'hostname', name='uq_expected_key_host'),
+    )
+
+    def __repr__(self):
+        return f'<ExpectedHost {self.hostname}>'

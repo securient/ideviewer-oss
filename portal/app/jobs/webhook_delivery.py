@@ -235,11 +235,21 @@ def _slack_payload(event_type: str, payload: dict) -> dict:
                 f"• Type: *{sec.get('secret_type', '?')}*   •   Source: {sec.get('source', '?')}\n"
                 f"• Location: `{sec.get('file_path', '?')}`"
                 + (f" ({sec.get('variable_name')})" if sec.get('variable_name') else ""))
+    elif event_type == 'extension.threat_matched':
+        ind = ext.get('indicator_type', 'threat')
+        detail = ext.get('detail', '')
+        text = (f":no_entry_sign: *Threat-intel match* ({ind}) on *{hostname}*\n"
+                f"• {ext_label}" + (f"  _{ide}_" if ide else "") +
+                (f"\n• {detail}" if detail else ""))
     elif event_type == 'extension.unpublished_detected':
         text = f":package: *Extension removed from marketplace* — {ext_label} (host *{hostname}*)"
     elif event_type == 'tamper_alert.created':
         text = (f":rotating_light: *Tamper alert* [{d.get('severity', '?')}] on "
                 f"*{hostname}*: {d.get('details', '')}")
+    elif event_type in ('anomaly.new_risky_extension', 'anomaly.rapid_propagation'):
+        emoji = ':globe_with_meridians:' if event_type.endswith('propagation') else ':warning:'
+        text = (f"{emoji} *Fleet anomaly* — {d.get('details', event_type)}"
+                + (f"  (`{d.get('extension_id')}`)" if d.get('extension_id') else ""))
     elif event_type == 'hook_bypass.detected':
         text = (f":no_entry: *Git hook bypass* on *{hostname}* — commit "
                 f"`{(d.get('commit_hash') or '')[:10]}` by {d.get('commit_author', '?')}")

@@ -18,6 +18,9 @@ from app import db
 from app.models import CustomerKey, Host, ScanReport, ExtensionInfo, SecretFinding, PackageInfo, ScanRequest, TamperAlert, Vulnerability, HookBypass, AIToolInfo, EnforcementAction
 from app.main.routes import calculate_risk_level
 from app.events import emit_event
+from app.signing import sign_envelope, public_key_info
+from app import threat_intel
+from app.risk_score import score_host
 from app.policy.runner import evaluate_and_record, build_extensions_from_scan
 from app.jobs.extension_enrich import enqueue_pending_enrichments
 from app.queue import is_async, enqueue
@@ -199,11 +202,14 @@ def validate_key():
     key.last_used_at = datetime.utcnow()
     db.session.commit()
 
+    _pub = public_key_info()
     return jsonify({
         'valid': True,
         'key_name': key.name,
         'current_hosts': key.host_count,
         'portal_url': request.host_url.rstrip('/'),
+        'command_public_key': _pub['public_key_b64'],
+        'command_key_id': _pub['key_id'],
     })
 
 
@@ -282,11 +288,14 @@ def register_host():
     key.last_used_at = datetime.utcnow()
     db.session.commit()
 
+    _pub = public_key_info()
     return jsonify({
         'success': True,
         'host_id': host.public_id,
         'host_token': plaintext,
         'message': message,
+        'command_public_key': _pub['public_key_b64'],
+        'command_key_id': _pub['key_id'],
     })
 
 
@@ -446,20 +455,35 @@ def submit_report():
     # Count dangerous extensions
     dangerous_count = 0
     high_risk_extensions = []
+    threat_matched_extensions = []  # B5: known-bad / typosquat matches
     for ide in scan_data.get('ides', []):
         for ext in (ide.get('extensions') or []):
             permissions = (ext.get('permissions') or [])
             risk = calculate_risk_level(permissions)
+            ext_id = ext.get('id') or ext.get('extension_id')
             if risk in ['high', 'critical']:
                 dangerous_count += 1
                 high_risk_extensions.append({
-                    'extension_id': ext.get('id') or ext.get('extension_id'),
+                    'extension_id': ext_id,
                     'name': ext.get('name'),
                     'version': ext.get('version'),
                     'publisher': ext.get('publisher'),
                     'ide': ide.get('name'),
                     'risk_level': risk,
                     'permissions': permissions,
+                })
+            # B5: evaluate against the threat-intel feed.
+            for m in threat_intel.evaluate_extension(ext_id, ext.get('publisher'), ext.get('name')):
+                threat_matched_extensions.append({
+                    'extension_id': ext_id,
+                    'name': ext.get('name'),
+                    'version': ext.get('version'),
+                    'publisher': ext.get('publisher'),
+                    'ide': ide.get('name'),
+                    'indicator_type': m['indicator_type'],
+                    'indicator': m['indicator'],
+                    'detail': m['detail'],
+                    'severity': m['severity'],
                 })
 
     # Capture the previous scan's extensions for install/remove/update
@@ -722,6 +746,26 @@ def submit_report():
         emit_event('secret.detected', customer_key_id=key.id,
                    data={'host': {'id': host.public_id, 'hostname': host.hostname}, 'secret': s})
 
+    # B5: surface threat-intel matches (known-bad / typosquat extensions).
+    # B10: run any SOAR playbooks bound to the threat-matched trigger.
+    from app.soar import run_playbooks_for_event
+    for tm in threat_matched_extensions:
+        emit_event('extension.threat_matched', customer_key_id=key.id,
+                   data={'host': {'id': host.public_id, 'hostname': host.hostname},
+                         'extension': tm})
+        run_playbooks_for_event('extension.threat_matched', key.id, host, tm,
+                                tm.get('severity', 'high'))
+
+    # B8: recompute and persist the composite host risk score from current state.
+    try:
+        scored = score_host(host)
+        host.risk_score = scored['score']
+        host.risk_level_composite = scored['level']
+        db.session.commit()
+    except Exception as e:  # never fail ingestion on a scoring hiccup
+        db.session.rollback()
+        vuln_logger.error("composite risk scoring failed for host %s: %s", host.id, e)
+
     response_payload = {
         'success': True,
         'report_id': report.id,
@@ -899,7 +943,26 @@ def get_pending_enforcement_actions():
         a.dispatched_at = now
     db.session.commit()
 
-    return jsonify({'actions': [a.to_dict() for a in pending]})
+    # Sign the command envelope. A daemon executes an action only if this
+    # signature verifies against its pinned key — this is what lets enforcement
+    # run default-ON instead of behind the old kill-switch. The top-level
+    # "actions" key is preserved inside the envelope for pre-signing daemons.
+    body = {'actions': [a.to_dict() for a in pending]}
+    return jsonify(sign_envelope(body))
+
+
+@api_bp.route('/signing-key', methods=['GET'])
+def get_signing_key():
+    """Return the portal's command-signing public key for the daemon to pin.
+
+    Token- or customer-key-authenticated. Daemons fetch this at enrollment (the
+    key is also embedded in the register/validate responses) and can re-fetch it
+    to pick up a rotated key.
+    """
+    key, host_from_token, error, status = authenticate_request()
+    if error:
+        return jsonify(error), status
+    return jsonify(public_key_info())
 
 
 @api_bp.route('/enforcement-actions/<int:action_id>/report', methods=['POST'])
@@ -999,6 +1062,9 @@ def heartbeat():
         host.last_heartbeat_at = datetime.utcnow()
         host.daemon_version = data.get('daemon_version')
         key.last_used_at = datetime.utcnow()
+        # A heartbeat clears any server-side "silent" alarm for this host (B2).
+        from app.jobs.integrity_monitor import clear_silent_state
+        clear_silent_state(host)
         db.session.commit()
 
     return jsonify({

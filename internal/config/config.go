@@ -22,11 +22,24 @@ type Config struct {
 	HostToken           string `json:"host_token,omitempty"`
 	ScanIntervalMinutes int    `json:"scan_interval_minutes"`
 	HostID              string `json:"host_id,omitempty"`
-	// EnforcementEnabled is the local kill-switch for the enforcement plane.
-	// The daemon refuses to apply any quarantine/restore action unless this
-	// is explicitly true. omitempty keeps existing signed configs valid.
-	EnforcementEnabled bool   `json:"enforcement_enabled,omitempty"`
-	Signature          string `json:"signature,omitempty"`
+	// EnforcementEnabled is the legacy local kill-switch for the enforcement
+	// plane. Superseded by EnforcementMode but still honored for backward
+	// compatibility with configs written before signed commands existed.
+	EnforcementEnabled bool `json:"enforcement_enabled,omitempty"`
+	// EnforcementMode controls how the daemon treats enforcement commands:
+	//   "off"      — never poll/execute (explicit opt-out kill-switch)
+	//   "verified" — execute only commands whose signature verifies against a
+	//                pinned CommandPublicKeys entry (the default once signing
+	//                exists; a missing/forged signature blocks execution, which
+	//                is strictly safer than the old boolean flag)
+	// Empty string is resolved at runtime from EnforcementEnabled for
+	// backward compatibility (see daemon.resolveEnforcementMode).
+	EnforcementMode string `json:"enforcement_mode,omitempty"`
+	// CommandPublicKeys holds the base64 ed25519 public key(s) the daemon pins
+	// to verify portal-issued command envelopes. Multiple entries support
+	// key rotation. Populated at enrollment and refreshable via /api/signing-key.
+	CommandPublicKeys []string `json:"command_public_keys,omitempty"`
+	Signature         string   `json:"signature,omitempty"`
 }
 
 // configPath returns the config file path, checking system dir first

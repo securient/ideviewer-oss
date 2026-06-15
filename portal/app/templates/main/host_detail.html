@@ -283,13 +283,30 @@
                 {% endif %}
             </div>
             <div style="flex: 1;">
-                <h1 style="font-size: 1.75rem; font-weight: 700; margin-bottom: 0.25rem;">{{ host.hostname }}</h1>
+                <h1 style="font-size: 1.75rem; font-weight: 700; margin-bottom: 0.25rem;">
+                    {{ host.hostname }}
+                    {% if host.risk_score is not none %}
+                    {% set _lvl = host.risk_level_composite or 'low' %}
+                    <span class="badge badge-{{ _lvl }}" title="Composite risk score (permissions + threat intel + CVEs + secrets + unpublished)"
+                          style="font-size: 0.75rem; vertical-align: middle; margin-left: 0.5rem;">
+                        Risk {{ host.risk_score }}/100 · {{ _lvl|upper }}
+                    </span>
+                    {% endif %}
+                </h1>
                 <p style="color: var(--text-secondary);">
                     {{ host.ip_address or 'Unknown IP' }} • {{ host.platform or 'Unknown Platform' }}
                     • Last seen: <span class="local-time" data-utc="{{ host.last_seen_at.isoformat() + 'Z' if host.last_seen_at else '' }}">{{ host.last_seen_at.strftime('%Y-%m-%d %H:%M') if host.last_seen_at else 'Never' }}</span>
                     {% if host.last_realtime_event %}
                     • <i class="fas fa-bolt" style="color: #22c55e; font-size: 0.75rem;"></i> Last live update: <span class="local-time" data-utc="{{ host.last_realtime_event.isoformat() + 'Z' }}">{{ host.last_realtime_event.strftime('%Y-%m-%d %H:%M') }}</span>
                     {% endif %}
+                </p>
+                <p style="margin-top: 0.4rem;">
+                    <a href="{{ url_for('main.host_sbom', host_id=host.public_id) }}" class="btn btn-sm btn-secondary" title="CycloneDX SBOM">
+                        <i class="fas fa-file-code"></i> SBOM
+                    </a>
+                    <a href="{{ url_for('main.host_sbom', host_id=host.public_id, sign=1) }}" class="btn btn-sm btn-secondary" title="Signed SBOM attestation (ed25519)">
+                        <i class="fas fa-file-signature"></i> Signed SBOM
+                    </a>
                 </p>
                 <p style="color: var(--text-secondary); font-size: 0.8125rem; margin-top: 0.25rem;">
                     <i class="fas fa-key" style="font-size: 0.75rem;"></i>
