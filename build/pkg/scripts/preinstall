@@ -1,10 +1,25 @@
 #!/bin/bash
 # Pre-installation script
 
-# Stop existing daemon if running
-if launchctl list | grep -q "com.ideviewer.daemon"; then
-    echo "Stopping existing IDE Viewer daemon..."
-    sudo launchctl unload /Library/LaunchDaemons/com.ideviewer.daemon.plist 2>/dev/null || true
+# Stop the existing daemon if running. It's a LaunchAgent in the logged-in
+# user's GUI domain, not a LaunchDaemon in the system domain — this script runs
+# as root, so `launchctl list` here cannot see it and unloading a
+# /Library/LaunchDaemons path that never existed is a silent no-op. That's how a
+# replaced binary leaves an orphaned job crash-looping against the old plist.
+CONSOLE_USER=$(stat -f "%Su" /dev/console 2>/dev/null || true)
+if [ -z "$CONSOLE_USER" ] || [ "$CONSOLE_USER" = "root" ]; then
+    CONSOLE_USER="${SUDO_USER:-}"
+fi
+
+if [ -n "$CONSOLE_USER" ] && [ "$CONSOLE_USER" != "root" ]; then
+    CONSOLE_UID=$(id -u "$CONSOLE_USER" 2>/dev/null || true)
+    if [ -n "$CONSOLE_UID" ]; then
+        echo "Stopping existing IDE Viewer daemon (user: $CONSOLE_USER)..."
+        launchctl bootout "gui/$CONSOLE_UID/com.ideviewer.daemon" 2>/dev/null || true
+        # Pre-bootout systems (10.10 and earlier) still need the legacy verb.
+        launchctl asuser "$CONSOLE_UID" launchctl unload \
+            /Library/LaunchAgents/com.ideviewer.daemon.plist 2>/dev/null || true
+    fi
 fi
 
 # Remove old executable if exists

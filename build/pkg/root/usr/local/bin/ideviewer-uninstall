@@ -37,13 +37,36 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
+# Resolve the real (non-root) user. Everything user-scoped below — the
+# LaunchAgent's GUI domain, ~/.ideviewer, the global git hooksPath — belongs to
+# that user, not to root. Under `sudo` both $HOME and `id -u` describe root, so
+# using them directly targets the wrong domain and silently no-ops, leaving an
+# orphaned agent registered against a deleted plist.
+REAL_USER=$(stat -f "%Su" /dev/console 2>/dev/null || true)
+if [ -z "$REAL_USER" ] || [ "$REAL_USER" = "root" ]; then
+    REAL_USER="${SUDO_USER:-}"
+fi
+
+REAL_UID=""
+REAL_HOME=""
+if [ -n "$REAL_USER" ] && [ "$REAL_USER" != "root" ]; then
+    REAL_UID=$(id -u "$REAL_USER" 2>/dev/null || true)
+    REAL_HOME=$(dscl . -read "/Users/$REAL_USER" NFSHomeDirectory 2>/dev/null | awk '{print $2}')
+    if [ -z "$REAL_HOME" ]; then
+        REAL_HOME=$(eval echo "~$REAL_USER")
+    fi
+fi
+# Fall back to root's own context if there's no console/sudo user to attribute to.
+[ -z "$REAL_HOME" ] && REAL_HOME="$HOME"
+[ -z "$REAL_UID" ] && REAL_UID=$(id -u)
+
 # Confirm uninstallation
 echo -e "${YELLOW}This will completely remove IDE Viewer from your system.${NC}"
 echo ""
 echo "The following will be removed:"
 echo "  • /usr/local/bin/ideviewer"
 echo "  • /usr/local/bin/ideviewer-uninstall"
-echo "  • /Library/LaunchDaemons/$BUNDLE_ID.plist"
+echo "  • /Library/LaunchAgents/$BUNDLE_ID.plist"
 echo "  • /var/log/ideviewer/"
 echo "  • Package receipt from system database"
 echo ""
@@ -61,7 +84,7 @@ echo ""
 
 # Find config — check system-level first (written by register), then user-level
 CONFIG_FILE=""
-for cfg_path in "/Library/Application Support/IDEViewer/config.json" "$HOME/.ideviewer/config.json"; do
+for cfg_path in "/Library/Application Support/IDEViewer/config.json" "$REAL_HOME/.ideviewer/config.json"; do
     if [ -f "$cfg_path" ]; then
         CONFIG_FILE="$cfg_path"
         break
@@ -104,14 +127,13 @@ else
     echo "no configuration found"
 fi
 
-# Step 1: Stop the daemon if running (check both LaunchAgent and LaunchDaemon)
+# Step 1: Stop the daemon if running (check both LaunchAgent and LaunchDaemon).
+# The agent lives in the real user's GUI domain — booting out gui/0 does nothing.
 echo -n "Stopping daemon if running... "
-CURRENT_UID=$(id -u 2>/dev/null || echo "")
-if [ -n "$CURRENT_UID" ]; then
-    launchctl bootout "gui/$CURRENT_UID/$BUNDLE_ID" 2>/dev/null || true
-fi
+launchctl bootout "gui/$REAL_UID/$BUNDLE_ID" 2>/dev/null || true
 launchctl bootout "system/$BUNDLE_ID" 2>/dev/null || true
-launchctl unload "/Library/LaunchAgents/$BUNDLE_ID.plist" 2>/dev/null || true
+launchctl asuser "$REAL_UID" launchctl unload \
+    "/Library/LaunchAgents/$BUNDLE_ID.plist" 2>/dev/null || true
 launchctl unload "/Library/LaunchDaemons/$BUNDLE_ID.plist" 2>/dev/null || true
 echo -e "${GREEN}done${NC}"
 
@@ -175,11 +197,21 @@ else
     echo "not found"
 fi
 
-# Step 8: Remove global git hooks installed by IDEViewer
+# Step 8: Remove global git hooks installed by IDEViewer. `git config --global`
+# as root reads root's ~/.gitconfig, which is not where `ideviewer register`
+# wrote the hooksPath — run it as the real user or it never gets unset.
 echo -n "Removing global git hooks... "
-GIT_HOOKS_DIR=$(git config --global core.hooksPath 2>/dev/null || true)
+if [ -n "$REAL_USER" ] && [ "$REAL_USER" != "root" ]; then
+    GIT_HOOKS_DIR=$(sudo -u "$REAL_USER" git config --global core.hooksPath 2>/dev/null || true)
+else
+    GIT_HOOKS_DIR=$(git config --global core.hooksPath 2>/dev/null || true)
+fi
 if [ -n "$GIT_HOOKS_DIR" ] && [[ "$GIT_HOOKS_DIR" == *".ideviewer"* ]]; then
-    git config --global --unset core.hooksPath 2>/dev/null || true
+    if [ -n "$REAL_USER" ] && [ "$REAL_USER" != "root" ]; then
+        sudo -u "$REAL_USER" git config --global --unset core.hooksPath 2>/dev/null || true
+    else
+        git config --global --unset core.hooksPath 2>/dev/null || true
+    fi
     echo -e "${GREEN}removed${NC}"
 else
     echo "not set by IDEViewer"
@@ -197,7 +229,7 @@ fi
 
 # Step 10: Remove user-level configuration, hooks, and gitleaks
 echo -n "Checking for user data... "
-USER_DATA_DIR="$HOME/.ideviewer"
+USER_DATA_DIR="$REAL_HOME/.ideviewer"
 if [ -d "$USER_DATA_DIR" ]; then
     read -p "Remove user data at $USER_DATA_DIR (config, hooks, gitleaks)? [y/N] " -n 1 -r
     echo ""

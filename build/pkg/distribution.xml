@@ -22,5 +22,5 @@
         <pkg-ref id="com.ideviewer.daemon"/>
     </choice>
 
-    <pkg-ref id="com.ideviewer.daemon" version="0.3.0" onConclusion="none">IDEViewer-component.pkg</pkg-ref>
+    <pkg-ref id="com.ideviewer.daemon" version="0.4.0" onConclusion="none">IDEViewer-component.pkg</pkg-ref>
 </installer-gui-script>
