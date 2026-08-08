@@ -27,8 +27,10 @@ if [ -z "$REAL_USER" ] || [ "$REAL_USER" = "root" ]; then
     fi
 fi
 
+REAL_UID=""
 REAL_HOME=""
 if [ -n "$REAL_USER" ]; then
+    REAL_UID=$(id -u "$REAL_USER" 2>/dev/null || true)
     REAL_HOME=$(dscl . -read "/Users/$REAL_USER" NFSHomeDirectory 2>/dev/null | awk '{print $2}')
     if [ -z "$REAL_HOME" ]; then
         REAL_HOME=$(eval echo "~$REAL_USER")
@@ -58,6 +60,23 @@ fi
 # Make executables accessible
 chmod +x /usr/local/bin/ideviewer
 chmod +x /usr/local/bin/ideviewer-uninstall
+
+# Load the LaunchAgent now. A plist dropped into /Library/LaunchAgents is only
+# picked up at the user's next login, so without this a fresh install reports
+# nothing until they log out and back in — and an upgrade is worse: preinstall
+# boots the old agent out, so the host goes silent until next login. Bootstrap
+# is not idempotent and fails if the label is already loaded, so bootout first
+# and ignore its failure on a clean install.
+AGENT_PLIST="/Library/LaunchAgents/com.ideviewer.daemon.plist"
+if [ -n "$REAL_UID" ]; then
+    launchctl bootout "gui/$REAL_UID/com.ideviewer.daemon" 2>/dev/null || true
+    if launchctl bootstrap "gui/$REAL_UID" "$AGENT_PLIST" 2>/dev/null; then
+        echo "Daemon started for user $REAL_USER"
+    else
+        echo "Could not start the daemon automatically; it will start at next login."
+        echo "To start it now:  launchctl bootstrap gui/$REAL_UID $AGENT_PLIST"
+    fi
+fi
 
 echo ""
 echo "============================================"
