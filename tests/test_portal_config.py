@@ -21,9 +21,24 @@ class TestDevelopmentConfig:
         assert len(cfg.SECRET_KEY) > 0
 
     def test_default_database_uri(self):
-        from config import DevelopmentConfig
-        cfg = DevelopmentConfig()
-        assert "sqlite" in cfg.SQLALCHEMY_DATABASE_URI
+        # config.py binds SQLALCHEMY_DATABASE_URI at class-definition time, so
+        # the value depends on the environment present when the module was
+        # first imported. CI exports DATABASE_URL for the postgres service,
+        # which meant this asserted against the ambient env rather than the
+        # documented default. Reload with the var removed, then restore both
+        # the env and the module so later tests see the real environment.
+        import importlib
+        import config as config_module
+
+        saved = os.environ.pop("DATABASE_URL", None)
+        try:
+            importlib.reload(config_module)
+            cfg = config_module.DevelopmentConfig()
+            assert "sqlite" in cfg.SQLALCHEMY_DATABASE_URI
+        finally:
+            if saved is not None:
+                os.environ["DATABASE_URL"] = saved
+            importlib.reload(config_module)
 
     def test_google_oauth_disabled_by_default(self, monkeypatch):
         # Ensure env vars are unset so we test true defaults
@@ -101,18 +116,33 @@ class TestAppFactory:
         app = create_app("development")
         assert app.config["DEBUG"] is True
 
-    def test_production_without_secret_key_raises(self):
+    def test_production_without_secret_key_raises(self, monkeypatch):
         """Production config without SECRET_KEY should raise ValueError."""
-        os.environ.pop("SECRET_KEY", None)
-        os.environ.pop("DATABASE_URL", None)
+        # Popping the env var has no effect: ProductionConfig.SECRET_KEY is bound
+        # when config.py is imported, and create_app reads the class attribute
+        # via app.config.from_object. CI exports SECRET_KEY, so this previously
+        # never raised and the check went untested.
+        #
+        # Patch the class create_app actually consults, reached through app's own
+        # `config` dict. app/__init__.py does `from config import config`, binding
+        # that dict at import; other tests here reload the config module, which
+        # rebinds config.ProductionConfig to a new object while app keeps the
+        # original — so patching config.ProductionConfig directly works in
+        # isolation but silently misses once the suite runs in order.
+        import app as app_module
+
+        monkeypatch.setattr(app_module.config["production"], "SECRET_KEY", "")
         from app import create_app
         with pytest.raises(ValueError, match="SECRET_KEY"):
             create_app("production")
 
-    def test_production_without_env_vars_raises(self):
+    def test_production_without_env_vars_raises(self, monkeypatch):
         """Production config without required env vars should raise ValueError."""
-        os.environ.pop("SECRET_KEY", None)
-        os.environ.pop("DATABASE_URL", None)
+        import app as app_module
+
+        prod = app_module.config["production"]
+        monkeypatch.setattr(prod, "SECRET_KEY", "")
+        monkeypatch.setattr(prod, "SQLALCHEMY_DATABASE_URI", "")
         from app import create_app
         with pytest.raises(ValueError):
             create_app("production")
