@@ -178,6 +178,9 @@ func (s *Scanner) parseStagedDiff(output string, result *SecretsResult) {
 		if finding == nil {
 			finding = checkAWSCredentials(currentFile, key, value, 0)
 		}
+		if finding == nil {
+			finding = checkAPIToken(currentFile, key, value, 0)
+		}
 		if finding != nil {
 			finding.Source = "staged"
 			result.Findings = append(result.Findings, *finding)
@@ -257,6 +260,12 @@ func (s *Scanner) scanEnvFile(filePath string, result *SecretsResult) {
 		}
 
 		finding = checkAWSCredentials(filePath, key, value, lineNum+1)
+		if finding != nil {
+			result.Findings = append(result.Findings, *finding)
+			continue
+		}
+
+		finding = checkAPIToken(filePath, key, value, lineNum+1)
 		if finding != nil {
 			result.Findings = append(result.Findings, *finding)
 		}

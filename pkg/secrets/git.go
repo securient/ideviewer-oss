@@ -122,6 +122,9 @@ func (s *Scanner) parseGitDiff(output, repoPath string, result *SecretsResult) {
 			finding = checkAWSCredentials(currentFile, key, value, 0)
 		}
 		if finding == nil {
+			finding = checkAPIToken(currentFile, key, value, 0)
+		}
+		if finding == nil {
 			continue
 		}
 
