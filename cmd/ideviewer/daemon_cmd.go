@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/securient/ideviewer-oss/internal/config"
 	"github.com/securient/ideviewer-oss/internal/platform"
@@ -36,6 +39,44 @@ func init() {
 	daemonCmd.Flags().String("log-file", "", "Log file path")
 	daemonCmd.Flags().String("pid-file", "", "PID file path")
 	daemonCmd.Flags().BoolP("foreground", "f", false, "Run in foreground (don't daemonize)")
+	daemonCmd.Flags().Bool("wait-for-config", true, "When no configuration exists, wait for 'ideviewer register' instead of exiting")
+}
+
+// configPollInterval is how often an unregistered daemon re-checks for a
+// configuration written by 'ideviewer register'.
+const configPollInterval = 30 * time.Second
+
+// waitForConfig blocks until a configuration becomes readable, returning nil if
+// interrupted first.
+//
+// Exiting when unregistered is not survivable under launchd: the LaunchAgent
+// sets KeepAlive with no ThrottleInterval, so the default 10-second floor
+// respawns the daemon ~8,600 times a day, each appending to an unrotated log in
+// /tmp (~70 MB/day). And that is not an error state — it is simply the normal
+// gap between installing the package and running 'ideviewer register'. Parking
+// in a single healthy process keeps launchd quiet and still picks the config up
+// promptly, while leaving genuine crashes to restart on the usual 10s floor.
+func waitForConfig(pollInterval time.Duration, load func() (*config.Config, error)) *config.Config {
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case s := <-sigCh:
+			// launchctl bootout sends SIGTERM and SIGKILLs shortly after, so
+			// return rather than block and let the caller's defers run.
+			log.Printf("Received %s while waiting for configuration.", s)
+			return nil
+		case <-ticker.C:
+			if cfg, err := load(); err == nil {
+				return cfg
+			}
+		}
+	}
 }
 
 func runDaemon(cmd *cobra.Command, args []string) error {
@@ -45,6 +86,7 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 	logFile, _ := cmd.Flags().GetString("log-file")
 	pidFile, _ := cmd.Flags().GetString("pid-file")
 	foreground, _ := cmd.Flags().GetBool("foreground")
+	waitForCfg, _ := cmd.Flags().GetBool("wait-for-config")
 
 	if pidFile == "" {
 		pidFile = platform.DefaultPIDFile()
@@ -52,6 +94,14 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 
 	// Setup logging.
 	setupDaemonLogging(logFile, !foreground)
+
+	// Create the PID file before resolving configuration so that a daemon
+	// parked waiting for registration is still visible to 'ideviewer stop',
+	// and so two instances cannot sit waiting at once.
+	if err := daemon.CreatePIDFile(pidFile); err != nil {
+		return fmt.Errorf("daemon already running: %w", err)
+	}
+	defer daemon.RemovePIDFile(pidFile)
 
 	var cfg *config.Config
 
@@ -88,7 +138,20 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 		var err error
 		cfg, err = config.Load()
 		if err != nil {
-			return fmt.Errorf("no configuration: %w\nRun 'ideviewer register' first", err)
+			if !waitForCfg {
+				return fmt.Errorf("no configuration: %w\nRun 'ideviewer register' first", err)
+			}
+			log.Printf("No configuration found: %v", err)
+			log.Printf("Waiting for registration (re-checking every %s). "+
+				"Run: ideviewer register --customer-key KEY --portal-url URL", configPollInterval)
+			colorYellow.Println("No configuration — waiting for 'ideviewer register' (Ctrl+C to exit)")
+
+			cfg = waitForConfig(configPollInterval, config.Load)
+			if cfg == nil {
+				log.Println("Interrupted before registration completed; exiting.")
+				return nil
+			}
+			log.Println("Configuration detected; starting daemon.")
 		}
 		colorDim.Printf("Using saved configuration (check-in interval: %d min)\n", cfg.ScanIntervalMinutes)
 	}
@@ -99,12 +162,6 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 	if cfg.ScanIntervalMinutes <= 0 {
 		cfg.ScanIntervalMinutes = 60
 	}
-
-	// Create PID file.
-	if err := daemon.CreatePIDFile(pidFile); err != nil {
-		return fmt.Errorf("daemon already running: %w", err)
-	}
-	defer daemon.RemovePIDFile(pidFile)
 
 	// Build scanner with all detectors.
 	ideScanner := scanner.New(allDetectors()...)
