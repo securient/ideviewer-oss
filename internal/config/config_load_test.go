@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -25,6 +26,12 @@ func writeSignedConfig(t *testing.T, path string, cfg *Config, mode os.FileMode)
 // while the daemon runs as the logged-in user, so the high-priority path stats
 // fine but reads EACCES. Load must fall through to the user config.
 func TestLoad_SkipsUnreadableCandidate(t *testing.T) {
+	// Windows does not honour POSIX permission bits, so os.Chmod(0000) leaves
+	// the file readable and there is nothing for Load to skip. The scenario is
+	// macOS-specific in any case (a root-owned config vs a user LaunchAgent).
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are not enforced on Windows")
+	}
 	if os.Geteuid() == 0 {
 		t.Skip("running as root: mode 0000 is still readable")
 	}
