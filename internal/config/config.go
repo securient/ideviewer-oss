@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -42,35 +43,85 @@ type Config struct {
 	Signature         string   `json:"signature,omitempty"`
 }
 
-// configPath returns the config file path, checking system dir first
-// (for launchd/systemd which run as root), then user dir.
-func configPath() string {
-	// System-level config (written during registration for the daemon service)
-	systemPath := filepath.Join(platform.SystemConfigDir(), "config.json")
-	if platform.PathExists(systemPath) {
-		return systemPath
+// configCandidates returns the config file paths in priority order: the
+// system dir first (written by the installer for the daemon service), then
+// the user dir, then the legacy Python location. Duplicates are dropped —
+// on macOS and Linux ConfigDir() is already ~/.ideviewer, so the legacy entry
+// collapses into the user one and only Windows yields three distinct paths.
+func configCandidates() []string {
+	paths := []string{
+		filepath.Join(platform.SystemConfigDir(), "config.json"),
+		filepath.Join(platform.ConfigDir(), "config.json"),
+		filepath.Join(platform.HomeDir(), ".ideviewer", "config.json"),
 	}
-	// User-level config
-	userPath := filepath.Join(platform.ConfigDir(), "config.json")
-	if platform.PathExists(userPath) {
-		return userPath
+
+	seen := make(map[string]bool, len(paths))
+	out := paths[:0:0]
+	for _, p := range paths {
+		if seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
 	}
-	// Legacy Python location
-	legacyPath := filepath.Join(platform.HomeDir(), ".ideviewer", "config.json")
-	if platform.PathExists(legacyPath) {
-		return legacyPath
-	}
-	return systemPath
+	return out
 }
 
-// Load reads and validates the config from disk.
+// configPath returns the first candidate path that exists, falling back to
+// the system path when none do so error messages name the canonical location.
+// Note this only stats: a path it returns may still be unreadable — Load does
+// not depend on it for that reason.
+func configPath() string {
+	candidates := configCandidates()
+	for _, p := range candidates {
+		if platform.PathExists(p) {
+			return p
+		}
+	}
+	return candidates[0]
+}
+
+// Load reads and validates the config from disk, trying each candidate path
+// in priority order.
+//
+// A candidate that cannot be read is skipped rather than treated as fatal: the
+// macOS .pkg installs the system config root-owned 0600 while the LaunchAgent
+// runs as the logged-in user, so stat-ing that path succeeds but reading it
+// returns EACCES. Failing there would mask a perfectly good user-level config
+// and crash-loop the daemon with EX_CONFIG.
+//
+// Malformed and signature-invalid configs are NOT skipped — those are hard
+// failures. Falling through on them would let anyone able to corrupt a
+// high-priority config silently downgrade the daemon to a lower-priority one.
 func Load() (*Config, error) {
-	path := configPath()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("config not found at %s: %w (run 'ideviewer register' first)", path, err)
+	return loadFrom(configCandidates())
+}
+
+// loadFrom implements Load against an explicit candidate list (see Load for
+// the fall-through rules). Split out so tests can supply temp paths.
+func loadFrom(candidates []string) (*Config, error) {
+	var readErrs []error
+
+	for _, path := range candidates {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			// Unreadable (missing, permission denied, I/O error) — try the next.
+			readErrs = append(readErrs, err)
+			continue
+		}
+		cfg, err := parseAndVerify(data)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", path, err)
+		}
+		return cfg, nil
 	}
 
+	return nil, fmt.Errorf("no readable config found (run 'ideviewer register' first): %w",
+		errors.Join(readErrs...))
+}
+
+// parseAndVerify unmarshals config JSON and checks its HMAC signature.
+func parseAndVerify(data []byte) (*Config, error) {
 	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
@@ -162,26 +213,7 @@ func LoadFromPath(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("config not found at %s: %w", path, err)
 	}
-
-	var cfg Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("invalid config: %w", err)
-	}
-
-	if cfg.Signature != "" {
-		sig := cfg.Signature
-		cfg.Signature = ""
-		expected, err := computeSignature(&cfg)
-		if err != nil {
-			return nil, fmt.Errorf("config verification failed: %w", err)
-		}
-		if !hmac.Equal([]byte(sig), []byte(expected)) {
-			return nil, fmt.Errorf("config signature invalid — file may have been tampered with")
-		}
-		cfg.Signature = sig
-	}
-
-	return &cfg, nil
+	return parseAndVerify(data)
 }
 
 // Path returns the config file path.
