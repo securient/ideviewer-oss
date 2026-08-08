@@ -96,30 +96,78 @@ cat > "$SCRIPTS_DIR/postinstall" << 'EOF'
 mkdir -p /var/log/ideviewer
 chmod 755 /var/log/ideviewer
 
-# Create system-level config directory (daemon runs as root via launchd,
-# so it needs config in a system path, not the user's home directory)
-mkdir -p "/Library/Application Support/IDEViewer"
-chmod 755 "/Library/Application Support/IDEViewer"
+# Create system-level config directory. Note the daemon does NOT run as root:
+# it's a LaunchAgent running as the logged-in user (it needs ~/.vscode/extensions,
+# ~/.claude/settings.json, ~/projects). The directory is world-readable so that
+# user can traverse it; the config file inside stays 0600.
+SYS_CONFIG_DIR="/Library/Application Support/IDEViewer"
+SYS_CONFIG="$SYS_CONFIG_DIR/config.json"
+mkdir -p "$SYS_CONFIG_DIR"
+chmod 755 "$SYS_CONFIG_DIR"
 
-# If the user already has a config (from a previous register), copy it to system path
-REAL_HOME=""
-if [ -n "$HOME" ] && [ "$HOME" != "/var/root" ]; then
-    REAL_HOME="$HOME"
-elif [ -n "$USER" ] && [ "$USER" != "root" ]; then
-    REAL_HOME=$(eval echo "~$USER")
-elif [ -n "$SUDO_USER" ]; then
-    REAL_HOME=$(eval echo "~$SUDO_USER")
+# Resolve the user the LaunchAgent will actually run as. /dev/console is the
+# reliable source during a GUI installer run (which executes as root, so $HOME
+# and $USER are root's); SUDO_USER/USER cover `sudo installer` from a terminal.
+REAL_USER=$(stat -f "%Su" /dev/console 2>/dev/null || true)
+if [ -z "$REAL_USER" ] || [ "$REAL_USER" = "root" ]; then
+    REAL_USER="${SUDO_USER:-}"
+fi
+if [ -z "$REAL_USER" ] || [ "$REAL_USER" = "root" ]; then
+    if [ -n "${USER:-}" ] && [ "$USER" != "root" ]; then
+        REAL_USER="$USER"
+    fi
 fi
 
+REAL_UID=""
+REAL_HOME=""
+if [ -n "$REAL_USER" ]; then
+    REAL_UID=$(id -u "$REAL_USER" 2>/dev/null || true)
+    REAL_HOME=$(dscl . -read "/Users/$REAL_USER" NFSHomeDirectory 2>/dev/null | awk '{print $2}')
+    if [ -z "$REAL_HOME" ]; then
+        REAL_HOME=$(eval echo "~$REAL_USER")
+    fi
+fi
+
+# If the user already has a config (from a previous register), copy it to the
+# system path. It MUST end up owned by the daemon's user: this script runs as
+# root, so a plain `cp` leaves a root-owned file that the LaunchAgent cannot
+# read. The daemon then stats it, gets EACCES on read, and crash-loops with
+# EX_CONFIG forever. Ownership (not a looser mode) is the right fix — the file
+# holds the customer key and host token, so 0600 stays.
 if [ -n "$REAL_HOME" ] && [ -f "$REAL_HOME/.ideviewer/config.json" ]; then
-    cp "$REAL_HOME/.ideviewer/config.json" "/Library/Application Support/IDEViewer/config.json"
-    chmod 600 "/Library/Application Support/IDEViewer/config.json"
-    echo "Copied existing config to system path"
+    cp "$REAL_HOME/.ideviewer/config.json" "$SYS_CONFIG"
+    chown "$REAL_USER" "$SYS_CONFIG"
+    chmod 600 "$SYS_CONFIG"
+    echo "Copied existing config to system path (owner: $REAL_USER, mode 0600)"
+elif [ -f "$SYS_CONFIG" ]; then
+    # Repair a config left root-owned by an earlier build of this installer.
+    if [ -n "$REAL_USER" ]; then
+        chown "$REAL_USER" "$SYS_CONFIG"
+        chmod 600 "$SYS_CONFIG"
+        echo "Repaired ownership of existing system config (owner: $REAL_USER)"
+    fi
 fi
 
 # Make executables accessible
 chmod +x /usr/local/bin/ideviewer
 chmod +x /usr/local/bin/ideviewer-uninstall
+
+# Load the LaunchAgent now. A plist dropped into /Library/LaunchAgents is only
+# picked up at the user's next login, so without this a fresh install reports
+# nothing until they log out and back in — and an upgrade is worse: preinstall
+# boots the old agent out, so the host goes silent until next login. Bootstrap
+# is not idempotent and fails if the label is already loaded, so bootout first
+# and ignore its failure on a clean install.
+AGENT_PLIST="/Library/LaunchAgents/com.ideviewer.daemon.plist"
+if [ -n "$REAL_UID" ]; then
+    launchctl bootout "gui/$REAL_UID/com.ideviewer.daemon" 2>/dev/null || true
+    if launchctl bootstrap "gui/$REAL_UID" "$AGENT_PLIST" 2>/dev/null; then
+        echo "Daemon started for user $REAL_USER"
+    else
+        echo "Could not start the daemon automatically; it will start at next login."
+        echo "To start it now:  launchctl bootstrap gui/$REAL_UID $AGENT_PLIST"
+    fi
+fi
 
 echo ""
 echo "============================================"
@@ -158,10 +206,25 @@ cat > "$SCRIPTS_DIR/preinstall" << 'EOF'
 #!/bin/bash
 # Pre-installation script
 
-# Stop existing daemon if running
-if launchctl list | grep -q "com.ideviewer.daemon"; then
-    echo "Stopping existing IDE Viewer daemon..."
-    sudo launchctl unload /Library/LaunchDaemons/com.ideviewer.daemon.plist 2>/dev/null || true
+# Stop the existing daemon if running. It's a LaunchAgent in the logged-in
+# user's GUI domain, not a LaunchDaemon in the system domain — this script runs
+# as root, so `launchctl list` here cannot see it and unloading a
+# /Library/LaunchDaemons path that never existed is a silent no-op. That's how a
+# replaced binary leaves an orphaned job crash-looping against the old plist.
+CONSOLE_USER=$(stat -f "%Su" /dev/console 2>/dev/null || true)
+if [ -z "$CONSOLE_USER" ] || [ "$CONSOLE_USER" = "root" ]; then
+    CONSOLE_USER="${SUDO_USER:-}"
+fi
+
+if [ -n "$CONSOLE_USER" ] && [ "$CONSOLE_USER" != "root" ]; then
+    CONSOLE_UID=$(id -u "$CONSOLE_USER" 2>/dev/null || true)
+    if [ -n "$CONSOLE_UID" ]; then
+        echo "Stopping existing IDE Viewer daemon (user: $CONSOLE_USER)..."
+        launchctl bootout "gui/$CONSOLE_UID/com.ideviewer.daemon" 2>/dev/null || true
+        # Pre-bootout systems (10.10 and earlier) still need the legacy verb.
+        launchctl asuser "$CONSOLE_UID" launchctl unload \
+            /Library/LaunchAgents/com.ideviewer.daemon.plist 2>/dev/null || true
+    fi
 fi
 
 # Remove old executable if exists

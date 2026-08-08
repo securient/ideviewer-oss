@@ -9,10 +9,8 @@
 #   docker-compose down           # Stop services
 #   docker-compose down -v        # Stop and remove volumes (reset DB)
 #
-# The portal will be available at http://localhost:8080
+# The portal will be available at http://localhost:8090
 # PostgreSQL will be available at localhost:5432
-
-version: '3.8'
 
 services:
   # PostgreSQL Database
@@ -80,14 +78,25 @@ services:
       REDIS_URL: redis://redis:6379/0
 
       # Portal settings
-      PORTAL_URL: http://localhost:${PORTAL_PORT:-8080}
+      PORTAL_URL: http://localhost:${PORTAL_PORT:-8090}
+
+      # Command signing (LOCAL DEV ONLY). Pointing at a file lets the portal
+      # generate an ed25519 key on first boot and persist it (0600) instead of
+      # requiring one up front — no key material lives in this repo. The
+      # instance_data volume keeps the key stable across restarts so daemons
+      # that pinned it stay valid. In a real deployment, provide the key
+      # explicitly via COMMAND_SIGNING_PRIVATE_KEY.
+      COMMAND_SIGNING_PRIVATE_KEY_FILE: /app/instance/command_signing.key
 
       # Google OAuth (optional - uncomment and fill in)
       # GOOGLE_CLIENT_ID: your-client-id.apps.googleusercontent.com
       # GOOGLE_CLIENT_SECRET: your-client-secret
+    volumes:
+      - instance_data:/app/instance
     ports:
-      # Override the host port from the CLI, e.g. PORTAL_PORT=8090 docker compose up
-      - "${PORTAL_PORT:-8080}:8080"
+      # Host port only — gunicorn always listens on 8080 inside the container.
+      # Override from the CLI, e.g. PORTAL_PORT=9000 docker compose up
+      - "${PORTAL_PORT:-8090}:8080"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/health')"]
       interval: 30s
@@ -120,10 +129,16 @@ services:
       REDIS_URL: redis://redis:6379/0
 
       # Portal settings
-      PORTAL_URL: http://localhost:${PORTAL_PORT:-8080}
+      PORTAL_URL: http://localhost:${PORTAL_PORT:-8090}
+
+      # Same signing key as the portal (shared volume) so anything signed here
+      # verifies against the key daemons pinned at registration.
+      COMMAND_SIGNING_PRIVATE_KEY_FILE: /app/instance/command_signing.key
 
       # Skip migrations — portal service handles them
       SKIP_DB_INIT: "1"
+    volumes:
+      - instance_data:/app/instance
     command: ["rq", "worker", "default", "--url", "redis://redis:6379/0"]
 
   # RQ scheduler (ticks the daily extension-metadata refresh)
@@ -144,9 +159,13 @@ services:
       ALLOW_INSECURE_SECRET_KEY: "1"  # LOCAL DEV ONLY
       DATABASE_URL: postgresql://ideviewer:ideviewer_dev_password@db:5432/ideviewer
       REDIS_URL: redis://redis:6379/0
-      PORTAL_URL: http://localhost:${PORTAL_PORT:-8080}
+      PORTAL_URL: http://localhost:${PORTAL_PORT:-8090}
+      COMMAND_SIGNING_PRIVATE_KEY_FILE: /app/instance/command_signing.key
       SKIP_DB_INIT: "1"
+    volumes:
+      - instance_data:/app/instance
     command: ["python", "run_scheduler.py"]
 
 volumes:
   postgres_data:
+  instance_data:
