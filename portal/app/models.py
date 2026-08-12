@@ -158,7 +158,10 @@ class Host(db.Model):
     # Server-side integrity monitoring (Phase 1 B2). A host whose daemon stops
     # heartbeating is "silent" — the server raises one alert on the ok->silent
     # transition (deduped via this state) and resets it when a heartbeat returns.
-    heartbeat_alarm_state = db.Column(db.String(16), default='ok')  # 'ok' | 'silent'
+    # 'ok' | 'silent'. NOT NULL to match the migration that created it — the
+    # dedupe logic treats this as a two-state machine and a NULL third state
+    # would silently suppress the ok->silent alert transition.
+    heartbeat_alarm_state = db.Column(db.String(16), default='ok', nullable=False)
     silent_since = db.Column(db.DateTime, nullable=True)
 
     # Composite risk score v2 (Phase 1 B8). Denormalized 0-100 score + level,
