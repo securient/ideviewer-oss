@@ -543,4 +543,30 @@ jobs:
 
             ## What's New
 
-            Daemon rewritten in Go for better performance. Single static binary, no runtime dependencies.
+            <!-- Update this section before tagging each release; the rest of the
+                 notes below are generated automatically from merged commits. -->
+
+            **Patch release. Recommended for anyone running the portal on PostgreSQL.**
+
+            - **Fixed: SBOM export returned a 500 on PostgreSQL.** CycloneDX
+              generation grouped by `extension_id` while selecting every column,
+              which SQLite tolerates and PostgreSQL rejects. Both the SBOM
+              download and the signed-attestation endpoint were affected on
+              docker-compose and AWS deployments.
+            - **Fixed: the default admin user was not created on a fresh
+              database the portal migrated itself.** Alembic's environment set
+              `SKIP_DB_INIT` mid-startup, causing the seed step to be skipped.
+              Container deployments were unaffected.
+            - **Fixed: duplicate uniqueness enforcement on `public_id`** in
+              `extension_policies`, `webhook_subscriptions` and
+              `remediation_playbooks`, where two indexes covered the same column
+              and one of them was not unique.
+            - **The portal now requires PostgreSQL.** The implicit SQLite
+              database is gone, along with the `create_all()` path that could
+              create schema outside of migrations. Boot-time migrations are
+              serialised with an advisory lock so concurrent workers cannot race.
+              `./start.sh` provisions PostgreSQL automatically.
+
+            > **Upgrading:** set `DATABASE_URL` to a PostgreSQL URL. Any install
+            > still using `portal/instance/ideviewer.db` must move its data to
+            > PostgreSQL before upgrading.
