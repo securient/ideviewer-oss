@@ -129,6 +129,8 @@ def portal_schema():
         _db.session.commit()
         upgrade(directory=_migrations_directory())
         _db.session.remove()
+        for engine in _db.engines.values():
+            engine.dispose()
 
     yield os.environ["TEST_DATABASE_URL"]
 
@@ -167,6 +169,13 @@ def portal_app(portal_schema):
             _db.session.rollback()
             _truncate_all(_db)
             _db.session.remove()
+            # A fresh app per test means a fresh engine per test. Dispose it,
+            # or every test leaves its connections behind and PostgreSQL starts
+            # refusing new clients partway through the run ("sorry, too many
+            # clients already"). TestingConfig also uses NullPool, so this is
+            # belt and braces.
+            for engine in _db.engines.values():
+                engine.dispose()
 
 
 @pytest.fixture

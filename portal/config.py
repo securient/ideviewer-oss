@@ -5,6 +5,8 @@ Configuration for IDE Viewer Portal.
 import os
 from datetime import timedelta
 
+from sqlalchemy.pool import NullPool
+
 
 def normalize_database_url(url: str) -> str:
     """Normalise a DATABASE_URL into a SQLAlchemy-usable form.
@@ -101,6 +103,13 @@ class TestingConfig(Config):
     SQLALCHEMY_DATABASE_URI = normalize_database_url(
         os.environ.get('TEST_DATABASE_URL') or ''
     )
+
+    # The suite builds a fresh app (and therefore a fresh engine) per test. A
+    # pooled engine would leave idle connections behind after each one and the
+    # server refuses new clients partway through the run. NullPool closes each
+    # connection on return, so concurrency is bounded by what a single test
+    # holds rather than by the number of tests.
+    SQLALCHEMY_ENGINE_OPTIONS = {'poolclass': NullPool}
 
 
 config = {

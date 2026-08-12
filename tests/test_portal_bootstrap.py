@@ -90,6 +90,8 @@ def test_fresh_database_bootstraps_schema_and_admin(scratch_dsn, monkeypatch):
         assert admins[0].must_change_password is True
 
         database.session.remove()
+        for engine in database.engines.values():
+            engine.dispose()
 
 
 def test_alembic_env_sets_skip_db_init(portal_app):
