@@ -37,7 +37,7 @@ ideviewer secrets       # Plaintext secrets
 ideviewer packages      # Installed packages + CVEs
 
 # Optional: connect to a portal for team visibility
-./start.sh              # Start portal locally (SQLite, zero config)
+./start.sh              # Start portal locally (auto-provisions PostgreSQL)
 ideviewer register --customer-key YOUR-KEY --portal-url http://localhost:5000
 ```
 

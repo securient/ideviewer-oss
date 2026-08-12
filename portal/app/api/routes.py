@@ -697,9 +697,9 @@ def submit_report():
             job_id = job.id
     elif os.environ.get('INLINE_VULN_SCAN', '1').lower() in ('1', 'true', 'yes'):
         if current_app.config.get('TESTING'):
-            # Under tests run synchronously: the suite uses an in-memory
-            # SQLite DB (per-connection) and tears it down right after the
-            # request, so a background thread would race the teardown.
+            # Under tests run synchronously: the suite truncates every table
+            # as soon as the test returns, so a background thread would race
+            # that teardown and write rows into the next test's database.
             try:
                 scan_host_vulnerabilities(host_id_for_vuln)
             except Exception as e:

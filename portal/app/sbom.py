@@ -56,8 +56,16 @@ def build_cyclonedx(host, serial=None, timestamp=None) -> dict:
         })
 
     # Extensions are first-class components too (type: application).
+    #
+    # This deliberately does not GROUP BY extension_id. Grouping by one column
+    # while selecting all of them is accepted by SQLite (which picks an
+    # arbitrary row per group) and rejected outright by PostgreSQL, so the
+    # query raised GroupingError on every Postgres deployment while passing
+    # tests that ran on SQLite. The dedupe below already enforces one component
+    # per extension_id; ordering makes which row wins deterministic instead of
+    # leaving it to the planner.
     exts = (ExtensionInfo.query.filter_by(host_id=host.id)
-            .group_by(ExtensionInfo.extension_id).all())
+            .order_by(ExtensionInfo.extension_id, ExtensionInfo.id.desc()).all())
     seen_ext = set()
     for e in exts:
         if e.extension_id in seen_ext:

@@ -3,6 +3,7 @@ IDE Viewer Portal - Flask Application Factory.
 """
 
 import os
+from contextlib import contextmanager
 from datetime import datetime
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
@@ -57,13 +58,11 @@ def create_app(config_name=None):
                 "SECRET_KEY (e.g. `openssl rand -base64 32`), or set "
                 "ALLOW_INSECURE_SECRET_KEY=1 for local/dev use only."
             )
-        if not app.config.get('SQLALCHEMY_DATABASE_URI'):
-            raise ValueError("DATABASE_URL environment variable is required in production")
+    # The portal runs on PostgreSQL in every environment. Validate before any
+    # extension binds an engine, so a misconfiguration fails at boot with an
+    # actionable message instead of surfacing later as a connection error.
+    _validate_database_uri(app)
 
-    # Ensure instance folder exists
-    instance_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'instance')
-    os.makedirs(instance_path, exist_ok=True)
-    
     # Trust proxy headers when behind ALB/nginx (required for CSRF, OAuth redirects)
     if config_name == 'production':
         from werkzeug.middleware.proxy_fix import ProxyFix
@@ -123,15 +122,31 @@ def create_app(config_name=None):
     app.config.setdefault('FLASK_CONFIG', config_name)
     init_json_logging(app)
     
+    # Snapshot both flags before touching the database.
+    #
+    # migrations/env.py sets SKIP_DB_INIT=1 in os.environ so that Alembic
+    # invoking the app factory doesn't recurse into schema setup. That module
+    # is imported by _init_database's upgrade() call, which means reading the
+    # variable a second time afterwards sees Alembic's value, not the
+    # operator's — and the default admin user was silently never created on any
+    # fresh database the app migrated itself. Docker masks it: entrypoint.sh
+    # migrates in a separate process and sets MIGRATIONS_DONE, so the factory
+    # never imports env.py.
+    skip_db_init = bool(os.environ.get('SKIP_DB_INIT'))
+    migrations_done = bool(os.environ.get('MIGRATIONS_DONE'))
+
     # Database initialization — skip during migration commands and when entrypoint already ran migrations
-    if not os.environ.get('SKIP_DB_INIT') and not os.environ.get('MIGRATIONS_DONE'):
+    if not skip_db_init and not migrations_done:
         with app.app_context():
             _init_database(db)
 
-    # Default user creation — runs once even after entrypoint migrations (only first worker)
-    if not os.environ.get('SKIP_DB_INIT'):
+    # Default user creation — runs even when the entrypoint already migrated.
+    # Shares the boot lock so concurrent workers can't race to insert the same
+    # admin account and trip the unique constraint on one of them.
+    if not skip_db_init:
         with app.app_context():
-            _create_default_user(db)
+            with _boot_lock(db):
+                _create_default_user(db)
     
     # Security response headers. Applied everywhere; HSTS only when we know
     # the portal is served over HTTPS (FORCE_HTTPS), so local http:// demos
@@ -177,26 +192,74 @@ def create_app(config_name=None):
     return app
 
 
+def _validate_database_uri(app):
+    """Reject anything that isn't a usable PostgreSQL URL."""
+    uri = app.config.get('SQLALCHEMY_DATABASE_URI') or ''
+
+    if not uri:
+        raise ValueError(
+            "DATABASE_URL is required — the portal runs on PostgreSQL. Set e.g. "
+            "DATABASE_URL=postgresql://ideviewer:PASSWORD@localhost:5432/ideviewer "
+            "(./start.sh provisions one for local development, and "
+            "docker-compose.yml provides one for --docker)."
+        )
+
+    if uri.startswith('sqlite'):
+        raise ValueError(
+            "SQLite is no longer supported — the portal runs on PostgreSQL only. "
+            "DATABASE_URL is set to a sqlite:// URL; check portal/.env for a "
+            "stale value left over from an older release."
+        )
+
+
+# Arbitrary but stable 64-bit key for the boot-time schema lock.
+_MIGRATION_LOCK_KEY = 0x1DE71E1E5C4E3A01 - (1 << 63)
+
+
+@contextmanager
+def _boot_lock(database):
+    """Serialise boot-time schema work across processes.
+
+    Gunicorn starts N workers concurrently and each one runs the app factory,
+    so without this every worker races to apply migrations and to create the
+    default admin user against the same database. A session-scoped Postgres
+    advisory lock means the first worker does the work and the rest block,
+    then find nothing left to do.
+
+    The lock is held on its own AUTOCOMMIT connection so it survives the
+    transactions that ``upgrade()`` opens and commits on other connections.
+    """
+    with database.engine.connect() as conn:
+        conn = conn.execution_options(isolation_level='AUTOCOMMIT')
+        conn.exec_driver_sql('SELECT pg_advisory_lock(%s)', (_MIGRATION_LOCK_KEY,))
+        try:
+            yield
+        finally:
+            conn.exec_driver_sql('SELECT pg_advisory_unlock(%s)', (_MIGRATION_LOCK_KEY,))
+
+
 def _init_database(database):
-    """Initialize the database — use migrations if available, otherwise create_all."""
-    try:
-        # Check if alembic_version table exists (migrations have been run before)
-        database.session.execute(database.text('SELECT 1 FROM alembic_version LIMIT 1'))
-        database.session.rollback()
-        # Migrations are tracked — run pending migrations
-        from flask_migrate import upgrade
-        upgrade()
-    except Exception:
-        database.session.rollback()
-        # First run — check if migrations directory exists
-        migrations_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'migrations', 'versions')
-        if os.path.isdir(migrations_dir) and os.listdir(migrations_dir):
-            # Migrations exist — run them from scratch
-            from flask_migrate import upgrade
-            upgrade()
-        else:
-            # No migrations — fallback to create_all (dev mode)
-            database.create_all()
+    """Bring the schema up to the migration head.
+
+    Alembic is the only path by which schema comes into existence. The old
+    create_all() fallback is gone: it could bring up a database that matched
+    the models but had no alembic_version row, leaving an install that no
+    future migration could safely touch.
+    """
+    from flask_migrate import upgrade
+
+    with _boot_lock(database):
+        upgrade(directory=_migrations_directory())
+
+
+def _migrations_directory():
+    """Absolute path to the Alembic directory.
+
+    Flask-Migrate resolves a relative directory against the working directory,
+    not the app package, so callers that don't happen to run from portal/ —
+    pytest, for one — need this spelled out.
+    """
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'migrations')
 
 
 

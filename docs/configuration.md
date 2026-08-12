@@ -10,7 +10,7 @@ nav_order: 2
 The portal is a self-hosted web dashboard for monitoring multiple developer machines. It's optional -- the CLI works standalone.
 
 ```bash
-./start.sh              # Local dev (SQLite, zero config)
+./start.sh              # Local dev (auto-provisions PostgreSQL)
 ./start.sh --docker     # Docker + PostgreSQL
 ./start.sh --aws        # Deploy to AWS (ECS + RDS + ALB)
 ```
@@ -21,12 +21,12 @@ Default login: `admin` / `ideviewer` (you will be prompted to change the passwor
 
 | Option | Description | URL | Database |
 |--------|-------------|-----|----------|
-| `(none)` | Local development | `http://localhost:5000` | SQLite |
+| `(none)` | Local development | `http://localhost:5000` | PostgreSQL (auto-provisioned) |
 | `--docker` | Docker Compose | `http://localhost:8080` | PostgreSQL |
 | `--aws` | AWS deployment wizard | Custom domain or ALB DNS | RDS PostgreSQL |
 | `--help` | Show usage information | -- | -- |
 
-The local mode automatically creates a Python virtual environment, installs dependencies, generates a `.env` file with a random `SECRET_KEY`, runs database migrations, and starts the Flask server.
+The local mode automatically creates a Python virtual environment, installs dependencies, generates a `.env` file with a random `SECRET_KEY`, provisions PostgreSQL, runs database migrations, and starts the Flask server.
 
 ## Environment Variables
 
@@ -35,7 +35,7 @@ Set these in `portal/.env` (local) or via your deployment platform:
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `SECRET_KEY` | Yes (prod) | Auto-generated | Flask secret key for session signing |
-| `DATABASE_URL` | Yes (prod) | SQLite | PostgreSQL connection string |
+| `DATABASE_URL` | Yes | -- | PostgreSQL connection string. `./start.sh` sets this for you; there is no fallback if unset |
 | `FLASK_CONFIG` | No | `development` | `development`, `production`, or `testing` |
 | `PORTAL_URL` | No | `http://localhost:5000` | Public URL (used for OAuth redirects) |
 | `GOOGLE_CLIENT_ID` | No | -- | Google OAuth client ID |
@@ -93,11 +93,27 @@ The Google login button appears automatically when both variables are set. If th
 
 ## Database Options
 
-### SQLite (Development)
+The portal runs on PostgreSQL in every environment. There is deliberately no
+SQLite fallback: running development on a different engine from production is
+how schema problems go unnoticed, and SQLite silently ignores foreign-key
+constraints entirely.
 
-No configuration needed. The database file is created at `portal/instance/ideviewer.db` on first run.
+### Development
 
-### PostgreSQL (Production)
+`./start.sh` reuses a PostgreSQL server already listening on `:5432`, or starts
+a `postgres:15-alpine` container named `ideviewer-postgres` backed by a
+persistent volume, then points the portal at it. Nothing to configure.
+
+To use your own server instead, set `DATABASE_URL` in `portal/.env`:
+
+```bash
+DATABASE_URL=postgresql://ideviewer:password@localhost:5432/ideviewer
+```
+
+Connection settings for the provisioned container can be overridden with
+`DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD`.
+
+### Production
 
 ```bash
 export DATABASE_URL="postgresql://user:password@host:5432/ideviewer"
