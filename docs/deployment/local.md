@@ -6,12 +6,13 @@ parent: Deployment
 
 # Local Development
 
-The simplest way to run the portal. Uses SQLite and requires no external services.
+The simplest way to run the portal. Provisions PostgreSQL automatically via Docker, or reuses a server you already have on `:5432`.
 
 ## Prerequisites
 
 - Python 3.10+
 - Git
+- Docker (only if you don't already have PostgreSQL on `:5432`)
 
 ## One-Command Start
 
@@ -25,7 +26,7 @@ This automatically:
 2. Creates a virtual environment in `portal/venv`
 3. Installs dependencies from `portal/requirements.txt`
 4. Generates `portal/.env` with a random `SECRET_KEY`
-5. Runs database migrations (creates SQLite database)
+5. Provisions PostgreSQL (reuses `:5432`, else starts the `ideviewer-postgres` container) and runs database migrations
 6. Starts the Flask server on `http://localhost:5000`
 
 The background job queue is auto-detected: if Redis is reachable (or Docker is available to start a local Redis instance), vulnerability scans run on an RQ worker. Otherwise, the portal runs scans synchronously inline — no configuration required.
@@ -60,11 +61,19 @@ The customer key is a UUID created in the portal's admin interface. The daemon s
 
 ## Database
 
-The SQLite database is stored at `portal/instance/ideviewer.db`. To reset:
+Local development uses PostgreSQL. When `./start.sh` provisions it, data
+lives in the `ideviewer_pgdata` Docker volume and survives restarts — stopping
+the portal with Ctrl+C leaves the database running.
 
 ```bash
-rm portal/instance/ideviewer.db
-flask db upgrade
+docker stop ideviewer-postgres     # stop the database
+```
+
+To reset it completely:
+
+```bash
+docker rm -f ideviewer-postgres
+docker volume rm ideviewer_pgdata
 ```
 
 ## When to Use

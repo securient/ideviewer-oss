@@ -83,11 +83,13 @@ jobs:
 
       - name: Run pytest
         env:
+          # conftest.py derives a throwaway '<name>_test' database from this and
+          # migrates it with the real Alembic chain, so the suite exercises both
+          # the engine we ship and the migrations. It also owns SKIP_DB_INIT and
+          # FLASK_CONFIG — don't set them here.
           DATABASE_URL: postgresql://test:test@localhost:5432/test
           REDIS_URL: redis://localhost:6379/0
           SECRET_KEY: ci-test-key
-          FLASK_CONFIG: testing
-          SKIP_DB_INIT: '1'
           PYTHONPATH: portal
         run: pytest tests/ -v
 

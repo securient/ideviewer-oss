@@ -72,14 +72,14 @@ The portal is a self-hosted web dashboard for monitoring multiple developer mach
 ### One-Command Start
 
 ```bash
-./start.sh              # Local dev (SQLite, zero config)
+./start.sh              # Local dev (auto-provisions PostgreSQL)
 ./start.sh --docker     # Docker + PostgreSQL
 ./start.sh --aws        # Deploy to AWS (ECS + RDS + ALB)
 ```
 
 Default login (via `./start.sh` or `./start.sh --docker`): `admin` / `ideviewer` — you'll be prompted to change it on first login. When running the portal container directly without setting `IDEVIEWER_ADMIN_PASSWORD`, a strong initial password is generated and printed to the startup logs instead.
 
-> **Portal URL / port:** `./start.sh` (local SQLite) serves on **http://localhost:5000**; `./start.sh --docker` serves on **http://localhost:8080**. Use the matching URL below.
+> **Portal URL / port:** `./start.sh` (local) serves on **http://localhost:5000**; `./start.sh --docker` serves on **http://localhost:8080**. Use the matching URL below. Both run on PostgreSQL.
 
 ### Connect a Daemon
 
@@ -88,7 +88,7 @@ First log in to the portal and create a customer key (Keys → Create), then:
 ```bash
 ideviewer register \
   --customer-key YOUR-KEY \
-  --portal-url http://localhost:8080   # use :5000 for ./start.sh (local SQLite)
+  --portal-url http://localhost:8080   # use :5000 for ./start.sh (local)
 ```
 
 The daemon starts automatically after registration and runs continuously in the background.

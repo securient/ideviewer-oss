@@ -20,13 +20,17 @@ class TestDevelopmentConfig:
         assert cfg.SECRET_KEY is not None
         assert len(cfg.SECRET_KEY) > 0
 
-    def test_default_database_uri(self):
+    def test_unset_database_url_has_no_fallback(self):
         # config.py binds SQLALCHEMY_DATABASE_URI at class-definition time, so
         # the value depends on the environment present when the module was
         # first imported. CI exports DATABASE_URL for the postgres service,
         # which meant this asserted against the ambient env rather than the
         # documented default. Reload with the var removed, then restore both
         # the env and the module so later tests see the real environment.
+        #
+        # The portal is PostgreSQL-only: an unset DATABASE_URL must yield an
+        # empty URI so create_app raises, never a local file database on a
+        # different engine.
         import importlib
         import config as config_module
 
@@ -34,11 +38,18 @@ class TestDevelopmentConfig:
         try:
             importlib.reload(config_module)
             cfg = config_module.DevelopmentConfig()
-            assert "sqlite" in cfg.SQLALCHEMY_DATABASE_URI
+            assert cfg.SQLALCHEMY_DATABASE_URI == ""
         finally:
             if saved is not None:
                 os.environ["DATABASE_URL"] = saved
             importlib.reload(config_module)
+
+    def test_postgres_scheme_is_normalized(self):
+        from config import normalize_database_url
+
+        assert normalize_database_url("postgres://u:p@h:5432/d") == "postgresql://u:p@h:5432/d"
+        assert normalize_database_url("postgresql://u:p@h:5432/d") == "postgresql://u:p@h:5432/d"
+        assert normalize_database_url("") == ""
 
     def test_google_oauth_disabled_by_default(self, monkeypatch):
         # Ensure env vars are unset so we test true defaults
@@ -85,11 +96,42 @@ class TestProductionConfig:
 class TestTestingConfig:
     """Test TestingConfig."""
 
-    def test_testing_flag(self):
-        from config import TestingConfig
-        cfg = TestingConfig()
+    def test_testing_flag(self, portal_schema):
+        # portal_schema exports TEST_DATABASE_URL; reload so the class picks it
+        # up, since config binds the URI at import time.
+        import importlib
+        import config as config_module
+
+        importlib.reload(config_module)
+        cfg = config_module.TestingConfig()
         assert cfg.TESTING is True
-        assert cfg.SQLALCHEMY_DATABASE_URI == "sqlite:///:memory:"
+        assert cfg.SQLALCHEMY_DATABASE_URI.startswith("postgresql://")
+
+    def test_testing_never_falls_back_to_database_url(self):
+        # DATABASE_URL points at the real portal database. TestingConfig must
+        # not inherit it — the suite truncates tables between tests.
+        #
+        # Restore the environment before reloading in the finally block:
+        # monkeypatch undoes its changes only after the test returns, so a
+        # reload there would rebind config against the patched environment and
+        # leak an empty URI into every later test.
+        import importlib
+        import config as config_module
+
+        saved_db = os.environ.get("DATABASE_URL")
+        saved_test = os.environ.pop("TEST_DATABASE_URL", None)
+        os.environ["DATABASE_URL"] = "postgresql://u:p@h:5432/production_data"
+        try:
+            importlib.reload(config_module)
+            assert config_module.TestingConfig().SQLALCHEMY_DATABASE_URI == ""
+        finally:
+            if saved_db is None:
+                os.environ.pop("DATABASE_URL", None)
+            else:
+                os.environ["DATABASE_URL"] = saved_db
+            if saved_test is not None:
+                os.environ["TEST_DATABASE_URL"] = saved_test
+            importlib.reload(config_module)
 
 
 class TestConfigDict:

@@ -3,7 +3,7 @@
 # IDEViewer Portal — Quick Start
 #
 # Usage:
-#   ./start.sh              Local development (SQLite, auto-configured)
+#   ./start.sh              Local development (PostgreSQL, auto-provisioned)
 #   ./start.sh --docker     Local with Docker + PostgreSQL
 #   ./start.sh --aws        Deploy to AWS ECS
 #   ./start.sh --help       Show this help
@@ -22,6 +22,57 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 DIM='\033[2m'
 NC='\033[0m'
+
+# PostgreSQL connection settings for local development. Defaults match
+# portal/docker-compose.yml so the two paths are interchangeable.
+DB_HOST="${DB_HOST:-127.0.0.1}"
+DB_PORT="${DB_PORT:-5432}"
+DB_NAME="${DB_NAME:-ideviewer}"
+DB_USER="${DB_USER:-ideviewer}"
+DB_PASSWORD="${DB_PASSWORD:-ideviewer_dev_password}"
+PG_CONTAINER="ideviewer-postgres"
+
+# ─────────────────────────────────────────────
+# PostgreSQL provisioning (local development)
+# ─────────────────────────────────────────────
+# Reuses whatever is already listening, else starts a container. The container
+# is intentionally left running with a named volume: unlike the Redis cache,
+# this holds your development data and should survive a Ctrl+C.
+ensure_postgres() {
+    if command -v nc &>/dev/null && nc -z "$DB_HOST" "$DB_PORT" 2>/dev/null; then
+        echo -e "${GREEN}PostgreSQL detected on ${DB_HOST}:${DB_PORT}${NC}"
+        return 0
+    fi
+
+    if ! command -v docker &>/dev/null || ! docker info &>/dev/null; then
+        return 1
+    fi
+
+    if docker ps -a --format '{{.Names}}' | grep -qx "$PG_CONTAINER"; then
+        echo -e "${CYAN}Starting existing PostgreSQL container (${PG_CONTAINER})...${NC}"
+        docker start "$PG_CONTAINER" &>/dev/null || return 1
+    else
+        echo -e "${CYAN}Starting PostgreSQL 15 container (${PG_CONTAINER})...${NC}"
+        docker run -d --name "$PG_CONTAINER" \
+            -e POSTGRES_USER="$DB_USER" \
+            -e POSTGRES_PASSWORD="$DB_PASSWORD" \
+            -e POSTGRES_DB="$DB_NAME" \
+            -p "${DB_PORT}:5432" \
+            -v ideviewer_pgdata:/var/lib/postgresql/data \
+            postgres:15-alpine &>/dev/null || return 1
+    fi
+
+    for _ in $(seq 1 30); do
+        if docker exec "$PG_CONTAINER" pg_isready -U "$DB_USER" -q 2>/dev/null; then
+            echo -e "${GREEN}PostgreSQL ready on ${DB_HOST}:${DB_PORT}${NC}"
+            return 0
+        fi
+        sleep 1
+    done
+
+    echo -e "${YELLOW}PostgreSQL container did not become ready in time${NC}"
+    return 1
+}
 
 # ─────────────────────────────────────────────
 # Local development
@@ -65,9 +116,11 @@ cmd_local() {
 # Flask secret key (auto-generated, do not share)
 SECRET_KEY=$SECRET_KEY
 
-# Database (default: SQLite in portal/instance/)
-# For PostgreSQL: DATABASE_URL=postgresql://user:pass@localhost:5432/ideviewer
-# DATABASE_URL=
+# Database — PostgreSQL is required; there is no SQLite fallback.
+# Leave this unset and start.sh provisions a local PostgreSQL 15 container
+# (ideviewer-postgres) and points the portal at it. Set it to use your own
+# server instead.
+# DATABASE_URL=postgresql://ideviewer:ideviewer_dev_password@localhost:5432/ideviewer
 
 # Google OAuth (optional)
 # 1. Go to https://console.cloud.google.com/apis/credentials
@@ -103,6 +156,26 @@ EOF
     source "$ENV_FILE" 2>/dev/null
     set +a
     set -e
+
+    # Step 5.5: PostgreSQL. The portal is PostgreSQL-only — running dev on a
+    # different engine from production is how the schema drifted in the first
+    # place (SQLite silently ignores foreign keys, so none were ever enforced).
+    # An existing DATABASE_URL always wins; otherwise provision a container.
+    if [ -z "${DATABASE_URL:-}" ]; then
+        if ! ensure_postgres; then
+            echo -e "${RED}Error: PostgreSQL is required and could not be started.${NC}"
+            echo ""
+            echo "  Either start Docker Desktop and re-run ./start.sh, or point the"
+            echo "  portal at your own server by setting DATABASE_URL in portal/.env:"
+            echo ""
+            echo -e "    ${DIM}DATABASE_URL=postgresql://user:pass@host:5432/ideviewer${NC}"
+            echo ""
+            exit 1
+        fi
+        export DATABASE_URL="postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}"
+    else
+        echo -e "${GREEN}Using DATABASE_URL from configuration${NC}"
+    fi
 
     # Step 6: Run migrations
     echo -e "${CYAN}Running database migrations...${NC}"
@@ -154,9 +227,11 @@ EOF
     echo -e "  URL:      ${CYAN}http://localhost:5000${NC}"
     echo -e "  Login:    ${CYAN}admin${NC} / ${CYAN}ideviewer${NC}"
     echo -e "  Config:   ${DIM}portal/.env${NC}"
-    echo -e "  Database: ${DIM}portal/instance/ideviewer.db${NC}"
+    echo -e "  Database: ${DIM}PostgreSQL ${DB_USER}@${DB_HOST}:${DB_PORT}/${DB_NAME}${NC}"
     echo ""
-    echo -e "  ${DIM}Press Ctrl+C to stop${NC}"
+    echo -e "  ${DIM}Press Ctrl+C to stop the portal (PostgreSQL keeps running)${NC}"
+    echo -e "  ${DIM}Stop the database: docker stop ${PG_CONTAINER}${NC}"
+    echo -e "  ${DIM}Reset the database: docker rm -f ${PG_CONTAINER} && docker volume rm ideviewer_pgdata${NC}"
     echo ""
 
     flask run --host 0.0.0.0 --port 5000
@@ -369,14 +444,16 @@ cmd_help() {
     echo "Usage: ./start.sh [option]"
     echo ""
     echo "Options:"
-    echo "  (none)      Start locally (SQLite, auto-configured)"
+    echo "  (none)      Start locally (PostgreSQL, auto-provisioned)"
     echo "  --docker    Start with Docker + PostgreSQL"
     echo "  --aws       Deploy to AWS (ECS Fargate + RDS)"
     echo "  --help      Show this help"
     echo ""
     echo "Local development:"
     echo "  Runs on http://localhost:5000"
-    echo "  Uses SQLite (zero config)"
+    echo "  Uses PostgreSQL 15 — reuses a server already on :5432, or starts"
+    echo "    a container (ideviewer-postgres) with a persistent volume"
+    echo "  Set DATABASE_URL in portal/.env to use your own server"
     echo "  Auto-generates SECRET_KEY"
     echo "  Default login: admin / ideviewer"
     echo ""
