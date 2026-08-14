@@ -309,7 +309,7 @@ def upgrade():
     sa.Column('host_id', sa.Integer(), nullable=False),
     sa.Column('customer_key_id', sa.Integer(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
-    sa.Column('scan_data', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+    sa.Column('scan_data', postgresql.JSONB(astext_type=sa.Text()), nullable=True),
     sa.Column('total_ides', sa.Integer(), server_default='0', nullable=True),
     sa.Column('total_extensions', sa.Integer(), server_default='0', nullable=True),
     sa.Column('dangerous_extensions', sa.Integer(), server_default='0', nullable=True),
@@ -610,6 +610,8 @@ def upgrade():
         FOR EACH ROW EXECUTE FUNCTION ideviewer_touch_updated_at();
     """)
     # ### end Alembic commands ###
+    # ### end Alembic commands ###
+
 
 
 def downgrade():

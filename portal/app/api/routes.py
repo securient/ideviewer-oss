@@ -15,7 +15,7 @@ import traceback
 import logging
 
 from app import db
-from app.models import CustomerKey, Host, ScanReport, ExtensionInfo, SecretFinding, PackageInfo, ScanRequest, TamperAlert, Vulnerability, HookBypass, AIToolInfo, EnforcementAction, utcnow
+from app.models import CustomerKey, Host, ScanReport, ExtensionInfo, SecretFinding, PackageInfo, ScanRequest, TamperAlert, Vulnerability, HookBypass, AIToolInfo, EnforcementAction, utcnow, prune_host_scan_data
 from app.main.routes import calculate_risk_level
 from app.events import emit_event
 from app.signing import sign_envelope, public_key_info
@@ -503,6 +503,9 @@ def submit_report():
     )
     db.session.add(report)
     db.session.flush()  # Get report.id for foreign keys
+
+    # Retain the raw payload only for this, the newest report.
+    prune_host_scan_data(host.id, report.id)
     
     # Process secrets findings
     secrets_data = scan_data.get('secrets', {})

@@ -323,8 +323,14 @@ class ScanReport(db.Model):
     customer_key_id = db.Column(db.Integer, nullable=False, index=True)
     created_at = db.Column(db.DateTime(timezone=True), default=utcnow, server_default=db.func.now(), index=True)
     
-    # Store the full scan data as JSON
-    scan_data = db.Column(JSONB, nullable=False)
+    # The full raw payload, retained only for the newest report per host.
+    #
+    # These blobs dominate the database: 193 reports from a single laptop were
+    # 227 MB, ~1.2 MB each, and they are fully derivable from the normalised
+    # child rows they populate. Older reports keep their summary counts and have
+    # this pruned to NULL, so growth is bounded by host count rather than by
+    # host count multiplied by scan frequency. See prune_host_scan_data().
+    scan_data = db.Column(JSONB, nullable=True)
     
     # Summary fields for quick queries
     total_ides = db.Column(db.Integer, default=0, server_default='0')
@@ -345,6 +351,23 @@ class ScanReport(db.Model):
 
     def __repr__(self):
         return f'<ScanReport {self.id} for Host {self.host_id}>'
+
+
+def prune_host_scan_data(host_id, keep_report_id):
+    """Drop raw payloads for a host's older reports, keeping the newest.
+
+    Returns the number of reports pruned. Summary columns are untouched, so
+    history and trends survive; only the redundant blob goes.
+    """
+    return (
+        ScanReport.query
+        .filter(
+            ScanReport.host_id == host_id,
+            ScanReport.id != keep_report_id,
+            ScanReport.scan_data.isnot(None),
+        )
+        .update({'scan_data': None}, synchronize_session=False)
+    )
 
 
 class ExtensionInfo(db.Model):
