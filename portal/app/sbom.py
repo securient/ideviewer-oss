@@ -31,9 +31,9 @@ def _purl(manager, name, version):
 
 def build_cyclonedx(host, serial=None, timestamp=None) -> dict:
     """Build a CycloneDX 1.5 SBOM document for one host."""
-    from app.models import PackageInfo, ExtensionInfo, Vulnerability
+    from app.models import PackageInfo, ExtensionInfo, Vulnerability, utcnow
 
-    timestamp = timestamp or datetime.utcnow()
+    timestamp = timestamp or utcnow()
     serial = serial or f"urn:uuid:{uuid.uuid4()}"
 
     components = []

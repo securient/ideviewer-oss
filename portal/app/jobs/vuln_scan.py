@@ -30,7 +30,7 @@ def scan_host_vulnerabilities(host_id: int) -> Dict[str, Any]:
     from flask import has_app_context
 
     from app import db
-    from app.models import Host
+    from app.models import Host, utcnow
 
     if has_app_context():
         return _run(host_id, db, Host)
@@ -70,6 +70,7 @@ def _scan_impl(host, db) -> int:
     Idempotent: existing vulnerabilities are refreshed; missing ones are
     marked resolved. Safe to call repeatedly with the same DB state.
     """
+    from app.models import utcnow
     from app.models import PackageInfo, Vulnerability
     from app.osv_client import get_ecosystem, query_packages_batch
 
@@ -123,7 +124,7 @@ def _scan_impl(host, db) -> int:
             ).first()
 
             if existing:
-                existing.last_seen_at = datetime.utcnow()
+                existing.last_seen_at = utcnow()
                 existing.is_resolved = False
                 existing.package_info_id = pkg.id
             else:

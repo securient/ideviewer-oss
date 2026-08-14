@@ -3,11 +3,68 @@ Database models for IDE Viewer Portal.
 """
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
+
+from sqlalchemy.dialects.postgresql import JSONB
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_login import UserMixin
 
 from app import db
+
+
+def utcnow():
+    """Timezone-aware UTC now.
+
+    Every DateTime column is ``timestamptz``. Writing a naive datetime into one
+    makes PostgreSQL interpret it in the server's timezone, which silently
+    corrupts an audit trail and any cross-fleet incident timeline. Use this
+    rather than utcnow(), which returns a naive value.
+    """
+    return datetime.now(timezone.utc)
+
+
+def tz_now_default():
+    """Column defaults: Python-side aware value plus a database-side default.
+
+    The server_default matters for any INSERT that does not go through the ORM
+    — migrations, bulk loads, psql, a future non-Python writer.
+    """
+    return dict(default=utcnow, server_default=db.func.now())
+
+# ──────────────────────────────────────────────────────────────────
+# Shared vocabularies and constraint helpers
+# ──────────────────────────────────────────────────────────────────
+# The valid values live here in Python and are pushed into the database as
+# CHECK constraints. Before this, every one of these columns was free text: the
+# VALID_* tuples were advisory only, so a typo in a status or mode was storable
+# and would then decide whether an extension got quarantined.
+
+RISK_LEVELS = ('low', 'medium', 'high', 'critical')
+SEVERITY_LEVELS = ('low', 'medium', 'high', 'critical')
+
+
+def one_of(column, values, name):
+    """CHECK constraining ``column`` to ``values``.
+
+    NULL is always permitted; nullability is expressed by the column itself so
+    the two concerns stay independent.
+    """
+    rendered = ', '.join(f"'{v}'" for v in values)
+    return db.CheckConstraint(
+        f'{column} IS NULL OR {column} IN ({rendered})', name=name
+    )
+
+
+def bounded(column, name, *, minimum=None, maximum=None):
+    """CHECK constraining a numeric column to a range."""
+    parts = []
+    if minimum is not None:
+        parts.append(f'{column} >= {minimum}')
+    if maximum is not None:
+        parts.append(f'{column} <= {maximum}')
+    body = ' AND '.join(parts)
+    return db.CheckConstraint(f'{column} IS NULL OR ({body})', name=name)
+
 
 
 class User(UserMixin, db.Model):
@@ -19,10 +76,10 @@ class User(UserMixin, db.Model):
     email = db.Column(db.String(120), unique=True, nullable=False, index=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
     password_hash = db.Column(db.String(256), nullable=True)  # Nullable for OAuth users
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    is_active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime(timezone=True), default=utcnow, server_default=db.func.now())
+    is_active = db.Column(db.Boolean, default=True, server_default=db.true())
     
-    must_change_password = db.Column(db.Boolean, default=False)  # Force password change on first login
+    must_change_password = db.Column(db.Boolean, default=False, server_default=db.false())  # Force password change on first login
 
     # Role-based access control (Phase 1 B9). admin = full control, analyst =
     # operate (resolve/ack/enforce) but not destructive admin, viewer =
@@ -31,7 +88,7 @@ class User(UserMixin, db.Model):
     ROLE_ANALYST = 'analyst'
     ROLE_VIEWER = 'viewer'
     VALID_ROLES = (ROLE_ADMIN, ROLE_ANALYST, ROLE_VIEWER)
-    role = db.Column(db.String(20), default='admin', nullable=False)
+    role = db.Column(db.String(20), default='admin', server_default='admin', nullable=False)
 
     # OAuth fields
     oauth_provider = db.Column(db.String(50))  # 'google', 'github', etc.
@@ -39,7 +96,11 @@ class User(UserMixin, db.Model):
     avatar_url = db.Column(db.String(500))  # Profile picture URL
 
     # Relationships
-    customer_keys = db.relationship('CustomerKey', backref='owner', lazy='dynamic')
+    customer_keys = db.relationship('CustomerKey', backref='owner', lazy='dynamic', passive_deletes=True)
+
+    __table_args__ = (
+        one_of('role', VALID_ROLES, 'ck_users_role'),
+    )
 
     def has_role(self, *roles) -> bool:
         return (self.role or 'admin') in roles
@@ -114,13 +175,17 @@ class CustomerKey(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     key = db.Column(db.String(36), unique=True, nullable=False, index=True)
     name = db.Column(db.String(100), nullable=False)  # Friendly name for the key
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    last_used_at = db.Column(db.DateTime)
-    is_active = db.Column(db.Boolean, default=True)
+    user_id = db.Column(
+        db.Integer,
+        db.ForeignKey('users.id', ondelete='RESTRICT'),
+        nullable=False,
+    )
+    created_at = db.Column(db.DateTime(timezone=True), default=utcnow, server_default=db.func.now())
+    last_used_at = db.Column(db.DateTime(timezone=True))
+    is_active = db.Column(db.Boolean, default=True, server_default=db.true())
 
     # Relationships
-    hosts = db.relationship('Host', backref='customer_key', lazy='dynamic')
+    hosts = db.relationship('Host', backref='customer_key', lazy='dynamic', passive_deletes=True)
     
     @staticmethod
     def generate_key():
@@ -147,13 +212,13 @@ class Host(db.Model):
     hostname = db.Column(db.String(255), nullable=False)
     ip_address = db.Column(db.String(45))  # IPv6 compatible
     platform = db.Column(db.String(100))
-    customer_key_id = db.Column(db.Integer, db.ForeignKey('customer_keys.id'), nullable=False)
-    first_seen_at = db.Column(db.DateTime, default=datetime.utcnow)
-    last_seen_at = db.Column(db.DateTime, default=datetime.utcnow)
-    last_heartbeat_at = db.Column(db.DateTime)  # Last heartbeat from daemon
+    customer_key_id = db.Column(db.Integer, db.ForeignKey('customer_keys.id', ondelete='CASCADE'), nullable=False)
+    first_seen_at = db.Column(db.DateTime(timezone=True), default=utcnow, server_default=db.func.now())
+    last_seen_at = db.Column(db.DateTime(timezone=True), default=utcnow, server_default=db.func.now())
+    last_heartbeat_at = db.Column(db.DateTime(timezone=True))  # Last heartbeat from daemon
     daemon_version = db.Column(db.String(50))  # Daemon version
-    is_active = db.Column(db.Boolean, default=True)
-    last_realtime_event = db.Column(db.DateTime)  # Last real-time filesystem change event
+    is_active = db.Column(db.Boolean, default=True, server_default=db.true())
+    last_realtime_event = db.Column(db.DateTime(timezone=True))  # Last real-time filesystem change event
 
     # Server-side integrity monitoring (Phase 1 B2). A host whose daemon stops
     # heartbeating is "silent" — the server raises one alert on the ok->silent
@@ -161,8 +226,8 @@ class Host(db.Model):
     # 'ok' | 'silent'. NOT NULL to match the migration that created it — the
     # dedupe logic treats this as a two-state machine and a NULL third state
     # would silently suppress the ok->silent alert transition.
-    heartbeat_alarm_state = db.Column(db.String(16), default='ok', nullable=False)
-    silent_since = db.Column(db.DateTime, nullable=True)
+    heartbeat_alarm_state = db.Column(db.String(16), default='ok', server_default='ok', nullable=False)
+    silent_since = db.Column(db.DateTime(timezone=True), nullable=True)
 
     # Composite risk score v2 (Phase 1 B8). Denormalized 0-100 score + level,
     # recomputed from current state on each scan-report ingestion. See
@@ -173,16 +238,22 @@ class Host(db.Model):
     # Per-host enrollment token (T1.3). Only the sha256 hex digest is stored;
     # plaintext is returned exactly once at issue time.
     token_hash = db.Column(db.String(64), nullable=True, index=True)
-    token_issued_at = db.Column(db.DateTime, nullable=True)
-    token_revoked_at = db.Column(db.DateTime, nullable=True)
+    token_issued_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    token_revoked_at = db.Column(db.DateTime(timezone=True), nullable=True)
 
-    # Unique constraint on hostname + customer_key
     __table_args__ = (
         db.UniqueConstraint('hostname', 'customer_key_id', name='unique_host_per_key'),
+        # Target for the composite (customer_key_id, host_id) foreign keys that
+        # child tables use to make a cross-tenant row impossible to insert.
+        db.UniqueConstraint('customer_key_id', 'id', name='uq_hosts_tenant_id'),
+        one_of('heartbeat_alarm_state', ('ok', 'silent'), 'ck_hosts_heartbeat_state'),
+        one_of('risk_level_composite', RISK_LEVELS, 'ck_hosts_risk_level'),
+        bounded('risk_score', 'ck_hosts_risk_score', minimum=0, maximum=100),
     )
 
     # Relationships
-    scan_reports = db.relationship('ScanReport', backref='host', lazy='dynamic',
+    scan_reports = db.relationship('ScanReport', backref='host', lazy='dynamic', passive_deletes=True,
+                                   foreign_keys='ScanReport.host_id',
                                    order_by='desc(ScanReport.created_at)')
 
     def __init__(self, **kwargs):
@@ -220,13 +291,13 @@ class Host(db.Model):
         """Issue a fresh token, store its hash, return plaintext."""
         plaintext, h = self.generate_host_token()
         self.token_hash = h
-        self.token_issued_at = datetime.utcnow()
+        self.token_issued_at = utcnow()
         self.token_revoked_at = None
         return plaintext
 
     def revoke_token(self) -> None:
         """Mark the current token as revoked."""
-        self.token_revoked_at = datetime.utcnow()
+        self.token_revoked_at = utcnow()
 
     def token_is_valid(self) -> bool:
         """True iff the host has an active, unrevoked token and is itself active."""
@@ -245,20 +316,58 @@ class ScanReport(db.Model):
     
     __tablename__ = 'scan_reports'
     
-    id = db.Column(db.Integer, primary_key=True)
-    host_id = db.Column(db.Integer, db.ForeignKey('hosts.id'), nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    id = db.Column(db.BigInteger, primary_key=True)
+    host_id = db.Column(db.Integer, db.ForeignKey('hosts.id', ondelete='CASCADE'), nullable=False)
+    # Denormalised tenant key. Populated from the host on write; the composite
+    # foreign key below guarantees it agrees with the host's own tenant.
+    customer_key_id = db.Column(db.Integer, nullable=False, index=True)
+    created_at = db.Column(db.DateTime(timezone=True), default=utcnow, server_default=db.func.now(), index=True)
     
-    # Store the full scan data as JSON
-    scan_data = db.Column(db.JSON, nullable=False)
+    # The full raw payload, retained only for the newest report per host.
+    #
+    # These blobs dominate the database: 193 reports from a single laptop were
+    # 227 MB, ~1.2 MB each, and they are fully derivable from the normalised
+    # child rows they populate. Older reports keep their summary counts and have
+    # this pruned to NULL, so growth is bounded by host count rather than by
+    # host count multiplied by scan frequency. See prune_host_scan_data().
+    scan_data = db.Column(JSONB, nullable=True)
     
     # Summary fields for quick queries
-    total_ides = db.Column(db.Integer, default=0)
-    total_extensions = db.Column(db.Integer, default=0)
-    dangerous_extensions = db.Column(db.Integer, default=0)
-    
+    total_ides = db.Column(db.Integer, default=0, server_default='0')
+    total_extensions = db.Column(db.Integer, default=0, server_default='0')
+    dangerous_extensions = db.Column(db.Integer, default=0, server_default='0')
+
+    __table_args__ = (
+        db.ForeignKeyConstraint(
+            ['customer_key_id', 'host_id'],
+            ['hosts.customer_key_id', 'hosts.id'],
+            ondelete='CASCADE',
+            name='fk_scan_reports_host_tenant',
+        ),
+        bounded('total_ides', 'ck_scan_reports_total_ides', minimum=0),
+        bounded('total_extensions', 'ck_scan_reports_total_extensions', minimum=0),
+        bounded('dangerous_extensions', 'ck_scan_reports_dangerous', minimum=0),
+    )
+
     def __repr__(self):
         return f'<ScanReport {self.id} for Host {self.host_id}>'
+
+
+def prune_host_scan_data(host_id, keep_report_id):
+    """Drop raw payloads for a host's older reports, keeping the newest.
+
+    Returns the number of reports pruned. Summary columns are untouched, so
+    history and trends survive; only the redundant blob goes.
+    """
+    return (
+        ScanReport.query
+        .filter(
+            ScanReport.host_id == host_id,
+            ScanReport.id != keep_report_id,
+            ScanReport.scan_data.isnot(None),
+        )
+        .update({'scan_data': None}, synchronize_session=False)
+    )
 
 
 class ExtensionInfo(db.Model):
@@ -266,9 +375,12 @@ class ExtensionInfo(db.Model):
     
     __tablename__ = 'extension_info'
     
-    id = db.Column(db.Integer, primary_key=True)
-    host_id = db.Column(db.Integer, db.ForeignKey('hosts.id'), nullable=False)
-    scan_report_id = db.Column(db.Integer, db.ForeignKey('scan_reports.id'), nullable=False)
+    id = db.Column(db.BigInteger, primary_key=True)
+    host_id = db.Column(db.Integer, db.ForeignKey('hosts.id', ondelete='CASCADE'), nullable=False)
+    # Denormalised tenant key. Populated from the host on write; the composite
+    # foreign key below guarantees it agrees with the host's own tenant.
+    customer_key_id = db.Column(db.Integer, nullable=False, index=True)
+    scan_report_id = db.Column(db.BigInteger, db.ForeignKey('scan_reports.id', ondelete='CASCADE'), nullable=False)
     
     # Extension details
     ide_name = db.Column(db.String(100), nullable=False)
@@ -280,14 +392,25 @@ class ExtensionInfo(db.Model):
     maintainer = db.Column(db.String(200))
     
     # Risk assessment
-    permissions = db.Column(db.JSON)  # List of permissions
+    permissions = db.Column(JSONB)  # List of permissions
     risk_level = db.Column(db.String(20))  # low, medium, high, critical
-    is_dangerous = db.Column(db.Boolean, default=False)
+    is_dangerous = db.Column(db.Boolean, default=False, server_default=db.false())
     
     # Indexes for common queries
     __table_args__ = (
+        db.ForeignKeyConstraint(
+            ['customer_key_id', 'host_id'],
+            ['hosts.customer_key_id', 'hosts.id'],
+            ondelete='CASCADE',
+            name='fk_extension_info_host_tenant',
+        ),
         db.Index('idx_extension_risk', 'risk_level', 'is_dangerous'),
         db.Index('idx_extension_host', 'host_id', 'ide_name'),
+        one_of('risk_level', RISK_LEVELS, 'ck_extension_info_risk_level'),
+        # Lets scan ingestion upsert instead of accumulating duplicate rows on
+        # every rescan. Matches the key the ingestion code already dedupes on.
+        db.UniqueConstraint('host_id', 'ide_name', 'extension_id',
+                            name='uq_extension_per_host_ide'),
     )
     
     def __repr__(self):
@@ -299,40 +422,57 @@ class SecretFinding(db.Model):
     
     __tablename__ = 'secret_findings'
     
-    id = db.Column(db.Integer, primary_key=True)
-    host_id = db.Column(db.Integer, db.ForeignKey('hosts.id'), nullable=False)
-    scan_report_id = db.Column(db.Integer, db.ForeignKey('scan_reports.id'), nullable=False)
+    id = db.Column(db.BigInteger, primary_key=True)
+    host_id = db.Column(db.Integer, db.ForeignKey('hosts.id', ondelete='CASCADE'), nullable=False)
+    # Denormalised tenant key. Populated from the host on write; the composite
+    # foreign key below guarantees it agrees with the host's own tenant.
+    customer_key_id = db.Column(db.Integer, nullable=False, index=True)
+    scan_report_id = db.Column(db.BigInteger, db.ForeignKey('scan_reports.id', ondelete='CASCADE'), nullable=False)
     
     # Finding details (NO actual secret values stored — only redacted!)
     file_path = db.Column(db.String(500), nullable=False)
     secret_type = db.Column(db.String(50), nullable=False)  # ethereum_private_key, mnemonic, aws_key, etc.
     variable_name = db.Column(db.String(200))
     line_number = db.Column(db.Integer)
-    severity = db.Column(db.String(20), default='critical')  # critical, high, medium, low
+    severity = db.Column(db.String(20), default='critical', server_default='critical')  # critical, high, medium, low
     description = db.Column(db.Text)
     recommendation = db.Column(db.Text)
-    redacted_value = db.Column(db.String(200), default='')  # e.g., "AKIA****XMPL"
+    redacted_value = db.Column(db.String(200), default='', server_default='')  # e.g., "AKIA****XMPL"
 
     # Source: "filesystem" (current .env files) or "git_history" (committed secrets)
-    source = db.Column(db.String(20), default='filesystem')
+    source = db.Column(db.String(20), default='filesystem', server_default='filesystem')
     commit_hash = db.Column(db.String(40))
     commit_author = db.Column(db.String(200))
     commit_date = db.Column(db.String(30))
     repo_path = db.Column(db.String(500))
 
     # Timestamps
-    first_detected_at = db.Column(db.DateTime, default=datetime.utcnow)
-    last_seen_at = db.Column(db.DateTime, default=datetime.utcnow)
-    is_resolved = db.Column(db.Boolean, default=False)
-    resolved_at = db.Column(db.DateTime)
+    first_detected_at = db.Column(db.DateTime(timezone=True), default=utcnow, server_default=db.func.now())
+    last_seen_at = db.Column(db.DateTime(timezone=True), default=utcnow, server_default=db.func.now())
+    is_resolved = db.Column(db.Boolean, default=False, server_default=db.false())
+    resolved_at = db.Column(db.DateTime(timezone=True))
 
     # Relationships
-    host = db.relationship('Host', backref=db.backref('secret_findings', lazy='dynamic'))
+    host = db.relationship('Host', foreign_keys=[host_id],
+                           backref=db.backref('secret_findings', lazy='dynamic', passive_deletes=True))
 
     # Indexes
     __table_args__ = (
+        db.ForeignKeyConstraint(
+            ['customer_key_id', 'host_id'],
+            ['hosts.customer_key_id', 'hosts.id'],
+            ondelete='CASCADE',
+            name='fk_secret_findings_host_tenant',
+        ),
         db.Index('idx_secret_type', 'secret_type'),
         db.Index('idx_secret_host', 'host_id', 'is_resolved'),
+        one_of('severity', SEVERITY_LEVELS, 'ck_secret_findings_severity'),
+        one_of('source', ('filesystem', 'git_history'), 'ck_secret_findings_source'),
+        # commit_hash is NULL for filesystem findings, so NULLS NOT DISTINCT
+        # (PostgreSQL 15+) is needed for the key to actually dedupe them.
+        db.UniqueConstraint('host_id', 'file_path', 'secret_type', 'variable_name',
+                            'commit_hash', name='uq_secret_per_host_location',
+                            postgresql_nulls_not_distinct=True),
     )
 
     def to_dict(self):
@@ -367,33 +507,50 @@ class PackageInfo(db.Model):
     
     __tablename__ = 'package_info'
     
-    id = db.Column(db.Integer, primary_key=True)
-    host_id = db.Column(db.Integer, db.ForeignKey('hosts.id'), nullable=False)
-    scan_report_id = db.Column(db.Integer, db.ForeignKey('scan_reports.id'), nullable=False)
+    id = db.Column(db.BigInteger, primary_key=True)
+    host_id = db.Column(db.Integer, db.ForeignKey('hosts.id', ondelete='CASCADE'), nullable=False)
+    # Denormalised tenant key. Populated from the host on write; the composite
+    # foreign key below guarantees it agrees with the host's own tenant.
+    customer_key_id = db.Column(db.Integer, nullable=False, index=True)
+    scan_report_id = db.Column(db.BigInteger, db.ForeignKey('scan_reports.id', ondelete='CASCADE'), nullable=False)
     
     # Package details
     name = db.Column(db.String(200), nullable=False)
     version = db.Column(db.String(100))
     package_manager = db.Column(db.String(50), nullable=False)  # pip, npm, go, cargo, gem, composer, maven
-    install_type = db.Column(db.String(20), default='project')  # global, project
+    install_type = db.Column(db.String(20), default='project', server_default='project')  # global, project
     project_path = db.Column(db.String(500))
-    lifecycle_hooks = db.Column(db.JSON)  # npm lifecycle hooks {preinstall: "...", postinstall: "..."}
-    source_type = db.Column(db.String(20), default='project')  # project, global, extension
+    lifecycle_hooks = db.Column(JSONB)  # npm lifecycle hooks {preinstall: "...", postinstall: "..."}
+    source_type = db.Column(db.String(20), default='project', server_default='project')  # project, global, extension
     source_extension = db.Column(db.String(200))  # Extension ID when source_type == 'extension'
     
     # Timestamps
-    first_seen_at = db.Column(db.DateTime, default=datetime.utcnow)
-    last_seen_at = db.Column(db.DateTime, default=datetime.utcnow)
+    first_seen_at = db.Column(db.DateTime(timezone=True), default=utcnow, server_default=db.func.now())
+    last_seen_at = db.Column(db.DateTime(timezone=True), default=utcnow, server_default=db.func.now())
     
     # Relationships
-    host = db.relationship('Host', backref=db.backref('packages', lazy='dynamic'))
+    host = db.relationship('Host', foreign_keys=[host_id],
+                           backref=db.backref('packages', lazy='dynamic', passive_deletes=True))
     
     # Indexes for common queries
     __table_args__ = (
+        db.ForeignKeyConstraint(
+            ['customer_key_id', 'host_id'],
+            ['hosts.customer_key_id', 'hosts.id'],
+            ondelete='CASCADE',
+            name='fk_package_info_host_tenant',
+        ),
         db.Index('idx_package_name', 'name'),
         db.Index('idx_package_manager', 'package_manager'),
         db.Index('idx_package_host', 'host_id', 'package_manager'),
         db.Index('idx_package_source', 'host_id', 'source_type'),
+        one_of('install_type', ('global', 'project'), 'ck_package_info_install_type'),
+        one_of('source_type', ('project', 'global', 'extension'),
+               'ck_package_info_source_type'),
+        # Mirrors the manager:name:version:source_type key ingestion dedupes on.
+        db.UniqueConstraint('host_id', 'package_manager', 'name', 'version',
+                            'source_type', name='uq_package_per_host',
+                            postgresql_nulls_not_distinct=True),
     )
     
     def to_dict(self):
@@ -423,31 +580,48 @@ class ScanRequest(db.Model):
     __tablename__ = 'scan_requests'
     
     id = db.Column(db.Integer, primary_key=True)
-    host_id = db.Column(db.Integer, db.ForeignKey('hosts.id'), nullable=False)
-    requested_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    host_id = db.Column(db.Integer, db.ForeignKey('hosts.id', ondelete='CASCADE'), nullable=False)
+    # Denormalised tenant key. Populated from the host on write; the composite
+    # foreign key below guarantees it agrees with the host's own tenant.
+    customer_key_id = db.Column(db.Integer, nullable=False, index=True)
+    # Nullable so the request record survives deletion of the user who made it.
+    requested_by = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
     
     # Status: pending, connecting, scanning_ides, scanning_secrets, scanning_packages, completed, failed, timeout
-    status = db.Column(db.String(30), default='pending', nullable=False)
+    status = db.Column(db.String(30), default='pending', server_default='pending', nullable=False)
     
     # Timestamps
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    started_at = db.Column(db.DateTime)
-    completed_at = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime(timezone=True), default=utcnow, server_default=db.func.now())
+    started_at = db.Column(db.DateTime(timezone=True))
+    completed_at = db.Column(db.DateTime(timezone=True))
     
     # Progress log (JSON array of log entries)
-    log_entries = db.Column(db.JSON, default=list)
+    log_entries = db.Column(JSONB, default=list)
     
     # Result summary
     error_message = db.Column(db.Text)
     
     # Relationships
-    host = db.relationship('Host', backref=db.backref('scan_requests', lazy='dynamic',
-                                                       order_by='desc(ScanRequest.created_at)'))
-    requester = db.relationship('User', backref=db.backref('scan_requests', lazy='dynamic'))
+    host = db.relationship('Host', foreign_keys=[host_id],
+                           backref=db.backref('scan_requests', lazy='dynamic', passive_deletes=True,
+                                              order_by='desc(ScanRequest.created_at)'))
+    requester = db.relationship('User', backref=db.backref('scan_requests', lazy='dynamic', passive_deletes=True))
     
     # Indexes
+    VALID_STATUSES = (
+        'pending', 'connecting', 'scanning_ides', 'scanning_secrets',
+        'scanning_packages', 'completed', 'failed', 'timeout',
+    )
+
     __table_args__ = (
+        db.ForeignKeyConstraint(
+            ['customer_key_id', 'host_id'],
+            ['hosts.customer_key_id', 'hosts.id'],
+            ondelete='CASCADE',
+            name='fk_scan_requests_host_tenant',
+        ),
         db.Index('idx_scan_request_status', 'host_id', 'status'),
+        one_of('status', VALID_STATUSES, 'ck_scan_requests_status'),
     )
     
     def add_log(self, message: str, level: str = 'info'):
@@ -455,7 +629,7 @@ class ScanRequest(db.Model):
         if self.log_entries is None:
             self.log_entries = []
         entry = {
-            'timestamp': datetime.utcnow().isoformat(),
+            'timestamp': utcnow().isoformat(),
             'level': level,
             'message': message
         }
@@ -484,29 +658,40 @@ class TamperAlert(db.Model):
     __tablename__ = 'tamper_alerts'
     
     id = db.Column(db.Integer, primary_key=True)
-    host_id = db.Column(db.Integer, db.ForeignKey('hosts.id'), nullable=False)
+    host_id = db.Column(db.Integer, db.ForeignKey('hosts.id', ondelete='CASCADE'), nullable=False)
+    # Denormalised tenant key. Populated from the host on write; the composite
+    # foreign key below guarantees it agrees with the host's own tenant.
+    customer_key_id = db.Column(db.Integer, nullable=False, index=True)
     
     # Alert details
     alert_type = db.Column(db.String(50), nullable=False)  # file_deleted, file_modified, daemon_stopping, uninstall_attempt
     details = db.Column(db.Text, nullable=False)
-    severity = db.Column(db.String(20), default='critical')  # critical, high, medium
+    severity = db.Column(db.String(20), default='critical', server_default='critical')  # critical, high, medium
     
     # Status
-    is_acknowledged = db.Column(db.Boolean, default=False)
-    acknowledged_by = db.Column(db.Integer, db.ForeignKey('users.id'))
-    acknowledged_at = db.Column(db.DateTime)
+    is_acknowledged = db.Column(db.Boolean, default=False, server_default=db.false())
+    acknowledged_by = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'))
+    acknowledged_at = db.Column(db.DateTime(timezone=True))
     
     # Timestamps
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime(timezone=True), default=utcnow, server_default=db.func.now())
     
     # Relationships
-    host = db.relationship('Host', backref=db.backref('tamper_alerts', lazy='dynamic',
-                                                       order_by='desc(TamperAlert.created_at)'))
+    host = db.relationship('Host', foreign_keys=[host_id],
+                           backref=db.backref('tamper_alerts', lazy='dynamic', passive_deletes=True,
+                                              order_by='desc(TamperAlert.created_at)'))
     
     # Indexes
     __table_args__ = (
+        db.ForeignKeyConstraint(
+            ['customer_key_id', 'host_id'],
+            ['hosts.customer_key_id', 'hosts.id'],
+            ondelete='CASCADE',
+            name='fk_tamper_alerts_host_tenant',
+        ),
         db.Index('idx_tamper_host', 'host_id', 'is_acknowledged'),
         db.Index('idx_tamper_type', 'alert_type'),
+        one_of('severity', ('critical', 'high', 'medium'), 'ck_tamper_alerts_severity'),
     )
     
     def to_dict(self):
@@ -530,17 +715,27 @@ class HookBypass(db.Model):
     __tablename__ = 'hook_bypasses'
 
     id = db.Column(db.Integer, primary_key=True)
-    host_id = db.Column(db.Integer, db.ForeignKey('hosts.id'), nullable=False)
+    host_id = db.Column(db.Integer, db.ForeignKey('hosts.id', ondelete='CASCADE'), nullable=False)
+    # Denormalised tenant key. Populated from the host on write; the composite
+    # foreign key below guarantees it agrees with the host's own tenant.
+    customer_key_id = db.Column(db.Integer, nullable=False, index=True)
     commit_hash = db.Column(db.String(40))
     commit_message = db.Column(db.String(500))
     commit_author = db.Column(db.String(200))
     repo_path = db.Column(db.String(500))
-    detected_at = db.Column(db.DateTime, default=datetime.utcnow)
-    is_acknowledged = db.Column(db.Boolean, default=False)
+    detected_at = db.Column(db.DateTime(timezone=True), default=utcnow, server_default=db.func.now())
+    is_acknowledged = db.Column(db.Boolean, default=False, server_default=db.false())
 
-    host = db.relationship('Host', backref=db.backref('hook_bypasses', lazy='dynamic'))
+    host = db.relationship('Host', foreign_keys=[host_id],
+                           backref=db.backref('hook_bypasses', lazy='dynamic', passive_deletes=True))
 
     __table_args__ = (
+        db.ForeignKeyConstraint(
+            ['customer_key_id', 'host_id'],
+            ['hosts.customer_key_id', 'hosts.id'],
+            ondelete='CASCADE',
+            name='fk_hook_bypasses_host_tenant',
+        ),
         db.Index('idx_hook_bypass_host', 'host_id', 'is_acknowledged'),
     )
 
@@ -565,27 +760,38 @@ class AIToolInfo(db.Model):
 
     __tablename__ = 'ai_tool_info'
 
-    id = db.Column(db.Integer, primary_key=True)
-    host_id = db.Column(db.Integer, db.ForeignKey('hosts.id'), nullable=False)
-    scan_report_id = db.Column(db.Integer, db.ForeignKey('scan_reports.id'), nullable=False)
+    id = db.Column(db.BigInteger, primary_key=True)
+    host_id = db.Column(db.Integer, db.ForeignKey('hosts.id', ondelete='CASCADE'), nullable=False)
+    # Denormalised tenant key. Populated from the host on write; the composite
+    # foreign key below guarantees it agrees with the host's own tenant.
+    customer_key_id = db.Column(db.Integer, nullable=False, index=True)
+    scan_report_id = db.Column(db.BigInteger, db.ForeignKey('scan_reports.id', ondelete='CASCADE'), nullable=False)
 
     tool_name = db.Column(db.String(100), nullable=False)  # "Claude Code", "Cursor", "OpenClaw"
     version = db.Column(db.String(100))
-    is_running = db.Column(db.Boolean, default=False)
+    is_running = db.Column(db.Boolean, default=False, server_default=db.false())
     config_path = db.Column(db.String(500))
 
     # JSON fields for complex nested data
-    mcp_servers = db.Column(db.JSON)    # List of MCP server dicts
-    open_ports = db.Column(db.JSON)     # List of open port dicts
-    redacted_secrets = db.Column(db.JSON)  # List of redacted secret dicts
+    mcp_servers = db.Column(JSONB)    # List of MCP server dicts
+    open_ports = db.Column(JSONB)     # List of open port dicts
+    redacted_secrets = db.Column(JSONB)  # List of redacted secret dicts
 
-    first_seen_at = db.Column(db.DateTime, default=datetime.utcnow)
-    last_seen_at = db.Column(db.DateTime, default=datetime.utcnow)
+    first_seen_at = db.Column(db.DateTime(timezone=True), default=utcnow, server_default=db.func.now())
+    last_seen_at = db.Column(db.DateTime(timezone=True), default=utcnow, server_default=db.func.now())
 
-    host = db.relationship('Host', backref=db.backref('ai_tools', lazy='dynamic'))
+    host = db.relationship('Host', foreign_keys=[host_id],
+                           backref=db.backref('ai_tools', lazy='dynamic', passive_deletes=True))
 
     __table_args__ = (
+        db.ForeignKeyConstraint(
+            ['customer_key_id', 'host_id'],
+            ['hosts.customer_key_id', 'hosts.id'],
+            ondelete='CASCADE',
+            name='fk_ai_tool_info_host_tenant',
+        ),
         db.Index('idx_aitool_host', 'host_id', 'tool_name'),
+        db.UniqueConstraint('host_id', 'tool_name', name='uq_aitool_per_host_tool'),
     )
 
     def to_dict(self):
@@ -611,9 +817,12 @@ class Vulnerability(db.Model):
 
     __tablename__ = 'vulnerabilities'
 
-    id = db.Column(db.Integer, primary_key=True)
-    host_id = db.Column(db.Integer, db.ForeignKey('hosts.id'), nullable=False)
-    package_info_id = db.Column(db.Integer, db.ForeignKey('package_info.id'), nullable=True)
+    id = db.Column(db.BigInteger, primary_key=True)
+    host_id = db.Column(db.Integer, db.ForeignKey('hosts.id', ondelete='CASCADE'), nullable=False)
+    # Denormalised tenant key. Populated from the host on write; the composite
+    # foreign key below guarantees it agrees with the host's own tenant.
+    customer_key_id = db.Column(db.Integer, nullable=False, index=True)
+    package_info_id = db.Column(db.BigInteger, db.ForeignKey('package_info.id', ondelete='SET NULL'), nullable=True)
 
     # Denormalised package details (kept even if PackageInfo row is deleted on rescan)
     package_name = db.Column(db.String(200), nullable=False)
@@ -630,23 +839,35 @@ class Vulnerability(db.Model):
     fixed_version = db.Column(db.String(100), nullable=True)
 
     # Extra metadata
-    references = db.Column(db.JSON)  # list of URL strings
-    source = db.Column(db.String(50), default='osv.dev')
+    references = db.Column(JSONB)  # list of URL strings
+    source = db.Column(db.String(50), default='osv.dev', server_default='osv.dev')
 
     # Lifecycle
-    first_detected_at = db.Column(db.DateTime, default=datetime.utcnow)
-    last_seen_at = db.Column(db.DateTime, default=datetime.utcnow)
-    is_resolved = db.Column(db.Boolean, default=False)
+    first_detected_at = db.Column(db.DateTime(timezone=True), default=utcnow, server_default=db.func.now())
+    last_seen_at = db.Column(db.DateTime(timezone=True), default=utcnow, server_default=db.func.now())
+    is_resolved = db.Column(db.Boolean, default=False, server_default=db.false())
 
     # Relationships
-    host = db.relationship('Host', backref=db.backref('vulnerabilities', lazy='dynamic'))
-    package_info = db.relationship('PackageInfo', backref=db.backref('vulnerabilities', lazy='dynamic'))
+    host = db.relationship('Host', foreign_keys=[host_id],
+                           backref=db.backref('vulnerabilities', lazy='dynamic', passive_deletes=True))
+    package_info = db.relationship('PackageInfo', backref=db.backref('vulnerabilities', lazy='dynamic', passive_deletes=True))
 
     # Indexes
     __table_args__ = (
+        db.ForeignKeyConstraint(
+            ['customer_key_id', 'host_id'],
+            ['hosts.customer_key_id', 'hosts.id'],
+            ondelete='CASCADE',
+            name='fk_vulnerabilities_host_tenant',
+        ),
         db.Index('idx_vuln_host_resolved', 'host_id', 'is_resolved'),
         db.Index('idx_vuln_id', 'vuln_id'),
         db.Index('idx_vuln_package', 'package_name', 'package_manager'),
+        one_of('severity_label', SEVERITY_LEVELS, 'ck_vulnerabilities_severity'),
+        bounded('cvss_score', 'ck_vulnerabilities_cvss', minimum=0, maximum=10),
+        db.UniqueConstraint('host_id', 'package_manager', 'package_name',
+                            'package_version', 'vuln_id', name='uq_vuln_per_host_package',
+                            postgresql_nulls_not_distinct=True),
     )
 
     def to_dict(self):
@@ -688,7 +909,7 @@ class WebhookSubscription(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     public_id = db.Column(db.String(36), unique=True, nullable=False, index=True)
-    customer_key_id = db.Column(db.Integer, db.ForeignKey('customer_keys.id'), nullable=False, index=True)
+    customer_key_id = db.Column(db.Integer, db.ForeignKey('customer_keys.id', ondelete='CASCADE'), nullable=False, index=True)
 
     name = db.Column(db.String(100), nullable=False)
     # For slack/generic this is the endpoint URL; for pagerduty it's the
@@ -700,29 +921,34 @@ class WebhookSubscription(db.Model):
     TYPE_SLACK = 'slack'
     TYPE_PAGERDUTY = 'pagerduty'
     VALID_TYPES = (TYPE_GENERIC, TYPE_SLACK, TYPE_PAGERDUTY)
-    type = db.Column(db.String(20), nullable=False, default=TYPE_GENERIC)
+    type = db.Column(db.String(20), nullable=False, default=TYPE_GENERIC, server_default=TYPE_GENERIC)
 
     # JSON array of event-type strings; ["*"] subscribes to all.
-    event_types = db.Column(db.JSON, nullable=False)
+    event_types = db.Column(JSONB, nullable=False)
 
     # Plaintext HMAC secret, format "whsec_<43 base64url chars>".
     secret = db.Column(db.String(64), nullable=False)
 
-    is_active = db.Column(db.Boolean, default=True, nullable=False)
+    is_active = db.Column(db.Boolean, default=True, server_default=db.true(), nullable=False)
 
     # Health tracking — drives auto-disable after CONSECUTIVE_FAILURE_LIMIT.
-    consecutive_failures = db.Column(db.Integer, default=0, nullable=False)
-    last_success_at = db.Column(db.DateTime, nullable=True)
-    last_failure_at = db.Column(db.DateTime, nullable=True)
+    consecutive_failures = db.Column(db.Integer, default=0, server_default='0', nullable=False)
+    last_success_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    last_failure_at = db.Column(db.DateTime(timezone=True), nullable=True)
 
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
-    created_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), default=utcnow, server_default=db.func.now(), nullable=False)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
 
     customer_key = db.relationship(
         'CustomerKey',
-        backref=db.backref('webhook_subscriptions', lazy='dynamic'),
+        backref=db.backref('webhook_subscriptions', lazy='dynamic', passive_deletes=True),
     )
     creator = db.relationship('User')
+
+    __table_args__ = (
+        one_of('type', VALID_TYPES, 'ck_webhook_subscriptions_type'),
+        bounded('consecutive_failures', 'ck_webhook_subscriptions_failures', minimum=0),
+    )
 
     CONSECUTIVE_FAILURE_LIMIT = 25  # auto-deactivate after this many
 
@@ -749,11 +975,11 @@ class WebhookSubscription(db.Model):
 
     def record_success(self):
         self.consecutive_failures = 0
-        self.last_success_at = datetime.utcnow()
+        self.last_success_at = utcnow()
 
     def record_failure(self):
         self.consecutive_failures = (self.consecutive_failures or 0) + 1
-        self.last_failure_at = datetime.utcnow()
+        self.last_failure_at = utcnow()
         if self.consecutive_failures >= self.CONSECUTIVE_FAILURE_LIMIT:
             self.is_active = False
 
@@ -792,7 +1018,7 @@ class WebhookDelivery(db.Model):
     STATUS_SUCCEEDED = 'succeeded'
     STATUS_FAILED = 'failed'
 
-    id = db.Column(db.Integer, primary_key=True)
+    id = db.Column(db.BigInteger, primary_key=True)
     subscription_id = db.Column(
         db.Integer,
         db.ForeignKey('webhook_subscriptions.id', ondelete='CASCADE'),
@@ -802,24 +1028,24 @@ class WebhookDelivery(db.Model):
 
     event_id = db.Column(db.String(36), nullable=False, index=True)
     event_type = db.Column(db.String(100), nullable=False, index=True)
-    payload = db.Column(db.JSON, nullable=False)
+    payload = db.Column(JSONB, nullable=False)
 
-    status = db.Column(db.String(20), default=STATUS_PENDING, nullable=False)
-    attempt_count = db.Column(db.Integer, default=0, nullable=False)
+    status = db.Column(db.String(20), default=STATUS_PENDING, server_default=STATUS_PENDING, nullable=False)
+    attempt_count = db.Column(db.Integer, default=0, server_default='0', nullable=False)
 
-    last_attempt_at = db.Column(db.DateTime, nullable=True)
+    last_attempt_at = db.Column(db.DateTime(timezone=True), nullable=True)
     response_code = db.Column(db.Integer, nullable=True)
     response_body = db.Column(db.Text, nullable=True)
     last_error = db.Column(db.Text, nullable=True)
 
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
-    completed_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), default=utcnow, server_default=db.func.now(), nullable=False, index=True)
+    completed_at = db.Column(db.DateTime(timezone=True), nullable=True)
 
     subscription = db.relationship(
         'WebhookSubscription',
         backref=db.backref(
             'deliveries',
-            lazy='dynamic',
+            lazy='dynamic', passive_deletes=True,
             cascade='all, delete-orphan',
             order_by='desc(WebhookDelivery.created_at)',
         ),
@@ -827,6 +1053,10 @@ class WebhookDelivery(db.Model):
 
     __table_args__ = (
         db.Index('idx_delivery_sub_status', 'subscription_id', 'status'),
+        one_of('status', (STATUS_PENDING, STATUS_RETRYING, STATUS_SUCCEEDED, STATUS_FAILED),
+               'ck_webhook_deliveries_status'),
+        bounded('attempt_count', 'ck_webhook_deliveries_attempts', minimum=0),
+        bounded('response_code', 'ck_webhook_deliveries_response_code', minimum=100, maximum=599),
     )
 
     def to_dict(self):
@@ -872,7 +1102,7 @@ class ExtensionPolicy(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     public_id = db.Column(db.String(36), unique=True, nullable=False, index=True)
-    customer_key_id = db.Column(db.Integer, db.ForeignKey('customer_keys.id'), nullable=False, index=True)
+    customer_key_id = db.Column(db.Integer, db.ForeignKey('customer_keys.id', ondelete='CASCADE'), nullable=False, index=True)
 
     name = db.Column(db.String(100), nullable=False)
     priority = db.Column(db.Integer, nullable=False, default=100)
@@ -883,18 +1113,21 @@ class ExtensionPolicy(db.Model):
     match_permission_glob = db.Column(db.String(200), nullable=True)
     match_risk_level = db.Column(db.String(20), nullable=True)  # min threshold
 
-    is_active = db.Column(db.Boolean, default=True, nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
-    created_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    is_active = db.Column(db.Boolean, default=True, server_default=db.true(), nullable=False)
+    created_at = db.Column(db.DateTime(timezone=True), default=utcnow, server_default=db.func.now(), nullable=False)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
 
     customer_key = db.relationship(
         'CustomerKey',
-        backref=db.backref('extension_policies', lazy='dynamic'),
+        backref=db.backref('extension_policies', lazy='dynamic', passive_deletes=True),
     )
     creator = db.relationship('User')
 
     __table_args__ = (
         db.Index('idx_policy_customer_active', 'customer_key_id', 'is_active'),
+        one_of('action', VALID_ACTIONS, 'ck_extension_policies_action'),
+        one_of('match_risk_level', RISK_LEVELS, 'ck_extension_policies_risk_level'),
+        bounded('priority', 'ck_extension_policies_priority', minimum=0),
     )
 
     def __init__(self, **kwargs):
@@ -930,9 +1163,12 @@ class PolicyViolation(db.Model):
 
     __tablename__ = 'policy_violations'
 
-    id = db.Column(db.Integer, primary_key=True)
-    host_id = db.Column(db.Integer, db.ForeignKey('hosts.id'), nullable=False)
-    policy_id = db.Column(db.Integer, db.ForeignKey('extension_policies.id'), nullable=False)
+    id = db.Column(db.BigInteger, primary_key=True)
+    host_id = db.Column(db.Integer, db.ForeignKey('hosts.id', ondelete='CASCADE'), nullable=False)
+    # Denormalised tenant key. Populated from the host on write; the composite
+    # foreign key below guarantees it agrees with the host's own tenant.
+    customer_key_id = db.Column(db.Integer, nullable=False, index=True)
+    policy_id = db.Column(db.Integer, db.ForeignKey('extension_policies.id', ondelete='CASCADE'), nullable=False)
 
     extension_id = db.Column(db.String(200), nullable=False)
     extension_name = db.Column(db.String(200), nullable=True)
@@ -941,23 +1177,34 @@ class PolicyViolation(db.Model):
     risk_level = db.Column(db.String(20), nullable=True)
     action_taken = db.Column(db.String(20), nullable=False)  # snapshot of policy.action at detection
 
-    first_detected_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
-    last_seen_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
-    is_resolved = db.Column(db.Boolean, default=False, nullable=False)
-    resolved_at = db.Column(db.DateTime, nullable=True)
-    resolved_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    first_detected_at = db.Column(db.DateTime(timezone=True), default=utcnow, server_default=db.func.now(), nullable=False)
+    last_seen_at = db.Column(db.DateTime(timezone=True), default=utcnow, server_default=db.func.now(), nullable=False)
+    is_resolved = db.Column(db.Boolean, default=False, server_default=db.false(), nullable=False)
+    resolved_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    resolved_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
 
-    host = db.relationship('Host', backref=db.backref('policy_violations', lazy='dynamic'))
-    policy = db.relationship('ExtensionPolicy', backref=db.backref('violations', lazy='dynamic'))
+    host = db.relationship('Host', foreign_keys=[host_id],
+                           backref=db.backref('policy_violations', lazy='dynamic', passive_deletes=True))
+    policy = db.relationship('ExtensionPolicy', backref=db.backref('violations', lazy='dynamic', passive_deletes=True))
     resolver = db.relationship('User')
 
     __table_args__ = (
+        db.ForeignKeyConstraint(
+            ['customer_key_id', 'host_id'],
+            ['hosts.customer_key_id', 'hosts.id'],
+            ondelete='CASCADE',
+            name='fk_policy_violations_host_tenant',
+        ),
         db.Index('idx_violation_host_resolved', 'host_id', 'is_resolved'),
         db.Index('idx_violation_policy', 'policy_id'),
         db.UniqueConstraint(
             'host_id', 'policy_id', 'extension_id', 'extension_version',
             name='uq_policy_violation_per_ext_version',
+            postgresql_nulls_not_distinct=True,
         ),
+        one_of('action_taken', ExtensionPolicy.VALID_ACTIONS,
+               'ck_policy_violations_action'),
+        one_of('risk_level', RISK_LEVELS, 'ck_policy_violations_risk_level'),
     )
 
     def to_dict(self):
@@ -1001,14 +1248,14 @@ class ExtensionMetadata(db.Model):
     publisher_display_name = db.Column(db.String(200), nullable=True)
     install_count = db.Column(db.BigInteger, nullable=True)
     average_rating = db.Column(db.Float, nullable=True)
-    last_updated_at = db.Column(db.DateTime, nullable=True)  # marketplace's lastUpdated, not ours
+    last_updated_at = db.Column(db.DateTime(timezone=True), nullable=True)  # marketplace's lastUpdated, not ours
 
-    is_unpublished = db.Column(db.Boolean, default=False, nullable=False)
-    unpublished_detected_at = db.Column(db.DateTime, nullable=True)
+    is_unpublished = db.Column(db.Boolean, default=False, server_default=db.false(), nullable=False)
+    unpublished_detected_at = db.Column(db.DateTime(timezone=True), nullable=True)
 
-    raw_data = db.Column(db.JSON, nullable=True)
+    raw_data = db.Column(JSONB, nullable=True)
 
-    fetched_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    fetched_at = db.Column(db.DateTime(timezone=True), default=utcnow, server_default=db.func.now(), nullable=False)
     last_fetch_status = db.Column(db.Integer, nullable=True)  # http status or None
 
     __table_args__ = (
@@ -1016,6 +1263,8 @@ class ExtensionMetadata(db.Model):
         db.Index('idx_ext_meta_lookup', 'marketplace', 'extension_id', 'version'),
         db.Index('idx_ext_meta_unpublished', 'is_unpublished'),
         db.Index('idx_ext_meta_fetched_at', 'fetched_at'),
+        bounded('install_count', 'ck_ext_meta_install_count', minimum=0),
+        bounded('average_rating', 'ck_ext_meta_rating', minimum=0, maximum=5),
     )
 
     @property
@@ -1023,7 +1272,7 @@ class ExtensionMetadata(db.Model):
         from datetime import timedelta
         if self.fetched_at is None:
             return True
-        return datetime.utcnow() - self.fetched_at > timedelta(hours=24)
+        return utcnow() - self.fetched_at > timedelta(hours=24)
 
     def to_dict(self):
         return {
@@ -1067,12 +1316,15 @@ class EnforcementAction(db.Model):
     STATUS_REVERTED = 'reverted'
     OPEN_STATUSES = (STATUS_PENDING, STATUS_DISPATCHED, STATUS_APPLIED)
 
-    id = db.Column(db.Integer, primary_key=True)
-    host_id = db.Column(db.Integer, db.ForeignKey('hosts.id'), nullable=False)
-    violation_id = db.Column(db.Integer, db.ForeignKey('policy_violations.id'), nullable=True)
+    id = db.Column(db.BigInteger, primary_key=True)
+    host_id = db.Column(db.Integer, db.ForeignKey('hosts.id', ondelete='CASCADE'), nullable=False)
+    # Denormalised tenant key. Populated from the host on write; the composite
+    # foreign key below guarantees it agrees with the host's own tenant.
+    customer_key_id = db.Column(db.Integer, nullable=False, index=True)
+    violation_id = db.Column(db.BigInteger, db.ForeignKey('policy_violations.id', ondelete='SET NULL'), nullable=True)
 
-    action = db.Column(db.String(20), nullable=False, default=ACTION_QUARANTINE)
-    status = db.Column(db.String(20), nullable=False, default=STATUS_PENDING)
+    action = db.Column(db.String(20), nullable=False, default=ACTION_QUARANTINE, server_default=ACTION_QUARANTINE)
+    status = db.Column(db.String(20), nullable=False, default=STATUS_PENDING, server_default=STATUS_PENDING)
 
     # Target extension (denormalised so the daemon can resolve it locally).
     extension_id = db.Column(db.String(200), nullable=False)
@@ -1085,19 +1337,32 @@ class EnforcementAction(db.Model):
     quarantine_path = db.Column(db.String(1000), nullable=True)
     result_detail = db.Column(db.Text, nullable=True)
 
-    created_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)  # NULL = policy-driven
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
-    dispatched_at = db.Column(db.DateTime, nullable=True)
-    completed_at = db.Column(db.DateTime, nullable=True)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)  # NULL = policy-driven
+    created_at = db.Column(db.DateTime(timezone=True), default=utcnow, server_default=db.func.now(), nullable=False)
+    dispatched_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    completed_at = db.Column(db.DateTime(timezone=True), nullable=True)
 
-    host = db.relationship('Host', backref=db.backref('enforcement_actions', lazy='dynamic',
-                                                       order_by='desc(EnforcementAction.created_at)'))
+    host = db.relationship('Host', foreign_keys=[host_id],
+                           backref=db.backref('enforcement_actions', lazy='dynamic', passive_deletes=True,
+                                              order_by='desc(EnforcementAction.created_at)'))
     violation = db.relationship('PolicyViolation')
     creator = db.relationship('User')
 
+    VALID_STATUSES = (
+        STATUS_PENDING, STATUS_DISPATCHED, STATUS_APPLIED, STATUS_FAILED, STATUS_REVERTED,
+    )
+
     __table_args__ = (
+        db.ForeignKeyConstraint(
+            ['customer_key_id', 'host_id'],
+            ['hosts.customer_key_id', 'hosts.id'],
+            ondelete='CASCADE',
+            name='fk_enforcement_actions_host_tenant',
+        ),
         db.Index('idx_enforcement_host_status', 'host_id', 'status'),
         db.Index('idx_enforcement_violation', 'violation_id'),
+        one_of('action', VALID_ACTIONS, 'ck_enforcement_actions_action'),
+        one_of('status', VALID_STATUSES, 'ck_enforcement_actions_status'),
     )
 
     def to_dict(self):
@@ -1138,17 +1403,20 @@ class ExtensionPrevalence(db.Model):
     __tablename__ = 'extension_prevalence'
 
     id = db.Column(db.Integer, primary_key=True)
-    customer_key_id = db.Column(db.Integer, db.ForeignKey('customer_keys.id'), nullable=False)
+    customer_key_id = db.Column(db.Integer, db.ForeignKey('customer_keys.id', ondelete='CASCADE'), nullable=False)
     extension_id = db.Column(db.String(200), nullable=False)
-    host_count = db.Column(db.Integer, default=0, nullable=False)
-    prev_host_count = db.Column(db.Integer, default=0, nullable=False)
+    host_count = db.Column(db.Integer, default=0, server_default='0', nullable=False)
+    prev_host_count = db.Column(db.Integer, default=0, server_default='0', nullable=False)
     max_risk_level = db.Column(db.String(20))  # highest risk seen across hosts
-    first_seen_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow)
+    first_seen_at = db.Column(db.DateTime(timezone=True), default=utcnow, server_default=db.func.now())
+    updated_at = db.Column(db.DateTime(timezone=True), default=utcnow, server_default=db.func.now())
 
     __table_args__ = (
         db.UniqueConstraint('customer_key_id', 'extension_id', name='uq_prevalence_key_ext'),
         db.Index('idx_prevalence_key', 'customer_key_id'),
+        one_of('max_risk_level', RISK_LEVELS, 'ck_prevalence_risk_level'),
+        bounded('host_count', 'ck_prevalence_host_count', minimum=0),
+        bounded('prev_host_count', 'ck_prevalence_prev_host_count', minimum=0),
     )
 
     def __repr__(self):
@@ -1168,15 +1436,15 @@ class AuditLog(db.Model):
 
     __tablename__ = 'audit_logs'
 
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    id = db.Column(db.BigInteger, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
     actor = db.Column(db.String(200))          # snapshot of username/email (or 'system')
     action = db.Column(db.String(80), nullable=False)  # e.g. 'policy.create'
     target_type = db.Column(db.String(50))     # e.g. 'policy', 'host', 'webhook'
     target_id = db.Column(db.String(100))
     detail = db.Column(db.Text)
     ip_address = db.Column(db.String(45))
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    created_at = db.Column(db.DateTime(timezone=True), default=utcnow, server_default=db.func.now(), index=True)
 
     __table_args__ = (
         db.Index('idx_audit_action', 'action'),
@@ -1225,18 +1493,26 @@ class RemediationPlaybook(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     public_id = db.Column(db.String(36), unique=True, nullable=False, index=True)
-    customer_key_id = db.Column(db.Integer, db.ForeignKey('customer_keys.id'), nullable=False)
+    customer_key_id = db.Column(db.Integer, db.ForeignKey('customer_keys.id', ondelete='CASCADE'), nullable=False)
     name = db.Column(db.String(100), nullable=False)
     trigger_event = db.Column(db.String(80), nullable=False)
-    action = db.Column(db.String(40), nullable=False, default=ACTION_NOTIFY_ONLY)
-    mode = db.Column(db.String(20), nullable=False, default=MODE_DRY_RUN)
-    min_severity = db.Column(db.String(20), default='high')  # low|medium|high|critical
+    action = db.Column(db.String(40), nullable=False, default=ACTION_NOTIFY_ONLY, server_default=ACTION_NOTIFY_ONLY)
+    mode = db.Column(db.String(20), nullable=False, default=MODE_DRY_RUN, server_default=MODE_DRY_RUN)
+    min_severity = db.Column(db.String(20), default='high', server_default='high')  # low|medium|high|critical
     max_actions_per_hour = db.Column(db.Integer, default=5)
-    is_active = db.Column(db.Boolean, default=True)
-    created_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    is_active = db.Column(db.Boolean, default=True, server_default=db.true())
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), default=utcnow, server_default=db.func.now())
 
-    customer_key = db.relationship('CustomerKey', backref=db.backref('playbooks', lazy='dynamic'))
+    customer_key = db.relationship('CustomerKey', backref=db.backref('playbooks', lazy='dynamic', passive_deletes=True))
+
+    __table_args__ = (
+        one_of('trigger_event', VALID_TRIGGERS, 'ck_playbooks_trigger'),
+        one_of('action', VALID_ACTIONS, 'ck_playbooks_action'),
+        one_of('mode', VALID_MODES, 'ck_playbooks_mode'),
+        one_of('min_severity', SEVERITY_LEVELS, 'ck_playbooks_min_severity'),
+        bounded('max_actions_per_hour', 'ck_playbooks_rate_limit', minimum=1),
+    )
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -1260,16 +1536,50 @@ class ExpectedHost(db.Model):
     __tablename__ = 'expected_hosts'
 
     id = db.Column(db.Integer, primary_key=True)
-    customer_key_id = db.Column(db.Integer, db.ForeignKey('customer_keys.id'), nullable=False)
+    customer_key_id = db.Column(db.Integer, db.ForeignKey('customer_keys.id', ondelete='CASCADE'), nullable=False)
     hostname = db.Column(db.String(255), nullable=False)
-    source = db.Column(db.String(20), default='manual')  # manual | mdm | scim
-    added_at = db.Column(db.DateTime, default=datetime.utcnow)
+    source = db.Column(db.String(20), default='manual', server_default='manual')  # manual | mdm | scim
+    added_at = db.Column(db.DateTime(timezone=True), default=utcnow, server_default=db.func.now())
 
-    customer_key = db.relationship('CustomerKey', backref=db.backref('expected_hosts', lazy='dynamic'))
+    customer_key = db.relationship('CustomerKey', backref=db.backref('expected_hosts', lazy='dynamic', passive_deletes=True))
 
     __table_args__ = (
         db.UniqueConstraint('customer_key_id', 'hostname', name='uq_expected_key_host'),
+        one_of('source', ('manual', 'mdm', 'scim'), 'ck_expected_hosts_source'),
     )
 
     def __repr__(self):
         return f'<ExpectedHost {self.hostname}>'
+
+
+# ──────────────────────────────────────────────────────────────────
+# Tenancy backfill
+# ──────────────────────────────────────────────────────────────────
+# Child tables carry customer_key_id so tenant scoping is a column rather than
+# a JOIN nobody must forget, and a composite foreign key checks that it agrees
+# with the host's own tenant. Rather than touch all 66 construction sites, fill
+# it from the host on insert whenever a caller hasn't set it. The hot ingestion
+# path sets it explicitly; this is the safety net that makes the NOT NULL
+# constraint impossible to trip by omission.
+
+_TENANT_SCOPED_MODELS = (
+    ScanReport, ExtensionInfo, SecretFinding, PackageInfo, AIToolInfo,
+    Vulnerability, TamperAlert, HookBypass, ScanRequest, PolicyViolation,
+    EnforcementAction,
+)
+
+
+def _fill_customer_key_id(mapper, connection, target):
+    """Derive customer_key_id from the target's host before insert."""
+    if target.customer_key_id is not None or target.host_id is None:
+        return
+    hosts = Host.__table__
+    row = connection.execute(
+        db.select(hosts.c.customer_key_id).where(hosts.c.id == target.host_id)
+    ).first()
+    if row is not None:
+        target.customer_key_id = row[0]
+
+
+for _model in _TENANT_SCOPED_MODELS:
+    db.event.listen(_model, 'before_insert', _fill_customer_key_id)

@@ -185,20 +185,25 @@ def _parse_cvss_score(vector: str) -> Optional[float]:
 def _score_to_severity(score: float) -> str:
     """Map CVSS score to severity label.
 
-    9.0 - 10.0  → CRITICAL
-    7.0 -  8.9  → HIGH
-    4.0 -  6.9  → MEDIUM
-    0.1 -  3.9  → LOW
+    9.0 - 10.0  → critical
+    7.0 -  8.9  → high
+    4.0 -  6.9  → medium
+    0.1 -  3.9  → low
+
+    Lowercase to match every other severity and risk column in the schema, and
+    the vocabulary the CHECK constraint enforces. This used to return uppercase
+    while risk_score.py compared lowercase, so vulnerability severity never
+    contributed to a host's composite risk score.
     """
     if score >= 9.0:
-        return 'CRITICAL'
+        return 'critical'
     elif score >= 7.0:
-        return 'HIGH'
+        return 'high'
     elif score >= 4.0:
-        return 'MEDIUM'
+        return 'medium'
     elif score >= 0.1:
-        return 'LOW'
-    return 'LOW'
+        return 'low'
+    return 'low'
 
 
 def _extract_severity(vuln: dict) -> tuple[Optional[float], str]:
@@ -237,17 +242,17 @@ def _extract_severity(vuln: dict) -> tuple[Optional[float], str]:
     # OSV/GitHub uses "CRITICAL", "HIGH", "MODERATE", "LOW"
     raw = db_specific.get('severity', '').upper()
     fallback_map = {
-        'CRITICAL': ('CRITICAL', 9.5),
-        'HIGH': ('HIGH', 7.5),
-        'MODERATE': ('MEDIUM', 5.5),
-        'MEDIUM': ('MEDIUM', 5.5),
-        'LOW': ('LOW', 2.5),
+        'CRITICAL': ('critical', 9.5),
+        'HIGH': ('high', 7.5),
+        'MODERATE': ('medium', 5.5),
+        'MEDIUM': ('medium', 5.5),
+        'LOW': ('low', 2.5),
     }
     if raw in fallback_map:
         label, estimated_score = fallback_map[raw]
         return estimated_score, label
 
-    return None, 'MEDIUM'
+    return None, 'medium'
 
 
 def _extract_affected_versions(vuln: dict, pkg_name: str, ecosystem: str) -> tuple[str, Optional[str]]:

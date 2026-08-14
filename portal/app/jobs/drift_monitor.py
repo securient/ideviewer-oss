@@ -72,10 +72,10 @@ def _current_fleet(key):
 
 def _detect(customer_key_id=None, now=None) -> dict:
     from app import db
-    from app.models import CustomerKey, ExtensionPrevalence, TamperAlert
+    from app.models import CustomerKey, ExtensionPrevalence, TamperAlert, utcnow
     from app.events import emit_event
 
-    now = now or datetime.utcnow()
+    now = now or utcnow()
     threshold = _propagation_threshold()
 
     keys = ([CustomerKey.query.get(customer_key_id)] if customer_key_id

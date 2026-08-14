@@ -15,7 +15,7 @@ import traceback
 import logging
 
 from app import db
-from app.models import CustomerKey, Host, ScanReport, ExtensionInfo, SecretFinding, PackageInfo, ScanRequest, TamperAlert, Vulnerability, HookBypass, AIToolInfo, EnforcementAction
+from app.models import CustomerKey, Host, ScanReport, ExtensionInfo, SecretFinding, PackageInfo, ScanRequest, TamperAlert, Vulnerability, HookBypass, AIToolInfo, EnforcementAction, utcnow, prune_host_scan_data
 from app.main.routes import calculate_risk_level
 from app.events import emit_event
 from app.signing import sign_envelope, public_key_info
@@ -40,14 +40,14 @@ def health_check():
         return jsonify({
             'status': 'healthy',
             'database': 'connected',
-            'timestamp': datetime.utcnow().isoformat()
+            'timestamp': utcnow().isoformat()
         }), 200
     except Exception as e:
         return jsonify({
             'status': 'unhealthy',
             'database': 'disconnected',
             'error': str(e),
-            'timestamp': datetime.utcnow().isoformat()
+            'timestamp': utcnow().isoformat()
         }), 503
 
 
@@ -130,7 +130,7 @@ def authenticate_request():
         host = Host.query.filter_by(token_hash=h, is_active=True).first()
         if host is None or host.token_revoked_at is not None:
             return None, None, {'error': 'Invalid or revoked host token'}, 401
-        host.customer_key.last_used_at = datetime.utcnow()
+        host.customer_key.last_used_at = utcnow()
         return host.customer_key, host, None, None
     key, err, status = get_customer_key()
     if err:
@@ -199,7 +199,7 @@ def validate_key():
         return jsonify({'valid': False, **error}), status
 
     # Update last used
-    key.last_used_at = datetime.utcnow()
+    key.last_used_at = utcnow()
     db.session.commit()
 
     _pub = public_key_info()
@@ -267,7 +267,7 @@ def register_host():
         # Update existing host
         host.ip_address = ip_address
         host.platform = platform
-        host.last_seen_at = datetime.utcnow()
+        host.last_seen_at = utcnow()
         host.is_active = True
         message = 'Host updated successfully'
     else:
@@ -285,7 +285,7 @@ def register_host():
     # exactly once — the daemon persists it to its 0600 config file.
     plaintext = host.issue_token()
 
-    key.last_used_at = datetime.utcnow()
+    key.last_used_at = utcnow()
     db.session.commit()
 
     _pub = public_key_info()
@@ -446,7 +446,7 @@ def submit_report():
     else:
         host.ip_address = ip_address
         host.platform = platform
-        host.last_seen_at = datetime.utcnow()
+        host.last_seen_at = utcnow()
     
     # Calculate statistics
     total_ides = scan_data.get('total_ides', 0)
@@ -503,6 +503,9 @@ def submit_report():
     )
     db.session.add(report)
     db.session.flush()  # Get report.id for foreign keys
+
+    # Retain the raw payload only for this, the newest report.
+    prune_host_scan_data(host.id, report.id)
     
     # Process secrets findings
     secrets_data = scan_data.get('secrets', {})
@@ -528,7 +531,7 @@ def submit_report():
 
             if existing:
                 # Update last seen time
-                existing.last_seen_at = datetime.utcnow()
+                existing.last_seen_at = utcnow()
                 existing.scan_report_id = report.id
             else:
                 # Create new finding
@@ -571,7 +574,7 @@ def submit_report():
     for secret in unresolved_secrets:
         if (secret.file_path, secret.variable_name) not in reported_secret_keys:
             secret.is_resolved = True
-            secret.resolved_at = datetime.utcnow()
+            secret.resolved_at = utcnow()
     
     # Process dependency data — upsert to preserve first_seen_at
     deps_data = scan_data.get('dependencies', {})
@@ -602,7 +605,7 @@ def submit_report():
             if existing:
                 # Update — preserve first_seen_at
                 existing.scan_report_id = report.id
-                existing.last_seen_at = datetime.utcnow()
+                existing.last_seen_at = utcnow()
                 existing.install_type = pkg.get('install_type', 'project')
                 existing.project_path = pkg.get('project_path')
                 existing.lifecycle_hooks = pkg.get('lifecycle_hooks')
@@ -656,7 +659,7 @@ def submit_report():
                 existing.mcp_servers = tool.get('components')
                 existing.open_ports = tool.get('open_ports')
                 existing.redacted_secrets = tool.get('secrets')
-                existing.last_seen_at = datetime.utcnow()
+                existing.last_seen_at = utcnow()
             else:
                 ai_tool = AIToolInfo(
                     host_id=host.id,
@@ -679,7 +682,7 @@ def submit_report():
                 db.session.delete(existing_tool)
 
     # Update key last used
-    key.last_used_at = datetime.utcnow()
+    key.last_used_at = utcnow()
 
     # Commit everything first so the daemon gets a fast response
     db.session.commit()
@@ -845,7 +848,7 @@ def get_pending_scan_requests():
     if error:
         return jsonify(error), status
 
-    q = ScanRequest.query.join(Host).filter(
+    q = ScanRequest.query.join(Host, ScanRequest.host_id == Host.id).filter(
         Host.customer_key_id == key.id,
         ScanRequest.status == 'pending'
     )
@@ -897,9 +900,9 @@ def update_scan_request(request_id):
     if new_status and new_status in VALID_SCAN_STATUSES:
         scan_req.status = new_status
         if new_status not in ('pending',) and not scan_req.started_at:
-            scan_req.started_at = datetime.utcnow()
+            scan_req.started_at = utcnow()
         if new_status in ('completed', 'failed', 'timeout'):
-            scan_req.completed_at = datetime.utcnow()
+            scan_req.completed_at = utcnow()
     
     log_message = data.get('log_message')
     log_level = data.get('log_level', 'info')
@@ -929,7 +932,7 @@ def get_pending_enforcement_actions():
     if error:
         return jsonify(error), status
 
-    q = EnforcementAction.query.join(Host).filter(
+    q = EnforcementAction.query.join(Host, EnforcementAction.host_id == Host.id).filter(
         Host.customer_key_id == key.id,
         EnforcementAction.status == EnforcementAction.STATUS_PENDING,
     )
@@ -937,7 +940,7 @@ def get_pending_enforcement_actions():
         q = q.filter(Host.id == host_from_token.id)
     pending = q.all()
 
-    now = datetime.utcnow()
+    now = utcnow()
     for a in pending:
         a.status = EnforcementAction.STATUS_DISPATCHED
         a.dispatched_at = now
@@ -1001,8 +1004,8 @@ def report_enforcement_action(action_id):
         action.quarantine_path = str(data['quarantine_path'])[:1000]
     if data.get('original_path'):
         action.original_path = str(data['original_path'])[:1000]
-    action.completed_at = datetime.utcnow()
-    key.last_used_at = datetime.utcnow()
+    action.completed_at = utcnow()
+    key.last_used_at = utcnow()
     db.session.commit()
 
     emit_event(
@@ -1059,9 +1062,9 @@ def heartbeat():
         ).first()
 
     if host:
-        host.last_heartbeat_at = datetime.utcnow()
+        host.last_heartbeat_at = utcnow()
         host.daemon_version = data.get('daemon_version')
-        key.last_used_at = datetime.utcnow()
+        key.last_used_at = utcnow()
         # A heartbeat clears any server-side "silent" alarm for this host (B2).
         from app.jobs.integrity_monitor import clear_silent_state
         clear_silent_state(host)
@@ -1069,7 +1072,7 @@ def heartbeat():
 
     return jsonify({
         'acknowledged': True,
-        'timestamp': datetime.utcnow().isoformat()
+        'timestamp': utcnow().isoformat()
     })
 
 
@@ -1199,7 +1202,7 @@ def deregister_host():
 
     # Mark host as inactive rather than deleting — preserves audit trail
     host.is_active = False
-    host.last_seen_at = datetime.utcnow()
+    host.last_seen_at = utcnow()
 
     # Log a tamper alert for the deregistration
     reason = data.get('reason', 'uninstall')
@@ -1269,8 +1272,8 @@ def receive_realtime_event():
         return jsonify({'error': 'Host not found'}), 404
 
     # Update the host's last realtime event timestamp
-    host.last_realtime_event = datetime.utcnow()
-    host.last_seen_at = datetime.utcnow()
+    host.last_realtime_event = utcnow()
+    host.last_seen_at = utcnow()
 
     # Process scan data if included (extension changes trigger a rescan)
     scan_data = data.get('scan_data')
@@ -1332,7 +1335,7 @@ def receive_realtime_event():
 
             if existing:
                 existing.scan_report_id = fallback_report_id
-                existing.last_seen_at = datetime.utcnow()
+                existing.last_seen_at = utcnow()
                 existing.install_type = pkg.get('install_type', 'project')
                 existing.project_path = pkg.get('project_path')
                 existing.lifecycle_hooks = pkg.get('lifecycle_hooks')
@@ -1358,7 +1361,7 @@ def receive_realtime_event():
             if pkg_key not in current_pkg_keys:
                 db.session.delete(existing_pkg)
 
-    key.last_used_at = datetime.utcnow()
+    key.last_used_at = utcnow()
     db.session.commit()
 
     for ext_data in high_risk_extensions:
@@ -1387,7 +1390,7 @@ def receive_realtime_event():
     return jsonify({
         'received': True,
         'changes_processed': len(changes),
-        'timestamp': datetime.utcnow().isoformat()
+        'timestamp': utcnow().isoformat()
     })
 
 

@@ -22,9 +22,9 @@ def _window_hours() -> int:
 
 def coverage_for_key(key, now=None) -> dict:
     """Coverage stats + gap lists for one customer key."""
-    from app.models import Host, ExpectedHost
+    from app.models import Host, ExpectedHost, utcnow
 
-    now = now or datetime.utcnow()
+    now = now or utcnow()
     cutoff = now - timedelta(hours=_window_hours())
 
     expected = {e.hostname for e in

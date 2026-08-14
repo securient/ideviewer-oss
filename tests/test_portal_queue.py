@@ -164,7 +164,7 @@ class TestVulnScanIdempotent:
                     {
                         "vuln_id": "CVE-TEST-0001",
                         "summary": "test vuln",
-                        "severity_label": "HIGH",
+                        "severity_label": "high",
                         "cvss_score": 7.5,
                         "affected_versions": "< 2.1.0",
                         "fixed_version": "2.1.0",

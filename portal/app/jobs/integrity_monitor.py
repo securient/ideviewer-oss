@@ -69,10 +69,10 @@ def sweep_host_integrity(now: datetime = None) -> dict:
 
 def _sweep(now: datetime = None) -> dict:
     from app import db
-    from app.models import Host, TamperAlert
+    from app.models import Host, TamperAlert, utcnow
     from app.events import emit_event
 
-    now = now or datetime.utcnow()
+    now = now or utcnow()
     cutoff = now - timedelta(minutes=_threshold_minutes())
 
     newly_silent = 0
