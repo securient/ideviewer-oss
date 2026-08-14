@@ -53,7 +53,7 @@ def deliver_webhook(delivery_id: int) -> None:
 
 def _attempt_delivery(delivery_id: int) -> None:
     from app import db
-    from app.models import WebhookDelivery
+    from app.models import WebhookDelivery, utcnow
 
     delivery = WebhookDelivery.query.get(delivery_id)
     if delivery is None:
@@ -69,12 +69,12 @@ def _attempt_delivery(delivery_id: int) -> None:
     if sub is None or not sub.is_active:
         delivery.status = WebhookDelivery.STATUS_FAILED
         delivery.last_error = "subscription inactive or deleted"
-        delivery.completed_at = datetime.utcnow()
+        delivery.completed_at = utcnow()
         db.session.commit()
         return
 
     delivery.attempt_count = (delivery.attempt_count or 0) + 1
-    delivery.last_attempt_at = datetime.utcnow()
+    delivery.last_attempt_at = utcnow()
     if delivery.attempt_count > 1:
         delivery.status = WebhookDelivery.STATUS_RETRYING
     db.session.commit()
@@ -85,7 +85,7 @@ def _attempt_delivery(delivery_id: int) -> None:
         delivery.response_body = (response_body or '')[:RESPONSE_BODY_TRUNCATE]
         if 200 <= status_code < 300:
             delivery.status = WebhookDelivery.STATUS_SUCCEEDED
-            delivery.completed_at = datetime.utcnow()
+            delivery.completed_at = utcnow()
             delivery.last_error = None
             sub.record_success()
             db.session.commit()
@@ -100,7 +100,7 @@ def _attempt_delivery(delivery_id: int) -> None:
 
     if delivery.attempt_count >= MAX_ATTEMPTS:
         delivery.status = WebhookDelivery.STATUS_FAILED
-        delivery.completed_at = datetime.utcnow()
+        delivery.completed_at = utcnow()
         sub.record_failure()
         db.session.commit()
         WEBHOOK_DELIVERIES.labels(status='failed').inc()

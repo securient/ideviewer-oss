@@ -49,7 +49,7 @@ def enrich_extension(marketplace: str, extension_id: str, version: str) -> dict:
 
 def _run(marketplace: str, extension_id: str, version: str) -> dict:
     from app import db
-    from app.models import ExtensionMetadata
+    from app.models import ExtensionMetadata, utcnow
 
     data, status_code = fetch_extension_with_status(extension_id, marketplace)
 
@@ -69,7 +69,7 @@ def _run(marketplace: str, extension_id: str, version: str) -> dict:
         )
         db.session.add(row)
 
-    row.fetched_at = datetime.utcnow()
+    row.fetched_at = utcnow()
     row.last_fetch_status = status_code
 
     just_unpublished = False
@@ -86,7 +86,7 @@ def _run(marketplace: str, extension_id: str, version: str) -> dict:
         # Definitely gone from marketplace.
         if not was_unpublished:
             row.is_unpublished = True
-            row.unpublished_detected_at = datetime.utcnow()
+            row.unpublished_detected_at = utcnow()
             just_unpublished = True
     # else: transient failure — leave previous state intact, just refresh fetched_at.
 
@@ -211,6 +211,7 @@ def enqueue_pending_enrichments(scan_data: dict) -> int:
     Returns the number of jobs enqueued (0 in sync mode is fine —
     the daily scheduler will pick them up).
     """
+    from app.models import utcnow
     from app.marketplace import detect_marketplace
     from app.models import ExtensionMetadata
 
@@ -229,7 +230,7 @@ def enqueue_pending_enrichments(scan_data: dict) -> int:
     ).all()
 
     fresh_keys: Set[Tuple[str, str, str]] = set()
-    threshold = datetime.utcnow() - STALE_AFTER
+    threshold = utcnow() - STALE_AFTER
     for row in existing:
         if row.fetched_at and row.fetched_at >= threshold:
             fresh_keys.add((row.marketplace, row.extension_id, row.version))

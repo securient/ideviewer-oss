@@ -47,7 +47,7 @@ def run_playbooks_for_event(event_type, customer_key_id, host, extension, severi
 
 
 def _open_quarantine_exists(host_id, extension_id):
-    from app.models import EnforcementAction
+    from app.models import EnforcementAction, utcnow
     return EnforcementAction.query.filter(
         EnforcementAction.host_id == host_id,
         EnforcementAction.extension_id == extension_id,
@@ -63,7 +63,7 @@ def _open_quarantine_exists(host_id, extension_id):
 def _recent_auto_quarantine_count(customer_key_id, since):
     """How many quarantines have been issued for this tenant's hosts recently."""
     from app.models import EnforcementAction, Host
-    return (EnforcementAction.query.join(Host)
+    return (EnforcementAction.query.join(Host, EnforcementAction.host_id == Host.id)
             .filter(Host.customer_key_id == customer_key_id,
                     EnforcementAction.action == EnforcementAction.ACTION_QUARANTINE,
                     EnforcementAction.created_at >= since)
@@ -71,6 +71,7 @@ def _recent_auto_quarantine_count(customer_key_id, since):
 
 
 def _run(event_type, customer_key_id, host, extension, severity) -> list:
+    from app.models import utcnow
     from app import db
     from app.models import RemediationPlaybook, EnforcementAction
     from app.audit import record_audit
@@ -105,7 +106,7 @@ def _run(event_type, customer_key_id, host, extension, severity) -> list:
             outcomes.append({'playbook': pb.name, 'outcome': 'deduped'})
             continue
 
-        since = datetime.utcnow() - timedelta(hours=1)
+        since = utcnow() - timedelta(hours=1)
         if _recent_auto_quarantine_count(customer_key_id, since) >= (pb.max_actions_per_hour or 5):
             record_audit('soar.rate_limited', target_type='host', target_id=host.public_id,
                          detail=f'SOAR rate limit hit — skipped {base_detail}')

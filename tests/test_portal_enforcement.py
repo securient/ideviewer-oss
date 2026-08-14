@@ -283,11 +283,13 @@ class TestDependencyRisk:
                               version='1.0', package_manager='npm',
                               source_type='extension', source_extension='evil.ext')
             portal_db.session.add(pkg); portal_db.session.flush()
-            for sev in ('CRITICAL', 'HIGH', 'HIGH', 'low'):
+            # Distinct vuln_ids: the same CVE twice on one package is a
+            # duplicate the uq_vuln_per_host_package constraint now rejects.
+            for i, sev in enumerate(('critical', 'high', 'high', 'low')):
                 portal_db.session.add(Vulnerability(
                     host_id=test_host.id, package_info_id=pkg.id, package_name='left-pad',
                     package_version='1.0', package_manager='npm', ecosystem='npm',
-                    vuln_id=f'CVE-{sev}', severity_label=sev, is_resolved=False))
+                    vuln_id=f'CVE-{sev}-{i}', severity_label=sev, is_resolved=False))
             portal_db.session.commit()
             res = _extension_dependency_risk(test_host.id, 'evil.ext')
             assert res['critical'] == 1

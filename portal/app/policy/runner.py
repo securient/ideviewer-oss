@@ -15,7 +15,7 @@ from typing import Iterable, List
 
 from app import db
 from app.events import emit_event
-from app.models import EnforcementAction, ExtensionPolicy, PolicyViolation, TamperAlert
+from app.models import EnforcementAction, ExtensionPolicy, PolicyViolation, TamperAlert, utcnow
 from app.observability import POLICY_VIOLATIONS
 from app.policy import evaluate
 
@@ -47,7 +47,7 @@ def evaluate_and_record(
     violation_ids: List[int] = []
     enforcement_action_ids: List[int] = []
     ide_by_vid: dict = {}  # violation id -> IDE info from the scan
-    now = datetime.utcnow()
+    now = utcnow()
 
     for match in matches:
         if match.action == ExtensionPolicy.ACTION_ALLOW:

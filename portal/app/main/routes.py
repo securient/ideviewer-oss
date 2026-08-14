@@ -15,6 +15,7 @@ from app.models import (
     ExtensionPolicy, PolicyViolation,
     ExtensionMetadata, EnforcementAction,
     User, AuditLog, RemediationPlaybook, ExpectedHost,
+    utcnow,
 )
 from app.auth.forms import (
     CustomerKeyForm, WebhookSubscriptionForm, ExtensionPolicyForm,
@@ -52,7 +53,7 @@ def dashboard():
     # Calculate statistics
     total_hosts = len(hosts)
     active_hosts = sum(1 for h in hosts if h.last_seen_at and 
-                       h.last_seen_at > datetime.utcnow() - timedelta(hours=24))
+                       h.last_seen_at > utcnow() - timedelta(hours=24))
     
     # Get extension statistics
     total_extensions = 0
@@ -99,14 +100,14 @@ def dashboard():
     # Grace period: skip missing host alerts for 5 minutes after portal restart
     # (daemons need time to reconnect and send heartbeats)
     from app import PORTAL_START_TIME
-    portal_uptime = (datetime.utcnow() - PORTAL_START_TIME).total_seconds()
+    portal_uptime = (utcnow() - PORTAL_START_TIME).total_seconds()
     missing_hosts = []
     if portal_uptime > 300:  # 5-minute grace period
-        missing_threshold = datetime.utcnow() - timedelta(minutes=30)
+        missing_threshold = utcnow() - timedelta(minutes=30)
         for host in hosts:
             heartbeat_time = host.last_heartbeat_at or host.last_seen_at
             if heartbeat_time and heartbeat_time < missing_threshold:
-                minutes_ago = int((datetime.utcnow() - heartbeat_time).total_seconds() / 60)
+                minutes_ago = int((utcnow() - heartbeat_time).total_seconds() / 60)
                 missing_hosts.append({
                     'host': host,
                     'last_contact': heartbeat_time,
@@ -168,7 +169,7 @@ def dashboard():
         critical_vuln_count = Vulnerability.query.filter(
             Vulnerability.host_id.in_(host_ids),
             Vulnerability.is_resolved == False,
-            Vulnerability.severity_label == 'CRITICAL'
+            Vulnerability.severity_label == 'critical'
         ).count()
 
         # Top 5 most common vulnerable packages across all hosts
@@ -234,7 +235,7 @@ def dashboard():
                            vulnerable_hosts_count=vulnerable_hosts_count,
                            critical_vuln_count=critical_vuln_count,
                            top_vulnerable_packages=top_vulnerable_packages,
-                           now=datetime.utcnow())
+                           now=utcnow())
 
 
 @main_bp.route('/vulnerabilities')
@@ -280,14 +281,14 @@ def vulnerabilities():
                 if host_obj:
                     entry['host_names'].append(host_obj.hostname)
             # Keep the highest severity
-            severity_order = {'CRITICAL': 0, 'HIGH': 1, 'MEDIUM': 2, 'LOW': 3}
+            severity_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
             if severity_order.get(v.severity_label, 4) < severity_order.get(entry['severity'], 4):
                 entry['severity'] = v.severity_label
             if v.cvss_score and (entry['cvss_score'] is None or v.cvss_score > entry['cvss_score']):
                 entry['cvss_score'] = v.cvss_score
 
     # Convert to list and sort by severity then host count
-    severity_order = {'CRITICAL': 0, 'HIGH': 1, 'MEDIUM': 2, 'LOW': 3}
+    severity_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
     packages = sorted(
         grouped.values(),
         key=lambda x: (severity_order.get(x['severity'], 4), -len(x['host_ids']))
@@ -299,7 +300,7 @@ def vulnerabilities():
     # Collect distinct filter values
     all_managers = sorted(set(p['package_manager'] for p in packages if p['package_manager']))
     all_severities = sorted(set(p['severity'] for p in packages if p['severity']),
-                            key=lambda s: {'CRITICAL': 0, 'HIGH': 1, 'MEDIUM': 2, 'LOW': 3}.get(s, 4))
+                            key=lambda s: {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}.get(s, 4))
     all_hosts = sorted(set(h for p in packages for h in p['host_names']))
     all_cves = sorted(set(vid for p in packages for vid in p['vuln_ids']))
 
@@ -320,7 +321,7 @@ def all_hosts():
     key_ids = [k.id for k in customer_keys]
     hosts = Host.query.filter(Host.customer_key_id.in_(key_ids)).order_by(Host.last_seen_at.desc()).all() if key_ids else []
     host_ids = [h.id for h in hosts]
-    now = datetime.utcnow()
+    now = utcnow()
 
     filter_mode = request.args.get('filter', '')
 
@@ -536,7 +537,7 @@ def all_packages():
                 entry = pkg_groups[key]
                 if v.vuln_id and v.vuln_id not in entry['vuln_ids']:
                     entry['vuln_ids'].append(v.vuln_id)
-                severity_order = {'CRITICAL': 0, 'HIGH': 1, 'MEDIUM': 2, 'LOW': 3}
+                severity_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
                 if entry['severity'] is None or severity_order.get(v.severity_label, 4) < severity_order.get(entry['severity'], 4):
                     entry['severity'] = v.severity_label
 
@@ -550,7 +551,7 @@ def all_packages():
     elif filter_mode == 'hooks':
         packages_list = [p for p in packages_list if p['has_hooks']]
 
-    severity_order = {'CRITICAL': 0, 'HIGH': 1, 'MEDIUM': 2, 'LOW': 3}
+    severity_order = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}
     packages_list.sort(key=lambda x: (
         severity_order.get(x['severity'], 99),
         -len(x['vuln_ids']),
@@ -1205,7 +1206,7 @@ def resolve_violation(violation_id):
         flash('Access denied', 'error')
         return redirect(url_for('main.violations'))
     v.is_resolved = True
-    v.resolved_at = datetime.utcnow()
+    v.resolved_at = utcnow()
     v.resolved_by_user_id = current_user.id
     db.session.commit()
     flash('Violation resolved', 'success')
@@ -1482,7 +1483,7 @@ def acknowledge_alert(alert_id):
     
     alert.is_acknowledged = True
     alert.acknowledged_by = current_user.id
-    alert.acknowledged_at = datetime.utcnow()
+    alert.acknowledged_at = utcnow()
     db.session.commit()
 
     flash('Alert acknowledged', 'success')
@@ -1554,7 +1555,7 @@ def notification_read(alert_id):
         return jsonify({'error': 'access denied'}), 403
     alert.is_acknowledged = True
     alert.acknowledged_by = current_user.id
-    alert.acknowledged_at = datetime.utcnow()
+    alert.acknowledged_at = utcnow()
     db.session.commit()
     return jsonify({'success': True})
 
@@ -1568,7 +1569,7 @@ def notifications_read_all():
         TamperAlert.is_acknowledged == False,  # noqa: E712
     ).update(
         {'is_acknowledged': True, 'acknowledged_by': current_user.id,
-         'acknowledged_at': datetime.utcnow()},
+         'acknowledged_at': utcnow()},
         synchronize_session=False,
     )
     db.session.commit()
@@ -1602,11 +1603,11 @@ def trigger_scan(host_id):
         requested_by=current_user.id,
         status='pending',
         log_entries=[{
-            'timestamp': datetime.utcnow().isoformat(),
+            'timestamp': utcnow().isoformat(),
             'level': 'info',
             'message': f'Scan requested by {current_user.username}'
         }, {
-            'timestamp': datetime.utcnow().isoformat(),
+            'timestamp': utcnow().isoformat(),
             'level': 'info',
             'message': 'Waiting for daemon to pick up request...'
         }]
@@ -1638,7 +1639,7 @@ def cancel_scan(host_id):
         return jsonify({'error': 'No active scan to cancel'}), 404
 
     active_scan.status = 'cancelled'
-    active_scan.completed_at = datetime.utcnow()
+    active_scan.completed_at = utcnow()
     active_scan.add_log(f'Scan cancelled by {current_user.username}', level='warning')
     db.session.commit()
 

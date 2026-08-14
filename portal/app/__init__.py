@@ -4,13 +4,17 @@ IDE Viewer Portal - Flask Application Factory.
 
 import os
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager
 
-# Track when the portal started — used for missing host grace period
-PORTAL_START_TIME = datetime.utcnow()
+# Track when the portal started — used for missing host grace period.
+# Defined inline rather than imported from app.models, which imports this
+# module for `db` and would make the import circular. Must stay timezone-aware:
+# it is compared against values read back from timestamptz columns, and mixing
+# aware and naive datetimes raises TypeError.
+PORTAL_START_TIME = datetime.now(timezone.utc)
 from flask_wtf.csrf import CSRFProtect
 from flask_cors import CORS
 from flask_migrate import Migrate
@@ -273,7 +277,7 @@ def _create_default_user(database):
     """
     import logging
     import secrets as _secrets
-    from app.models import User
+    from app.models import User, utcnow
 
     if User.query.count() != 0:
         return

@@ -34,10 +34,10 @@ def refresh_stale_extension_metadata() -> dict:
 
 
 def _run() -> dict:
-    from app.models import ExtensionMetadata
+    from app.models import ExtensionMetadata, utcnow
     from app.jobs.extension_enrich import enrich_extension
 
-    cutoff = datetime.utcnow() - REFRESH_THRESHOLD
+    cutoff = utcnow() - REFRESH_THRESHOLD
     stale = (
         ExtensionMetadata.query
         .filter(ExtensionMetadata.fetched_at < cutoff)

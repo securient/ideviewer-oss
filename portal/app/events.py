@@ -30,7 +30,7 @@ def emit_event(
     raises on subscription/queue problems.
     """
     from app import db
-    from app.models import WebhookSubscription, WebhookDelivery
+    from app.models import WebhookSubscription, WebhookDelivery, utcnow
     from app import queue as queue_module
     from app.jobs.webhook_delivery import deliver_webhook
 
@@ -73,9 +73,10 @@ def emit_event(
 
 
 def _build_envelope(event_type: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    from app.models import utcnow
     return {
         'id': f'evt_{uuid.uuid4().hex}',
         'type': event_type,
-        'created_at': datetime.utcnow().isoformat() + 'Z',
+        'created_at': utcnow().isoformat() + 'Z',
         'data': data,
     }
