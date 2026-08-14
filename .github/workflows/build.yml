@@ -546,27 +546,46 @@ jobs:
             <!-- Update this section before tagging each release; the rest of the
                  notes below are generated automatically from merged commits. -->
 
-            **Patch release. Recommended for anyone running the portal on PostgreSQL.**
+            **Schema hardening release. Contains breaking changes — read the
+            upgrade note below before deploying.**
 
-            - **Fixed: SBOM export returned a 500 on PostgreSQL.** CycloneDX
-              generation grouped by `extension_id` while selecting every column,
-              which SQLite tolerates and PostgreSQL rejects. Both the SBOM
-              download and the signed-attestation endpoint were affected on
-              docker-compose and AWS deployments.
-            - **Fixed: the default admin user was not created on a fresh
-              database the portal migrated itself.** Alembic's environment set
-              `SKIP_DB_INIT` mid-startup, causing the seed step to be skipped.
-              Container deployments were unaffected.
-            - **Fixed: duplicate uniqueness enforcement on `public_id`** in
-              `extension_policies`, `webhook_subscriptions` and
-              `remediation_playbooks`, where two indexes covered the same column
-              and one of them was not unique.
-            - **The portal now requires PostgreSQL.** The implicit SQLite
-              database is gone, along with the `create_all()` path that could
-              create schema outside of migrations. Boot-time migrations are
-              serialised with an advisory lock so concurrent workers cannot race.
-              `./start.sh` provisions PostgreSQL automatically.
+            The portal's 14 migrations are replaced by a single PostgreSQL-native
+            baseline generated from the models, so schema and code cannot drift
+            apart. The previous chain carried SQLite-era workarounds and almost
+            no integrity guarantees; the database now enforces what the
+            application only assumed:
 
-            > **Upgrading:** set `DATABASE_URL` to a PostgreSQL URL. Any install
-            > still using `portal/instance/ideviewer.db` must move its data to
-            > PostgreSQL before upgrading.
+            | | Before | Now |
+            |---|---|---|
+            | CHECK constraints | 0 | 39 |
+            | Foreign keys with an explicit `ON DELETE` | 1 of 34 | 34 of 34 |
+            | Timezone-aware timestamp columns | 0 | 47 |
+            | JSONB columns | 0 | 11 |
+            | Columns with database-side defaults | 0 | 70 |
+
+            Role, action, status, mode, risk and severity vocabularies were
+            advisory Python constants the database ignored; they are now CHECK
+            constraints. Host-scoped tables carry their tenant key with a
+            composite foreign key, so a row belonging to one customer can no
+            longer reference another customer's host. The audit trail is now
+            append-only by trigger rather than by convention.
+
+            **Fixed**
+
+            - **Deleting a host or a customer key failed outright** with a
+              not-null violation, because child rows were orphaned rather than
+              cascaded. Deletion now cascades correctly and is covered by tests.
+            - **Vulnerability severity never affected a host's risk score.**
+              Severity labels were written in uppercase and compared in
+              lowercase, so the "vulnerable dependencies" factor was always
+              zero. Labels are now consistently lowercase.
+            - **Severity sorting was inert** in several portal views for the
+              same reason.
+            - **Scan payload growth is now bounded.** Only a host's most recent
+              raw scan payload is retained; older reports keep their summary
+              counts. Previously every scan stored roughly 1.2 MB indefinitely.
+
+            > **Upgrading:** this release cannot migrate an existing database.
+            > The migration history was squashed, so installations stamped at an
+            > older revision must be recreated. Back up anything you need first.
+            > Consuming `severity_label` externally? It is now lowercase.
