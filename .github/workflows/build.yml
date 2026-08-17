@@ -386,6 +386,11 @@ jobs:
     needs: [build]
     runs-on: macos-latest
     name: Package macOS ARM64
+    env:
+      # Signing turns itself on once all the secrets exist. Until then the job
+      # still produces an (unsigned) .pkg, so builds and pull requests from
+      # forks — which never receive secrets — keep working.
+      SIGNING_ENABLED: ${{ secrets.MACOS_CERT_P12 != '' && secrets.MACOS_INSTALLER_P12 != '' && secrets.ASC_KEY_P8 != '' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
@@ -393,6 +398,49 @@ jobs:
         with:
           name: binary-darwin-arm64
           path: dist
+
+      - name: Import signing identities
+        if: env.SIGNING_ENABLED == 'true'
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          MACOS_INSTALLER_P12: ${{ secrets.MACOS_INSTALLER_P12 }}
+          MACOS_INSTALLER_PASSWORD: ${{ secrets.MACOS_INSTALLER_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          echo "KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+
+          echo "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/app.p12"
+          echo "$MACOS_INSTALLER_P12" | base64 --decode > "$RUNNER_TEMP/installer.p12"
+          security import "$RUNNER_TEMP/app.p12" -k "$KEYCHAIN" \
+            -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security import "$RUNNER_TEMP/installer.p12" -k "$KEYCHAIN" \
+            -P "$MACOS_INSTALLER_PASSWORD" -T /usr/bin/productbuild -T /usr/bin/productsign
+          rm -f "$RUNNER_TEMP/app.p12" "$RUNNER_TEMP/installer.p12"
+
+          # Without this the tools prompt for keychain access and the job hangs.
+          security set-key-partition-list -S apple-tool:,apple:,codesign:,productbuild: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          security list-keychain -d user -s "$KEYCHAIN" login.keychain-db
+
+          # Resolve by SHA-1 rather than name: unambiguous, and it doesn't leak
+          # the team name into logs.
+          APP_ID=$(security find-identity -v "$KEYCHAIN" | grep "Developer ID Application" | head -1 | awk '{print $2}')
+          INST_ID=$(security find-identity -v "$KEYCHAIN" | grep "Developer ID Installer" | head -1 | awk '{print $2}')
+          if [ -z "$APP_ID" ] || [ -z "$INST_ID" ]; then
+            echo "::error::Expected both a Developer ID Application and a Developer ID Installer identity."
+            security find-identity -v "$KEYCHAIN" | sed 's/[0-9A-F]\{40\}/<hash>/'
+            exit 1
+          fi
+          echo "MACOS_SIGN_IDENTITY=$APP_ID" >> "$GITHUB_ENV"
+          echo "MACOS_INSTALLER_IDENTITY=$INST_ID" >> "$GITHUB_ENV"
+          echo "Imported Developer ID Application and Installer identities"
 
       - name: Build .pkg
         env:
@@ -402,6 +450,52 @@ jobs:
           chmod +x dist/ideviewer
           chmod +x build_scripts/build_macos.sh
           ./build_scripts/build_macos.sh
+
+      - name: Notarize and staple
+        if: env.SIGNING_ENABLED == 'true'
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          PKG=$(ls dist/IDEViewer-*.pkg | head -1)
+          echo "$ASC_KEY_P8" | base64 --decode > "$RUNNER_TEMP/asc.p8"
+
+          # --wait blocks until Apple returns a verdict; without it the job would
+          # publish an artifact whose notarization might still fail.
+          xcrun notarytool submit "$PKG" \
+            --key "$RUNNER_TEMP/asc.p8" \
+            --key-id "$ASC_KEY_ID" \
+            --issuer "$ASC_ISSUER_ID" \
+            --wait --timeout 30m
+          rm -f "$RUNNER_TEMP/asc.p8"
+
+          # Stapling attaches the ticket to the .pkg so it validates with no
+          # network — which is the difference between a clean install and a
+          # spinner on conference wifi.
+          xcrun stapler staple "$PKG"
+
+      - name: Verify Gatekeeper acceptance
+        if: env.SIGNING_ENABLED == 'true'
+        run: |
+          set -euo pipefail
+          PKG=$(ls dist/IDEViewer-*.pkg | head -1)
+          pkgutil --check-signature "$PKG"
+          xcrun stapler validate "$PKG"
+          # The assessment a user's machine performs on download. If this fails,
+          # the release must not ship.
+          spctl --assess --type install --verbose=4 "$PKG"
+          echo "Gatekeeper accepts $PKG"
+
+      - name: Warn when unsigned
+        if: env.SIGNING_ENABLED != 'true'
+        run: |
+          echo "::warning::macOS signing secrets are absent — this .pkg is unsigned and un-notarized, so Gatekeeper will warn users. See the release runbook for the required secrets."
+
+      - name: Clean up keychain
+        if: always() && env.SIGNING_ENABLED == 'true'
+        run: security delete-keychain "$KEYCHAIN" || true
 
       - name: Rename with architecture
         run: |

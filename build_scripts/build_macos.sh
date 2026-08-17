@@ -49,11 +49,35 @@ PKG_ROOT="$PKG_DIR/root"
 mkdir -p "$PKG_ROOT/usr/local/bin"
 mkdir -p "$PKG_ROOT/Library/LaunchAgents"
 
-# Copy and ad-hoc sign executable (provides stable identifier for JAMF PPPC profiles)
+# Copy and sign the executable.
+#
+# MACOS_SIGN_IDENTITY selects a Developer ID Application identity (a name or a
+# SHA-1 hash from `security find-identity -v`). Release builds set it; local
+# builds leave it unset and fall back to an ad-hoc signature, which still gives
+# JAMF PPPC profiles a stable identifier but conveys no Gatekeeper trust.
+#
+# The hardened runtime and secure timestamp are not optional extras: Apple
+# rejects notarization without both, and an un-notarized .pkg is exactly the
+# Gatekeeper prompt this is meant to remove.
 cp "$DIST_DIR/ideviewer" "$PKG_ROOT/usr/local/bin/"
 chmod +x "$PKG_ROOT/usr/local/bin/ideviewer"
-codesign --sign - --force --identifier com.ideviewer.daemon "$PKG_ROOT/usr/local/bin/ideviewer"
-echo "Binary signed with identifier: com.ideviewer.daemon"
+
+SIGN_IDENTITY="${MACOS_SIGN_IDENTITY:-}"
+if [ -n "$SIGN_IDENTITY" ]; then
+    echo "Signing binary with Developer ID Application identity..."
+    codesign --sign "$SIGN_IDENTITY" \
+        --force \
+        --options runtime \
+        --timestamp \
+        --identifier "$BUNDLE_ID" \
+        "$PKG_ROOT/usr/local/bin/ideviewer"
+    codesign --verify --strict --verbose=2 "$PKG_ROOT/usr/local/bin/ideviewer"
+    echo "Binary signed (hardened runtime, timestamped): $BUNDLE_ID"
+else
+    codesign --sign - --force --identifier "$BUNDLE_ID" "$PKG_ROOT/usr/local/bin/ideviewer"
+    echo "Binary ad-hoc signed with identifier: $BUNDLE_ID"
+    echo "  (set MACOS_SIGN_IDENTITY for a distributable, notarizable build)"
+fi
 
 # Copy uninstaller script
 cp "$SCRIPT_DIR/uninstall_macos.sh" "$PKG_ROOT/usr/local/bin/ideviewer-uninstall"
@@ -342,17 +366,38 @@ To uninstall:
   sudo ideviewer-uninstall
 EOF
 
-# Build the final product package
+# Build the final product package.
+#
+# Signing the .pkg needs a *different* certificate from the binary: Developer ID
+# Installer, not Developer ID Application. Using the wrong one fails with a
+# misleading "no identity found", which is the classic half-day of this task.
+FINAL_PKG="$DIST_DIR/IDEViewer-$APP_VERSION.pkg"
+INSTALLER_IDENTITY="${MACOS_INSTALLER_IDENTITY:-}"
+
 echo "Building final installer package..."
-productbuild \
-    --distribution "$PKG_DIR/distribution.xml" \
-    --resources "$PKG_DIR" \
-    --package-path "$PKG_DIR" \
-    "$DIST_DIR/IDEViewer-$APP_VERSION.pkg"
+if [ -n "$INSTALLER_IDENTITY" ]; then
+    productbuild \
+        --distribution "$PKG_DIR/distribution.xml" \
+        --resources "$PKG_DIR" \
+        --package-path "$PKG_DIR" \
+        --sign "$INSTALLER_IDENTITY" \
+        --timestamp \
+        "$FINAL_PKG"
+    pkgutil --check-signature "$FINAL_PKG"
+    echo "Installer signed with Developer ID Installer identity"
+else
+    productbuild \
+        --distribution "$PKG_DIR/distribution.xml" \
+        --resources "$PKG_DIR" \
+        --package-path "$PKG_DIR" \
+        "$FINAL_PKG"
+    echo "Installer is UNSIGNED — Gatekeeper will warn on download"
+    echo "  (set MACOS_INSTALLER_IDENTITY to sign it)"
+fi
 
 echo ""
 echo "=== Build Complete ==="
-echo "Installer: $DIST_DIR/IDEViewer-$APP_VERSION.pkg"
+echo "Installer: $FINAL_PKG"
 echo ""
 echo "To install:"
 echo "  sudo installer -pkg $DIST_DIR/IDEViewer-$APP_VERSION.pkg -target /"
