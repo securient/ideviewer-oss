@@ -26,7 +26,7 @@ cd portal
 docker-compose up -d
 ```
 
-The portal is available at `http://localhost:8080`.
+The portal is available at `http://localhost:8090` (override with `PORTAL_PORT`).
 
 ## Default Credentials
 
@@ -85,5 +85,5 @@ cd portal && docker-compose up -d --build
 ```bash
 ideviewer register \
   --customer-key YOUR-KEY \
-  --portal-url http://localhost:8080
+  --portal-url http://localhost:8090
 ```
