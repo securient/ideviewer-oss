@@ -478,6 +478,16 @@ def submit_report():
     platform = data.get('platform', 'Unknown')
     ip_address = data.get('ip_address') or request.remote_addr
 
+    # Provenance: 'daemon' (the background service on its own schedule) or
+    # 'cli' (a person running 'ideviewer scan --push'). Reports are append-only
+    # rows, so a manual push adds history rather than replacing it -- but the
+    # host page has to be able to say which numbers a human produced.
+    source = data.get('source') or 'daemon'
+    if source not in ScanReport.SOURCES:
+        return jsonify({
+            'error': f"source must be one of {', '.join(ScanReport.SOURCES)}"
+        }), 400
+
     # Token-auth pins the request to a specific host record.
     host = host_from_token
     if host is None:
@@ -551,7 +561,8 @@ def submit_report():
         scan_data=scan_data,
         total_ides=total_ides,
         total_extensions=total_extensions,
-        dangerous_extensions=dangerous_count
+        dangerous_extensions=dangerous_count,
+        source=source,
     )
     db.session.add(report)
     db.session.flush()  # Get report.id for foreign keys

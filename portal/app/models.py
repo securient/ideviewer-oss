@@ -3,7 +3,7 @@ Database models for IDE Viewer Portal.
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.dialects.postgresql import JSONB
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -337,6 +337,15 @@ class ScanReport(db.Model):
     total_extensions = db.Column(db.Integer, default=0, server_default='0')
     dangerous_extensions = db.Column(db.Integer, default=0, server_default='0')
 
+    # Who produced this report. 'daemon' is the background service; 'cli' is a
+    # human running 'ideviewer scan --push' by hand. Reports are append-only
+    # rows, so a manual push never destroys daemon data -- but an operator
+    # looking at a host needs to know which numbers a person typed in and which
+    # the daemon observed on its own schedule.
+    SOURCES = ('daemon', 'cli')
+    source = db.Column(db.String(16), default='daemon', server_default='daemon',
+                       nullable=False)
+
     __table_args__ = (
         db.ForeignKeyConstraint(
             ['customer_key_id', 'host_id'],
@@ -347,6 +356,7 @@ class ScanReport(db.Model):
         bounded('total_ides', 'ck_scan_reports_total_ides', minimum=0),
         bounded('total_extensions', 'ck_scan_reports_total_extensions', minimum=0),
         bounded('dangerous_extensions', 'ck_scan_reports_dangerous', minimum=0),
+        one_of('source', SOURCES, 'ck_scan_reports_source'),
     )
 
     def __repr__(self):
@@ -587,7 +597,8 @@ class ScanRequest(db.Model):
     # Nullable so the request record survives deletion of the user who made it.
     requested_by = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
     
-    # Status: pending, connecting, scanning_ides, scanning_secrets, scanning_packages, completed, failed, timeout
+    # Status: pending, connecting, scanning_ides, scanning_secrets,
+    # scanning_packages, completed, failed, timeout, cancelled.
     status = db.Column(db.String(30), default='pending', server_default='pending', nullable=False)
     
     # Timestamps
@@ -608,10 +619,22 @@ class ScanRequest(db.Model):
     requester = db.relationship('User', backref=db.backref('scan_requests', lazy='dynamic', passive_deletes=True))
     
     # Indexes
+    # 'cancelled' was missing here (and from the CHECK constraint) while
+    # /host/<id>/cancel-scan wrote it, so every Stop click raised a
+    # CheckViolation and the request stayed stuck at 'pending' forever.
     VALID_STATUSES = (
         'pending', 'connecting', 'scanning_ides', 'scanning_secrets',
-        'scanning_packages', 'completed', 'failed', 'timeout',
+        'scanning_packages', 'completed', 'failed', 'timeout', 'cancelled',
     )
+
+    # Statuses meaning "the daemon still owes us a result".
+    ACTIVE_STATUSES = (
+        'pending', 'connecting', 'scanning_ides', 'scanning_secrets',
+        'scanning_packages',
+    )
+
+    # Statuses meaning "nothing more will happen to this request".
+    TERMINAL_STATUSES = ('completed', 'failed', 'timeout', 'cancelled')
 
     __table_args__ = (
         db.ForeignKeyConstraint(
@@ -646,10 +669,57 @@ class ScanRequest(db.Model):
             'completed_at': self.completed_at.isoformat() if self.completed_at else None,
             'log_entries': self.log_entries or [],
             'error_message': self.error_message,
+            'is_active': self.status in self.ACTIVE_STATUSES,
         }
-    
+
     def __repr__(self):
         return f'<ScanRequest {self.id} for Host {self.host_id} [{self.status}]>'
+
+
+# A request the daemon never collects used to sit at 'pending' forever, and
+# because trigger-scan refuses to queue a second request while one is active,
+# one missed pickup wedged the button permanently. These bounds let the record
+# age out on its own.
+SCAN_REQUEST_PICKUP_TIMEOUT_MINUTES = 10   # pending -> nobody ever claimed it
+SCAN_REQUEST_RUN_TIMEOUT_MINUTES = 30      # claimed -> daemon went away mid-scan
+
+
+def expire_stale_scan_requests(host_id=None):
+    """Flip abandoned scan requests to 'timeout'. Returns the rows changed.
+
+    Two clocks, because the two failure modes are different: a request nobody
+    ever claimed is measured from ``created_at``, and one whose daemon died
+    part-way through is measured from ``started_at``. The caller commits.
+    """
+    now = utcnow()
+    pickup_cutoff = now - timedelta(minutes=SCAN_REQUEST_PICKUP_TIMEOUT_MINUTES)
+    run_cutoff = now - timedelta(minutes=SCAN_REQUEST_RUN_TIMEOUT_MINUTES)
+
+    q = ScanRequest.query.filter(ScanRequest.status.in_(ScanRequest.ACTIVE_STATUSES))
+    if host_id is not None:
+        q = q.filter(ScanRequest.host_id == host_id)
+
+    expired = 0
+    for req in q.all():
+        if req.status == 'pending':
+            stale = req.created_at is not None and req.created_at < pickup_cutoff
+            reason = (f'No daemon claimed this request within '
+                      f'{SCAN_REQUEST_PICKUP_TIMEOUT_MINUTES} minutes. Check that '
+                      f'the daemon is running on the host (ideviewer status).')
+        else:
+            started = req.started_at or req.created_at
+            stale = started is not None and started < run_cutoff
+            reason = (f'The daemon stopped reporting progress for '
+                      f'{SCAN_REQUEST_RUN_TIMEOUT_MINUTES} minutes.')
+        if not stale:
+            continue
+        req.status = 'timeout'
+        req.completed_at = now
+        req.error_message = reason
+        req.add_log(reason, level='error')
+        expired += 1
+
+    return expired
 
 
 class TamperAlert(db.Model):
