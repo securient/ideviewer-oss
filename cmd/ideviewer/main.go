@@ -48,6 +48,8 @@ func init() {
 	rootCmd.AddCommand(daemonCmd)
 	rootCmd.AddCommand(registerCmd)
 	rootCmd.AddCommand(enforceCmd)
+	rootCmd.AddCommand(statusCmd)
+	rootCmd.AddCommand(resetCmd)
 	rootCmd.AddCommand(stopCmd)
 	rootCmd.AddCommand(hooksCmd)
 	rootCmd.AddCommand(updateCmd)
