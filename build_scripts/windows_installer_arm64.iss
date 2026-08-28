@@ -64,13 +64,13 @@ Filename: "taskkill"; Parameters: "/F /IM ideviewer.exe"; Flags: runhidden; RunO
 
 [UninstallDelete]
 ; Every directory IDEViewer can load a config from. Removing only
-; {localappdata} left {commonappdata}\IDEViewer and {userprofile}\.ideviewer
+; {localappdata} left {commonappdata}\IDEViewer and {%USERPROFILE}\.ideviewer
 ; behind, and because those outrank the user config at load time, the *next*
 ; install silently ran on the previous install's portal URL, customer key and
 ; host token -- which looked like registration having no effect.
 Type: filesandordirs; Name: "{localappdata}\IDEViewer"
 Type: filesandordirs; Name: "{commonappdata}\IDEViewer"
-Type: filesandordirs; Name: "{userprofile}\.ideviewer"
+Type: filesandordirs; Name: "{%USERPROFILE}\.ideviewer"
 
 [Code]
 function NeedsAddPath(Param: string): boolean;
@@ -93,14 +93,14 @@ var
   ResultCode: Integer;
 begin
   // Must match internal/config.configCandidates() priority order. This used to
-  // look only at {userprofile}\.ideviewer, the legacy path -- but 'ideviewer
+  // look only at {%USERPROFILE}\.ideviewer, the legacy path -- but 'ideviewer
   // register' writes {localappdata}\IDEViewer, so on a normal install the file
   // was never found and the uninstall alert never reached the portal.
   ConfigPath := ExpandConstant('{commonappdata}') + '\IDEViewer\config.json';
   if not FileExists(ConfigPath) then
     ConfigPath := ExpandConstant('{localappdata}') + '\IDEViewer\config.json';
   if not FileExists(ConfigPath) then
-    ConfigPath := ExpandConstant('{userprofile}') + '\.ideviewer\config.json';
+    ConfigPath := ExpandConstant('{%USERPROFILE}') + '\.ideviewer\config.json';
   if FileExists(ConfigPath) then
   begin
     Exec('powershell.exe',
