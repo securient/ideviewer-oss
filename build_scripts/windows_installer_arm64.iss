@@ -56,8 +56,21 @@ Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environmen
 Filename: "{cmd}"; Parameters: "/k echo IDE Viewer installed! && echo. && echo Run: ideviewer register --customer-key KEY --portal-url URL && pause"; Flags: postinstall nowait skipifsilent
 
 [UninstallRun]
-; Stop daemon if running
-Filename: "taskkill"; Parameters: "/F /IM ideviewer.exe"; Flags: runhidden; RunOnceId: "StopDaemon"
+; Ask the daemon to shut down cleanly first so it can post its "daemon_stopping"
+; alert to the portal, then remove the logon task, then force-kill any straggler.
+Filename: "{app}\{#MyAppExeName}"; Parameters: "stop"; Flags: runhidden; RunOnceId: "StopDaemon"
+Filename: "schtasks"; Parameters: "/Delete /F /TN ""IDEViewer Daemon"""; Flags: runhidden; RunOnceId: "RemoveLogonTask"
+Filename: "taskkill"; Parameters: "/F /IM ideviewer.exe"; Flags: runhidden; RunOnceId: "KillDaemon"
+
+[UninstallDelete]
+; Every directory IDEViewer can load a config from. Removing only
+; {localappdata} left {commonappdata}\IDEViewer and {userprofile}\.ideviewer
+; behind, and because those outrank the user config at load time, the *next*
+; install silently ran on the previous install's portal URL, customer key and
+; host token -- which looked like registration having no effect.
+Type: filesandordirs; Name: "{localappdata}\IDEViewer"
+Type: filesandordirs; Name: "{commonappdata}\IDEViewer"
+Type: filesandordirs; Name: "{userprofile}\.ideviewer"
 
 [Code]
 function NeedsAddPath(Param: string): boolean;
@@ -79,7 +92,15 @@ var
   ConfigPath: string;
   ResultCode: Integer;
 begin
-  ConfigPath := ExpandConstant('{userprofile}') + '\.ideviewer\config.json';
+  // Must match internal/config.configCandidates() priority order. This used to
+  // look only at {userprofile}\.ideviewer, the legacy path -- but 'ideviewer
+  // register' writes {localappdata}\IDEViewer, so on a normal install the file
+  // was never found and the uninstall alert never reached the portal.
+  ConfigPath := ExpandConstant('{commonappdata}') + '\IDEViewer\config.json';
+  if not FileExists(ConfigPath) then
+    ConfigPath := ExpandConstant('{localappdata}') + '\IDEViewer\config.json';
+  if not FileExists(ConfigPath) then
+    ConfigPath := ExpandConstant('{userprofile}') + '\.ideviewer\config.json';
   if FileExists(ConfigPath) then
   begin
     Exec('powershell.exe',

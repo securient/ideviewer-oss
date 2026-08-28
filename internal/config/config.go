@@ -41,7 +41,15 @@ type Config struct {
 	// key rotation. Populated at enrollment and refreshable via /api/signing-key.
 	CommandPublicKeys []string `json:"command_public_keys,omitempty"`
 	Signature         string   `json:"signature,omitempty"`
+
+	// loadedFrom records the file this config was read from, so SaveInPlace can
+	// write updates back to the same file. Not serialised.
+	loadedFrom string
 }
+
+// LoadedFrom returns the path this config was read from, or "" if it was
+// constructed in memory rather than loaded.
+func (c *Config) LoadedFrom() string { return c.loadedFrom }
 
 // configCandidates returns the config file paths in priority order: the
 // system dir first (written by the installer for the daemon service), then
@@ -113,6 +121,7 @@ func loadFrom(candidates []string) (*Config, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", path, err)
 		}
+		cfg.loadedFrom = path
 		return cfg, nil
 	}
 
@@ -148,6 +157,70 @@ func parseAndVerify(data []byte) (*Config, error) {
 func Save(cfg *Config) error {
 	userPath := filepath.Join(platform.ConfigDir(), "config.json")
 	return saveToPath(cfg, userPath)
+}
+
+// SaveInPlace writes the config back to the file it was loaded from, falling
+// back to Save for a config that was built in memory.
+//
+// Save alone is wrong for an update-in-flight. Load walks the candidates in
+// priority order and the system path outranks the user path, so a daemon
+// running off the system config that persisted a rotated host token with Save
+// wrote it to a file Load would never reach: the next start read the old token,
+// re-enrolled, saved to the wrong place again, and looped.
+func SaveInPlace(cfg *Config) error {
+	if cfg.loadedFrom == "" {
+		return Save(cfg)
+	}
+	path := cfg.loadedFrom
+	if err := saveToPath(cfg, path); err != nil {
+		// A system config the daemon can read but not write (the macOS .pkg
+		// installs it root-owned) is a normal state, not a failure — keep the
+		// update by writing it to the user config instead.
+		if fallbackErr := Save(cfg); fallbackErr != nil {
+			return fmt.Errorf("write %s: %w (and user config: %v)", path, err, fallbackErr)
+		}
+		cfg.loadedFrom = filepath.Join(platform.ConfigDir(), "config.json")
+	}
+	return nil
+}
+
+// Candidates returns the config paths Load consults, in priority order.
+func Candidates() []string { return configCandidates() }
+
+// ExistingPaths returns the subset of Candidates() that exist on disk, in
+// priority order. Used by 'ideviewer status' and 'ideviewer reset' to show or
+// remove every config a previous install may have left behind — on Windows
+// these are three genuinely different directories (ProgramData, LOCALAPPDATA
+// and %USERPROFILE%\.ideviewer), and a forgotten high-priority one silently
+// overrides a freshly registered config.
+func ExistingPaths() []string {
+	var out []string
+	for _, p := range configCandidates() {
+		if platform.PathExists(p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// ShadowedBy returns the config paths that outrank path and already exist, so
+// a caller writing to path can warn that its config will not be the one used.
+func ShadowedBy(path string) []string {
+	var out []string
+	for _, p := range configCandidates() {
+		if p == path {
+			break
+		}
+		if platform.PathExists(p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// UserPath returns the user-level config file path — where Save writes.
+func UserPath() string {
+	return filepath.Join(platform.ConfigDir(), "config.json")
 }
 
 // SaveSystem writes the config to the system-level directory so the

@@ -7,8 +7,9 @@ import (
 	"github.com/securient/ideviewer-oss/pkg/api"
 )
 
-// checkOnDemandScans polls the portal for pending scan requests and executes
-// each one sequentially.
+// checkOnDemandScans polls the portal for pending scan requests and starts the
+// oldest one in the background. At most one scan runs at a time; the rest stay
+// pending and are picked up on later polls.
 func (d *Daemon) checkOnDemandScans() {
 	if d.apiClient == nil {
 		return
@@ -31,8 +32,23 @@ func (d *Daemon) checkOnDemandScans() {
 			continue
 		}
 		requestID := int(idFloat)
+
+		// Run the scan off the daemon's main select loop. It used to execute
+		// inline, so for the several minutes a full scan takes the daemon sent
+		// no heartbeats (the portal marked the host silent), polled no
+		// enforcement actions, and could not notice a second request. One at a
+		// time: if the pipeline is busy, leave the request pending and pick it
+		// up on a later poll.
+		if !d.tryBeginScan() {
+			log.Printf("Scan request #%d deferred — a scan is already running", requestID)
+			return
+		}
 		log.Printf("Processing on-demand scan request #%d", requestID)
-		d.executeOnDemandScan(requestID)
+		go func(id int) {
+			defer d.endScan()
+			d.executeOnDemandScan(id)
+		}(requestID)
+		return
 	}
 }
 
