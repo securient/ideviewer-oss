@@ -5,8 +5,10 @@ All API endpoints require a valid customer key in the X-Customer-Key header.
 """
 
 from flask import Blueprint, request, jsonify, current_app
+from werkzeug.exceptions import HTTPException
 from datetime import datetime
 import hashlib
+import json
 import os
 import socket
 import threading
@@ -57,9 +59,36 @@ api_logger = logging.getLogger(__name__)
 
 @api_bp.errorhandler(Exception)
 def handle_api_error(error):
-    """Handle all API errors and return JSON response."""
-    api_logger.error(f"API Error on {request.method} {request.path}: {type(error).__name__}: {error}")
-    
+    """Turn an unhandled exception into a JSON 500, and roll the session back.
+
+    HTTPExceptions are deliberately passed through with their own status.
+    Flask routes ``abort()``/``get_or_404()`` through the class-based handler
+    chain, so a bare ``Exception`` handler catches them too — which meant every
+    404 (a scan request or enforcement action id from a rebuilt database), 400
+    (a malformed JSON body) and 405 under /api/* was reported to the daemon as
+    "500 Internal server error". That turned ordinary, actionable client errors
+    into what looked like a broken portal.
+
+    The rollback matters just as much: without it a failed INSERT leaves the
+    session dirty and the *next* request on the same connection fails too.
+    """
+    if isinstance(error, HTTPException):
+        response = error.get_response()
+        response.data = json.dumps({
+            'error': error.description,
+            'type': error.name,
+        })
+        response.content_type = 'application/json'
+        return response
+
+    api_logger.exception(
+        f"API Error on {request.method} {request.path}: {type(error).__name__}: {error}"
+    )
+    try:
+        db.session.rollback()
+    except Exception:  # pragma: no cover - rollback of an already-dead session
+        api_logger.exception("Rollback failed after API error")
+
     # Only include detailed error info in debug mode
     if current_app.debug:
         traceback.print_exc()
@@ -93,6 +122,29 @@ def log_request():
             safe_headers[key] = value
     
     api_logger.debug(f"API Request: {request.method} {request.path} Headers: {safe_headers}")
+
+
+def _optional_public_key_info():
+    """Command-signing public key, or None if signing is not configured.
+
+    Enrolment must not depend on the signing plane. A production portal with no
+    ``COMMAND_SIGNING_PRIVATE_KEY`` makes ``public_key_info()`` raise, and
+    because validate-key and register-host embedded that call unguarded, the
+    very first thing a new daemon did -- validate its customer key -- came back
+    as HTTP 500. Signing only gates *enforcement* commands, so a portal without
+    a key should still enrol hosts and collect scans; it just cannot hand out a
+    key to pin, and /api/enforcement-actions/pending says so explicitly.
+    """
+    try:
+        return public_key_info()
+    except Exception as exc:
+        api_logger.warning(
+            "Command signing is not configured (%s). Hosts will enrol without "
+            "a pinned command key and enforcement commands cannot be issued. "
+            "Set COMMAND_SIGNING_PRIVATE_KEY or COMMAND_SIGNING_PRIVATE_KEY_FILE.",
+            exc,
+        )
+        return None
 
 
 def get_customer_key():
@@ -202,14 +254,14 @@ def validate_key():
     key.last_used_at = utcnow()
     db.session.commit()
 
-    _pub = public_key_info()
+    _pub = _optional_public_key_info()
     return jsonify({
         'valid': True,
         'key_name': key.name,
         'current_hosts': key.host_count,
         'portal_url': request.host_url.rstrip('/'),
-        'command_public_key': _pub['public_key_b64'],
-        'command_key_id': _pub['key_id'],
+        'command_public_key': _pub['public_key_b64'] if _pub else None,
+        'command_key_id': _pub['key_id'] if _pub else None,
     })
 
 
@@ -288,14 +340,14 @@ def register_host():
     key.last_used_at = utcnow()
     db.session.commit()
 
-    _pub = public_key_info()
+    _pub = _optional_public_key_info()
     return jsonify({
         'success': True,
         'host_id': host.public_id,
         'host_token': plaintext,
         'message': message,
-        'command_public_key': _pub['public_key_b64'],
-        'command_key_id': _pub['key_id'],
+        'command_public_key': _pub['public_key_b64'] if _pub else None,
+        'command_key_id': _pub['key_id'] if _pub else None,
     })
 
 
@@ -932,6 +984,17 @@ def get_pending_enforcement_actions():
     if error:
         return jsonify(error), status
 
+    # Check the signer *before* claiming anything. Hand-out is destructive --
+    # it flips each action to 'dispatched' so it is not re-executed on the next
+    # poll -- and an unsigned envelope is one no daemon will act on, so signing
+    # failing after the flip would strand the action in limbo.
+    if _optional_public_key_info() is None:
+        return jsonify({
+            'error': 'Command signing is not configured on this portal; '
+                     'enforcement commands cannot be issued',
+            'type': 'SigningUnavailable',
+        }), 503
+
     q = EnforcementAction.query.join(Host, EnforcementAction.host_id == Host.id).filter(
         Host.customer_key_id == key.id,
         EnforcementAction.status == EnforcementAction.STATUS_PENDING,
@@ -965,7 +1028,13 @@ def get_signing_key():
     key, host_from_token, error, status = authenticate_request()
     if error:
         return jsonify(error), status
-    return jsonify(public_key_info())
+    info = _optional_public_key_info()
+    if info is None:
+        return jsonify({
+            'error': 'Command signing is not configured on this portal',
+            'type': 'SigningUnavailable',
+        }), 503
+    return jsonify(info)
 
 
 @api_bp.route('/enforcement-actions/<int:action_id>/report', methods=['POST'])
