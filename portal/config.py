@@ -43,7 +43,11 @@ class Config:
     
     # Portal settings
     PORTAL_NAME = 'IDE Viewer'
-    PORTAL_URL = os.environ.get('PORTAL_URL') or 'http://localhost:5000'
+    # One port for every way of running the portal (start.sh, start.sh --docker
+    # and run.py), overridable with PORTAL_PORT. It was 5000 locally and 8090
+    # under Docker, which made "what URL do I register against?" ambiguous.
+    PORTAL_PORT = int(os.environ.get('PORTAL_PORT') or 8090)
+    PORTAL_URL = os.environ.get('PORTAL_URL') or f'http://localhost:{PORTAL_PORT}'
     
     # API settings
     API_RATE_LIMIT = 100  # requests per minute
