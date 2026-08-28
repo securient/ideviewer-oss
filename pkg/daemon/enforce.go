@@ -123,7 +123,7 @@ func (d *Daemon) ensureCommandKey() {
 		return
 	}
 	d.config.CommandPublicKeys = []string{pub}
-	if saveErr := config.Save(d.config); saveErr != nil {
+	if saveErr := config.SaveInPlace(d.config); saveErr != nil {
 		log.Printf("warn: could not persist command signing key: %v", saveErr)
 	}
 }

@@ -1744,8 +1744,13 @@ function updateScanLogUI(req) {
     entries.innerHTML = html;
     entries.scrollTop = entries.scrollHeight;
 
-    // Update button state
-    if (['completed', 'failed', 'timeout', 'cancelled'].includes(req.status)) {
+    // Update button state. is_active comes from the server so the page and the
+    // portal agree on which statuses are still running -- the hardcoded list
+    // here drifted from the model once already (it predated 'cancelled').
+    const active = req.is_active !== undefined
+        ? req.is_active
+        : !['completed', 'failed', 'timeout', 'cancelled'].includes(req.status);
+    if (!active) {
         btn.disabled = false;
         btn.innerHTML = '<i class="fas fa-sync-alt"></i> Trigger Scan';
         cancelBtn.style.display = 'none';
@@ -1785,7 +1790,7 @@ function pollScanStatus() {
     fetch(`/host/${hostPublicId}/scan-status`)
     .then(r => r.json())
     .then(data => {
-        if (data.scan_request && !['completed', 'failed', 'timeout', 'cancelled'].includes(data.scan_request.status)) {
+        if (data.scan_request && data.scan_request.is_active) {
             showScanLog(data.scan_request);
             startPolling();
         }
@@ -1805,7 +1810,9 @@ function cancelOnDemandScan() {
             'X-CSRFToken': document.querySelector('meta[name="csrf-token"]')?.content || ''
         }
     })
-    .then(r => r.json())
+    .then(r => r.json().catch(() => ({
+        error: `Cancel failed (HTTP ${r.status}). See the portal logs for details.`
+    })))
     .then(data => {
         if (data.success) {
             updateScanLogUI(data.scan_request);

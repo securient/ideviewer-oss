@@ -38,7 +38,7 @@ ideviewer packages      # Installed packages + CVEs
 
 # Optional: connect to a portal for team visibility
 ./start.sh              # Start portal locally (auto-provisions PostgreSQL)
-ideviewer register --customer-key YOUR-KEY --portal-url http://localhost:5000
+ideviewer register --customer-key YOUR-KEY --portal-url http://localhost:8090
 ```
 
 ---
@@ -51,6 +51,7 @@ ideviewer register --customer-key YOUR-KEY --portal-url http://localhost:5000
 - [Deployment](deployment/local.md) -- Local, Docker, AWS, MDM deployment options
 - [Portal](portal/dashboard.md) -- Dashboard, host detail, search
 - [CLI Reference](cli-reference.md) -- All commands and flags
+- [Troubleshooting](troubleshooting.md) -- Common issues: ports, stale configs, the daemon not picking up scans, cleanup and updates
 - [Contributing](contributing.md) -- Development setup and PR guidelines
 
 ---

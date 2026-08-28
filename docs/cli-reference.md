@@ -26,6 +26,7 @@ Scan for installed IDEs and their extensions.
 | `--output` | `-o` | Write output to file path |
 | `--ide` | `-i` | Filter by IDE type (repeatable) |
 | `--portal` | | Send results to the portal |
+| `--push` | | Send results to the portal **and** close any pending on-demand scan request for this host |
 
 ```bash
 ideviewer scan                          # Table output
@@ -33,7 +34,23 @@ ideviewer scan --json                   # JSON output
 ideviewer scan --output-sarif > scan.sarif   # SARIF output
 ideviewer scan -o results.json          # Save to file
 ideviewer scan --portal                 # Submit to portal
+ideviewer scan --push                   # Submit and fulfil a pending scan request
 ```
+
+### `--portal` vs `--push`
+
+`--portal` submits a report. `--push` also looks for an on-demand scan request
+the portal is waiting on for this host, marks it in progress, and closes it as
+completed when the report is accepted — the manual escape hatch for a daemon
+that is not collecting its work.
+
+A push cannot overwrite daemon results: scan reports are append-only rows, and
+retention only clears the raw payload of superseded reports. It can, however,
+make a hand-run scan look like routine telemetry, so every push is recorded
+with `source=cli` on the report and the fulfilled request's log says it was
+completed manually rather than by the daemon.
+
+If no request is pending, `--push` behaves exactly like `--portal`.
 
 ---
 
@@ -116,7 +133,7 @@ Register this machine with the portal and start the daemon.
 ```bash
 ideviewer register \
   --customer-key YOUR-UUID-KEY \
-  --portal-url http://localhost:5000 \
+  --portal-url http://localhost:8090 \
   --interval 15
 ```
 
@@ -152,16 +169,68 @@ ideviewer daemon -k KEY -p URL --foreground      # New config
 
 ---
 
+## `ideviewer status`
+
+Show the active configuration, daemon state, and portal connectivity — the
+first thing to run when something is not working. See
+[Troubleshooting](troubleshooting.md).
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--no-portal` | | Skip the portal connectivity check |
+| `--pid-file` | | PID file path |
+
+It lists every configuration path IDEViewer can load, marks the one actually in
+force, and flags the rest as shadowed leftovers. Credentials are masked.
+
+```bash
+ideviewer status
+ideviewer status --no-portal    # offline: config and daemon state only
+```
+
+---
+
+## `ideviewer reset`
+
+Remove the local state a reinstall would otherwise inherit. Nothing is sent to
+the portal and no host records are deleted there.
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--config` | | Remove every IDEViewer configuration file (the default) |
+| `--logs` | | Remove daemon log files |
+| `--hooks` | | Uninstall the global git pre-commit hooks |
+| `--quarantine` | | Remove the quarantine directory (quarantined extensions are deleted) |
+| `--all` | | Everything above |
+| `--yes` | `-y` | Skip the confirmation prompt |
+| `--keep-daemon` | | Do not stop the running daemon first |
+
+`reset` stops the daemon before deleting, because removing the config from
+under a running daemon leaves it using the copy already in memory. Removing a
+system-level config requires elevation.
+
+```bash
+ideviewer reset                 # stale configuration only
+ideviewer reset --all           # configuration, logs, hooks, quarantine
+ideviewer reset --all --yes     # non-interactive
+```
+
+---
+
 ## `ideviewer stop`
 
-Stop the running daemon.
+Stop the running daemon and wait for the process to exit. The PID file is
+removed only once the process is actually gone, so a failed stop stays visible
+to `ideviewer status`.
 
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--pid-file` | | PID file path |
+| `--timeout` | | How long to wait for the daemon to exit (default `10s`) |
 
 ```bash
 ideviewer stop
+ideviewer stop --timeout 30s
 ```
 
 ---
@@ -199,10 +268,16 @@ Check for and install updates from GitHub Releases.
 | `--check` | | Only check for updates, do not install |
 | `--yes` | `-y` | Skip confirmation prompt |
 
+The daemon is stopped before the installer runs and restarted afterwards. This
+matters most on Windows, where the installer cannot replace a running
+`ideviewer.exe` — a silent upgrade would otherwise defer the replacement and
+leave the old daemon running while reporting success.
+
 ```bash
 ideviewer update --check    # Check only
 ideviewer update            # Download and install
 ideviewer update --yes      # Non-interactive update
+ideviewer status            # Confirm the new version is the one running
 ```
 
 ---

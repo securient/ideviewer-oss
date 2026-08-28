@@ -15,7 +15,7 @@ from app.models import (
     ExtensionPolicy, PolicyViolation,
     ExtensionMetadata, EnforcementAction,
     User, AuditLog, RemediationPlaybook, ExpectedHost,
-    utcnow,
+    utcnow, expire_stale_scan_requests,
 )
 from app.auth.forms import (
     CustomerKeyForm, WebhookSubscriptionForm, ExtensionPolicyForm,
@@ -1576,6 +1576,22 @@ def notifications_read_all():
     return jsonify({'success': True})
 
 
+def _active_scan_request(host_id):
+    """Newest still-running scan request for a host, or None.
+
+    Ordered newest-first to match /scan-status, which is what the host page
+    polls; an unordered .first() let the two disagree about which request is
+    "the" active one.
+    """
+    return (
+        ScanRequest.query
+        .filter(ScanRequest.host_id == host_id,
+                ScanRequest.status.in_(ScanRequest.ACTIVE_STATUSES))
+        .order_by(ScanRequest.created_at.desc())
+        .first()
+    )
+
+
 @main_bp.route('/host/<host_id>/trigger-scan', methods=['POST'])
 @login_required
 def trigger_scan(host_id):
@@ -1584,13 +1600,14 @@ def trigger_scan(host_id):
     if host.customer_key.user_id != current_user.id:
         return jsonify({'error': 'Access denied'}), 403
     
-    # Check if there's already a pending/running scan
-    active_scan = ScanRequest.query.filter(
-        ScanRequest.host_id == host.id,
-        ScanRequest.status.in_(['pending', 'connecting', 'scanning_ides', 
-                                 'scanning_secrets', 'scanning_packages'])
-    ).first()
-    
+    # Age out anything the daemon abandoned first. Without this, one missed
+    # pickup left a 'pending' row that never resolved and the 409 below wedged
+    # the Trigger Scan button for good.
+    if expire_stale_scan_requests(host.id):
+        db.session.commit()
+
+    active_scan = _active_scan_request(host.id)
+
     if active_scan:
         return jsonify({
             'error': 'A scan is already in progress for this host',
@@ -1629,23 +1646,32 @@ def cancel_scan(host_id):
     if host.customer_key.user_id != current_user.id:
         return jsonify({'error': 'Access denied'}), 403
 
-    active_scan = ScanRequest.query.filter(
-        ScanRequest.host_id == host.id,
-        ScanRequest.status.in_(['pending', 'connecting', 'scanning_ides',
-                                 'scanning_secrets', 'scanning_packages'])
-    ).first()
+    # Cancel every active request, not just an arbitrary one. The old code
+    # took .first() with no ordering while /scan-status polls the *newest*
+    # request, so with more than one row queued Stop silently cancelled a
+    # different request than the page was showing and the UI stayed 'Pending'.
+    active = (
+        ScanRequest.query
+        .filter(ScanRequest.host_id == host.id,
+                ScanRequest.status.in_(ScanRequest.ACTIVE_STATUSES))
+        .order_by(ScanRequest.created_at.desc())
+        .all()
+    )
 
-    if not active_scan:
+    if not active:
         return jsonify({'error': 'No active scan to cancel'}), 404
 
-    active_scan.status = 'cancelled'
-    active_scan.completed_at = utcnow()
-    active_scan.add_log(f'Scan cancelled by {current_user.username}', level='warning')
+    now = utcnow()
+    for scan in active:
+        scan.status = 'cancelled'
+        scan.completed_at = now
+        scan.add_log(f'Scan cancelled by {current_user.username}', level='warning')
     db.session.commit()
 
     return jsonify({
         'success': True,
-        'scan_request': active_scan.to_dict()
+        'cancelled_count': len(active),
+        'scan_request': active[0].to_dict()
     })
 
 
@@ -1710,14 +1736,20 @@ def scan_status(host_id):
     if host.customer_key.user_id != current_user.id:
         return jsonify({'error': 'Access denied'}), 403
     
+    # Expire abandoned requests here too: this is the endpoint the host page
+    # polls, so a stuck 'pending' resolves itself while the user is watching
+    # rather than waiting for someone to press Trigger Scan again.
+    if expire_stale_scan_requests(host.id):
+        db.session.commit()
+
     # Get the most recent scan request
     scan_req = ScanRequest.query.filter_by(
         host_id=host.id
     ).order_by(ScanRequest.created_at.desc()).first()
-    
+
     if not scan_req:
         return jsonify({'scan_request': None})
-    
+
     return jsonify({'scan_request': scan_req.to_dict()})
 
 

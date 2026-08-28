@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -36,7 +37,18 @@ type Daemon struct {
 	lastResult   *scanner.ScanResult
 	hashes       *scanHashes
 	nonceCache   *api.NonceCache // rejects replayed signed-command nonces
+
+	// scanning serialises the scan pipeline. Periodic and on-demand scans
+	// share d.scanner/d.secrets/d.dependencies, so only one may run at a time.
+	scanning atomic.Bool
 }
+
+// tryBeginScan reserves the scan pipeline, reporting false if a scan is
+// already running. Callers that win must pair this with endScan.
+func (d *Daemon) tryBeginScan() bool { return d.scanning.CompareAndSwap(false, true) }
+
+// endScan releases the reservation taken by tryBeginScan.
+func (d *Daemon) endScan() { d.scanning.Store(false) }
 
 // setResult stores the latest scan result under the result lock.
 func (d *Daemon) setResult(r *scanner.ScanResult) {
@@ -194,8 +206,19 @@ func (d *Daemon) Stop() {
 }
 
 // runScan executes IDE, secrets, and dependency scans concurrently, then
-// submits a combined report to the portal.
+// submits a combined report to the portal. It is a no-op while another scan
+// (periodic or on-demand) is still running.
 func (d *Daemon) runScan() {
+	if !d.tryBeginScan() {
+		log.Println("A scan is already running; skipping this periodic scan")
+		return
+	}
+	defer d.endScan()
+	d.runScanLocked()
+}
+
+// runScanLocked is runScan's body; the caller must hold the scan reservation.
+func (d *Daemon) runScanLocked() {
 	log.Println("Starting scan...")
 
 	var (
@@ -345,7 +368,7 @@ func (d *Daemon) withReauth(call func() error) error {
 				d.config.HostToken = tok
 				// Refresh the pinned command-signing key on re-enroll too.
 				d.pinCommandKeyFromResponse(regResult)
-				if saveErr := config.Save(d.config); saveErr != nil {
+				if saveErr := config.SaveInPlace(d.config); saveErr != nil {
 					log.Printf("warn: could not persist new host token: %v", saveErr)
 				}
 			}

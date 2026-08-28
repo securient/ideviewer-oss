@@ -16,7 +16,9 @@ def main():
     parser = argparse.ArgumentParser(description='Run IDE Viewer Portal')
     parser.add_argument('--production', action='store_true', help='Run in production mode')
     parser.add_argument('--host', default='0.0.0.0', help='Host to bind to')
-    parser.add_argument('--port', type=int, default=5000, help='Port to bind to')
+    parser.add_argument('--port', type=int,
+                        default=int(os.environ.get('PORTAL_PORT') or 8090),
+                        help='Port to bind to (default: $PORTAL_PORT or 8090)')
     args = parser.parse_args()
     
     if args.production:

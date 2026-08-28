@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 )
 
 // CreatePIDFile writes the current process's PID to the given path.
@@ -35,26 +34,26 @@ func RemovePIDFile(path string) {
 	_ = os.Remove(path)
 }
 
-// IsRunning checks if a daemon process is already running by reading the PID
-// file and sending signal 0 to the recorded PID. Returns false if the file
-// does not exist or the process is not alive.
-func IsRunning(path string) bool {
+// ReadPIDFile returns the PID recorded at path, or an error if the file is
+// missing or does not hold an integer.
+func ReadPIDFile(path string) (int, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return false
+		return 0, err
 	}
-
 	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
 	if err != nil {
-		return false
+		return 0, fmt.Errorf("invalid PID in %s: %q", path, strings.TrimSpace(string(data)))
 	}
+	return pid, nil
+}
 
-	// Signal 0 checks whether the process exists without actually signalling.
-	proc, err := os.FindProcess(pid)
+// IsRunning reports whether the PID recorded at path belongs to a live
+// process. A missing or unparseable file, or a dead PID, is false.
+func IsRunning(path string) bool {
+	pid, err := ReadPIDFile(path)
 	if err != nil {
 		return false
 	}
-
-	err = proc.Signal(syscall.Signal(0))
-	return err == nil
+	return processAlive(pid)
 }

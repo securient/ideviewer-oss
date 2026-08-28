@@ -25,6 +25,8 @@ func init() {
 	scanCmd.Flags().StringP("output", "o", "", "Output file path")
 	scanCmd.Flags().StringSliceP("ide", "i", nil, "Filter by IDE type (can be used multiple times)")
 	scanCmd.Flags().Bool("portal", false, "Send results to the portal")
+	scanCmd.Flags().Bool("push", false,
+		"Send results to the portal and close any pending on-demand scan request for this host")
 }
 
 func runScan(cmd *cobra.Command, args []string) error {
@@ -32,6 +34,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 	outputSARIF, _ := cmd.Flags().GetBool("output-sarif")
 	outputPath, _ := cmd.Flags().GetString("output")
 	portal, _ := cmd.Flags().GetBool("portal")
+	push, _ := cmd.Flags().GetBool("push")
 
 	fmt.Println("Scanning for IDEs...")
 
@@ -41,8 +44,12 @@ func runScan(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("scan failed: %w", err)
 	}
 
-	// Portal mode: also run secrets + deps scans.
-	if portal {
+	// Portal mode: also run secrets + deps scans. --push additionally fulfils a
+	// scan request the daemon left sitting at 'pending'.
+	switch {
+	case push:
+		pushScanToPortal(result, true, true)
+	case portal:
 		sendScanToPortal(result, true, true)
 	}
 

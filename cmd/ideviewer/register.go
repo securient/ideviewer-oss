@@ -6,10 +6,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
+	"time"
 
 	"github.com/securient/ideviewer-oss/internal/config"
 	"github.com/securient/ideviewer-oss/internal/platform"
 	"github.com/securient/ideviewer-oss/pkg/api"
+	"github.com/securient/ideviewer-oss/pkg/daemon"
 	"github.com/securient/ideviewer-oss/pkg/gitleaks"
 	"github.com/securient/ideviewer-oss/pkg/hooks"
 	"github.com/securient/ideviewer-oss/pkg/scanner"
@@ -119,8 +122,23 @@ func runRegister(cmd *cobra.Command, args []string) error {
 	if err := config.Save(cfg); err != nil {
 		colorYellow.Printf("  Could not save user config: %v\n", err)
 	} else {
-		colorGreen.Printf("  Configuration saved to %s\n", config.Path())
+		colorGreen.Printf("  Configuration saved to %s\n", config.UserPath())
 		colorDim.Printf("  Check-in interval: %d minutes\n", interval)
+	}
+
+	// A leftover config at a higher-priority path wins at load time, so the
+	// daemon would keep using the old key and portal URL and this registration
+	// would appear to have done nothing. Windows is where this bites: the
+	// uninstaller cleaned only %LOCALAPPDATA%, leaving ProgramData and
+	// %USERPROFILE%\.ideviewer behind for the next install to inherit.
+	if shadowing := config.ShadowedBy(config.UserPath()); len(shadowing) > 0 {
+		fmt.Println()
+		colorYellow.Println("  Warning: an older configuration takes priority over the one just written:")
+		for _, p := range shadowing {
+			colorYellow.Printf("    %s\n", p)
+		}
+		colorYellow.Println("  The daemon will keep using that file. Remove the stale configs with:")
+		colorCyan.Println("    ideviewer reset --config")
 	}
 
 	// Step 4: Run initial scan.
@@ -188,7 +206,20 @@ func runRegister(cmd *cobra.Command, args []string) error {
 func startDaemonService() bool {
 	label := "com.ideviewer.daemon"
 
+	// Retire any daemon already running before starting one with the config we
+	// just wrote. Without this, re-registering left the previous process alive
+	// holding the previous portal URL and key — two daemons, and the portal
+	// hearing from the wrong one.
+	stopExistingDaemon()
+
 	switch runtime.GOOS {
+	case "windows":
+		if registerWindowsAutostart() {
+			return true
+		}
+		colorYellow.Println("  Could not register the logon task — starting a background process instead")
+		colorDim.Println("  The daemon will not restart automatically after a reboot.")
+
 	case "darwin":
 		// Try LaunchAgent first (user-level, has access to ~/), then LaunchDaemon
 		agentPlist := "/Library/LaunchAgents/com.ideviewer.daemon.plist"
@@ -267,5 +298,74 @@ func startDaemonService() bool {
 		logFile.Close()
 	}
 	colorGreen.Printf("  Daemon started as background process (PID %d)\n", proc.Process.Pid)
+	return true
+}
+
+// stopExistingDaemon terminates a daemon left over from a previous
+// registration or an earlier version, so the newly written config is the one
+// actually in use.
+func stopExistingDaemon() {
+	pidFile := platform.DefaultPIDFile()
+	if !daemon.IsRunning(pidFile) {
+		daemon.RemovePIDFile(pidFile)
+		return
+	}
+	pid, err := daemon.ReadPIDFile(pidFile)
+	if err != nil {
+		return
+	}
+	colorDim.Printf("  Stopping the existing daemon (PID %d)...\n", pid)
+	if err := stopProcess(pid); err != nil {
+		colorYellow.Printf("  Could not stop the running daemon (PID %d): %v\n", pid, err)
+		return
+	}
+	for i := 0; i < 25; i++ {
+		if !daemon.IsRunning(pidFile) {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	daemon.RemovePIDFile(pidFile)
+}
+
+// registerWindowsAutostart installs a per-user Scheduled Task that starts the
+// daemon at logon, then runs it now.
+//
+// Windows had no service registration at all: 'register' fell through to a
+// detached background process, so the daemon vanished at the next reboot and
+// the portal simply showed a host that had stopped checking in. A logon task
+// is the lightest thing that survives a restart without requiring the daemon
+// to be rewritten as a real Windows service, and it runs in the user's session
+// where the IDE and extension directories actually live.
+func registerWindowsAutostart() bool {
+	if runtime.GOOS != "windows" {
+		return false
+	}
+	binary, err := os.Executable()
+	if err != nil {
+		return false
+	}
+
+	const taskName = "IDEViewer Daemon"
+	// /F replaces an existing task, which is what makes re-registering and
+	// upgrading idempotent instead of failing on "task already exists".
+	create := exec.Command("schtasks", "/Create", "/F",
+		"/TN", taskName,
+		"/SC", "ONLOGON",
+		"/RL", "LIMITED",
+		"/TR", fmt.Sprintf(`"%s" daemon`, binary),
+	)
+	if out, err := create.CombinedOutput(); err != nil {
+		colorDim.Printf("  schtasks /Create failed: %v: %s\n", err, strings.TrimSpace(string(out)))
+		return false
+	}
+
+	if out, err := exec.Command("schtasks", "/Run", "/TN", taskName).CombinedOutput(); err != nil {
+		colorDim.Printf("  schtasks /Run failed: %v: %s\n", err, strings.TrimSpace(string(out)))
+		return false
+	}
+
+	colorGreen.Println("  Daemon registered as a logon task and started")
+	colorDim.Printf("  Manage it with: schtasks /Query /TN %q\n", taskName)
 	return true
 }

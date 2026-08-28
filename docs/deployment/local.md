@@ -27,7 +27,7 @@ This automatically:
 3. Installs dependencies from `portal/requirements.txt`
 4. Generates `portal/.env` with a random `SECRET_KEY`
 5. Provisions PostgreSQL (reuses `:5432`, else starts the `ideviewer-postgres` container) and runs database migrations
-6. Starts the Flask server on `http://localhost:5000`
+6. Starts the Flask server on `http://localhost:8090` (override with `PORTAL_PORT`)
 
 The background job queue is auto-detected: if Redis is reachable (or Docker is available to start a local Redis instance), vulnerability scans run on an RQ worker. Otherwise, the portal runs scans synchronously inline — no configuration required.
 
@@ -54,7 +54,7 @@ You will be prompted to change the password on first login.
 ```bash
 ideviewer register \
   --customer-key YOUR-KEY \
-  --portal-url http://localhost:5000
+  --portal-url http://localhost:8090
 ```
 
 The customer key is a UUID created in the portal's admin interface. The daemon starts automatically after registration.

@@ -13,7 +13,7 @@ pip install -r requirements.txt
 FLASK_CONFIG=development flask run
 ```
 
-Access at http://localhost:5000
+Access at http://localhost:8090 (override with `PORTAL_PORT`)
 
 ### Docker Compose (PostgreSQL)
 
@@ -21,7 +21,7 @@ Access at http://localhost:5000
 docker-compose up -d
 ```
 
-Access at http://localhost:8080
+Access at http://localhost:8090 (override with `PORTAL_PORT`)
 
 ## Configuration
 
@@ -32,7 +32,8 @@ Access at http://localhost:8080
 | `SECRET_KEY` | Yes (prod) | dev key | Flask secret key for session signing |
 | `DATABASE_URL` | Yes (prod) | SQLite | PostgreSQL connection string |
 | `FLASK_CONFIG` | No | `development` | `development`, `production`, or `testing` |
-| `PORTAL_URL` | No | `http://localhost:5000` | Public URL (used for OAuth redirects) |
+| `PORTAL_PORT` | No | `8090` | Port the portal listens on (both local and Docker) |
+| `PORTAL_URL` | No | `http://localhost:$PORTAL_PORT` | Public URL (used for OAuth redirects) |
 | `GOOGLE_CLIENT_ID` | No | — | Google OAuth client ID |
 | `GOOGLE_CLIENT_SECRET` | No | — | Google OAuth client secret |
 | `GUNICORN_WORKERS` | No | `4` | Number of gunicorn worker processes |
@@ -75,7 +76,7 @@ Google OAuth adds a "Sign in with Google" button alongside email/password login.
 3. Click **Create Credentials > OAuth 2.0 Client ID**
 4. Select **Web application** as the application type
 5. Under **Authorized redirect URIs**, add:
-   - For local dev: `http://localhost:5000/login/google/callback`
+   - For local dev: `http://localhost:8090/login/google/callback`
    - For production: `https://your-domain.com/login/google/callback`
 6. Copy the **Client ID** and **Client Secret**
 7. Set the environment variables:

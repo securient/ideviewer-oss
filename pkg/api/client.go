@@ -135,6 +135,13 @@ func (c *Client) doRequest(method, path string, body any) (map[string]any, error
 	return result, nil
 }
 
+// Health probes the portal's unauthenticated health endpoint. Used by
+// 'ideviewer status' to separate "the portal is unreachable" from "the portal
+// rejected our credentials", which look identical from a failed report.
+func (c *Client) Health() (map[string]any, error) {
+	return c.doRequest("GET", "/api/health", nil)
+}
+
 // ValidateKey validates the customer key with the portal.
 func (c *Client) ValidateKey() (map[string]any, error) {
 	return c.doRequest("POST", "/api/validate-key", map[string]any{
@@ -151,14 +158,32 @@ func (c *Client) RegisterHost() (map[string]any, error) {
 	})
 }
 
-// SubmitReport sends scan results to the portal.
+// SubmitReport sends scan results to the portal, attributed to the daemon.
 func (c *Client) SubmitReport(scanData map[string]any) (map[string]any, error) {
+	return c.SubmitReportFrom(scanData, SourceDaemon)
+}
+
+// Report provenance. The portal records this on every scan report so an
+// operator can tell a scheduled daemon scan from one a person pushed by hand.
+const (
+	SourceDaemon = "daemon"
+	SourceCLI    = "cli"
+)
+
+// SubmitReportFrom sends scan results tagged with their origin. Reports are
+// append-only on the portal, so a CLI push adds a row rather than replacing
+// the daemon's history — the tag is what keeps the two distinguishable.
+func (c *Client) SubmitReportFrom(scanData map[string]any, source string) (map[string]any, error) {
 	return c.doRequest("POST", "/api/report", map[string]any{
 		"hostname":  c.hostname,
 		"platform":  c.platform,
 		"scan_data": scanData,
+		"source":    source,
 	})
 }
+
+// Hostname returns the hostname this client identifies itself with.
+func (c *Client) Hostname() string { return c.hostname }
 
 // GetPendingScanRequests checks for on-demand scan requests.
 func (c *Client) GetPendingScanRequests() ([]map[string]any, error) {

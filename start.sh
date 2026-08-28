@@ -32,6 +32,15 @@ DB_USER="${DB_USER:-ideviewer}"
 DB_PASSWORD="${DB_PASSWORD:-ideviewer_dev_password}"
 PG_CONTAINER="ideviewer-postgres"
 
+# The port the portal is reachable on, for BOTH ./start.sh and ./start.sh
+# --docker. There used to be three numbers in play — 5000 for local, 8080 in
+# every message the script printed, and 8090 as what docker-compose actually
+# published — so "which port is the portal on?" had no single answer. One
+# variable now drives all of them. 8090 rather than 5000 because macOS binds
+# 5000 for AirPlay Receiver.
+PORTAL_PORT="${PORTAL_PORT:-8090}"
+export PORTAL_PORT
+
 # ─────────────────────────────────────────────
 # PostgreSQL provisioning (local development)
 # ─────────────────────────────────────────────
@@ -127,7 +136,7 @@ SECRET_KEY=$SECRET_KEY
 # 2. Create a new project (or select existing)
 # 3. Go to APIs & Services > Credentials
 # 4. Create Credentials > OAuth 2.0 Client ID > Web application
-# 5. Add authorized redirect URI: http://localhost:5000/login/google/callback
+# 5. Add authorized redirect URI: http://localhost:$PORTAL_PORT/login/google/callback
 #    (for production: https://your-domain.com/login/google/callback)
 # 6. Copy Client ID and Client Secret below
 # GOOGLE_CLIENT_ID=
@@ -140,7 +149,7 @@ SECRET_KEY=$SECRET_KEY
 # DISABLE_LOCAL_LOGIN=false
 
 # Portal settings
-# PORTAL_URL=http://localhost:5000
+# PORTAL_URL=http://localhost:$PORTAL_PORT
 EOF
         echo -e "${GREEN}Configuration saved to portal/.env${NC}"
     fi
@@ -224,7 +233,7 @@ EOF
     echo -e "${GREEN}  Portal ready!${NC}"
     echo -e "${GREEN}════════════════════════════════════════${NC}"
     echo ""
-    echo -e "  URL:      ${CYAN}http://localhost:5000${NC}"
+    echo -e "  URL:      ${CYAN}http://localhost:${PORTAL_PORT}${NC}"
     echo -e "  Login:    ${CYAN}admin${NC} / ${CYAN}ideviewer${NC}"
     echo -e "  Config:   ${DIM}portal/.env${NC}"
     echo -e "  Database: ${DIM}PostgreSQL ${DB_USER}@${DB_HOST}:${DB_PORT}/${DB_NAME}${NC}"
@@ -234,7 +243,7 @@ EOF
     echo -e "  ${DIM}Reset the database: docker rm -f ${PG_CONTAINER} && docker volume rm ideviewer_pgdata${NC}"
     echo ""
 
-    flask run --host 0.0.0.0 --port 5000
+    flask run --host 0.0.0.0 --port "$PORTAL_PORT"
 }
 
 # ─────────────────────────────────────────────
@@ -262,7 +271,7 @@ cmd_docker() {
     echo -e "${GREEN}  Portal ready!${NC}"
     echo -e "${GREEN}════════════════════════════════════════${NC}"
     echo ""
-    echo -e "  URL:      ${CYAN}http://localhost:${PORTAL_PORT:-8080}${NC}"
+    echo -e "  URL:      ${CYAN}http://localhost:${PORTAL_PORT}${NC}"
     echo -e "  Login:    ${CYAN}admin${NC} / ${CYAN}ideviewer${NC}"
     echo -e "  Database: ${DIM}PostgreSQL (localhost:${DB_PORT:-5432})${NC}"
     echo ""
@@ -450,7 +459,7 @@ cmd_help() {
     echo "  --help      Show this help"
     echo ""
     echo "Local development:"
-    echo "  Runs on http://localhost:5000"
+    echo "  Runs on http://localhost:${PORTAL_PORT} (override with PORTAL_PORT)"
     echo "  Uses PostgreSQL 15 — reuses a server already on :5432, or starts"
     echo "    a container (ideviewer-postgres) with a persistent volume"
     echo "  Set DATABASE_URL in portal/.env to use your own server"
@@ -458,7 +467,7 @@ cmd_help() {
     echo "  Default login: admin / ideviewer"
     echo ""
     echo "Docker:"
-    echo "  Runs on http://localhost:8080"
+    echo "  Runs on http://localhost:${PORTAL_PORT} (override with PORTAL_PORT)"
     echo "  Uses PostgreSQL 15"
     echo "  Default login: admin / ideviewer"
     echo ""

@@ -21,8 +21,8 @@ Default login: `admin` / `ideviewer` (you will be prompted to change the passwor
 
 | Option | Description | URL | Database |
 |--------|-------------|-----|----------|
-| `(none)` | Local development | `http://localhost:5000` | PostgreSQL (auto-provisioned) |
-| `--docker` | Docker Compose | `http://localhost:8080` | PostgreSQL |
+| `(none)` | Local development | `http://localhost:8090` | PostgreSQL (auto-provisioned) |
+| `--docker` | Docker Compose | `http://localhost:8090` | PostgreSQL |
 | `--aws` | AWS deployment wizard | Custom domain or ALB DNS | RDS PostgreSQL |
 | `--help` | Show usage information | -- | -- |
 
@@ -37,7 +37,8 @@ Set these in `portal/.env` (local) or via your deployment platform:
 | `SECRET_KEY` | Yes (prod) | Auto-generated | Flask secret key for session signing |
 | `DATABASE_URL` | Yes | -- | PostgreSQL connection string. `./start.sh` sets this for you; there is no fallback if unset |
 | `FLASK_CONFIG` | No | `development` | `development`, `production`, or `testing` |
-| `PORTAL_URL` | No | `http://localhost:5000` | Public URL (used for OAuth redirects) |
+| `PORTAL_PORT` | No | `8090` | Port the portal listens on (both local and Docker) |
+| `PORTAL_URL` | No | `http://localhost:$PORTAL_PORT` | Public URL (used for OAuth redirects) |
 | `GOOGLE_CLIENT_ID` | No | -- | Google OAuth client ID |
 | `GOOGLE_CLIENT_SECRET` | No | -- | Google OAuth client secret |
 | `GUNICORN_WORKERS` | No | `4` | Number of gunicorn worker processes |
@@ -79,7 +80,7 @@ Google OAuth adds a "Sign in with Google" button alongside email/password login.
 4. Click **Create Credentials > OAuth 2.0 Client ID**
 5. Select **Web application** as the application type
 6. Under **Authorized redirect URIs**, add:
-   - Local dev: `http://localhost:5000/login/google/callback`
+   - Local dev: `http://localhost:8090/login/google/callback`
    - Production: `https://your-domain.com/login/google/callback`
 7. Copy the **Client ID** and **Client Secret**
 8. Set the environment variables:
@@ -137,15 +138,37 @@ Change the default password immediately after first login. The portal prompts yo
 
 ## Daemon Configuration
 
-When you run `ideviewer register`, the configuration is saved to `~/.ideviewer/config.json`:
+`ideviewer register` writes an HMAC-signed configuration to the **user** path
+for your platform:
 
 ```json
 {
-  "portal_url": "http://localhost:5000",
+  "portal_url": "http://localhost:8090",
   "customer_key": "your-uuid-key",
   "scan_interval_minutes": 30
 }
 ```
+
+### Configuration file priority
+
+The daemon loads the first of these that exists — a system-wide config
+deliberately outranks a per-user one so an administrator can pin fleet
+settings:
+
+| Priority | Windows | macOS | Linux |
+|---|---|---|---|
+| 1 (system) | `C:\ProgramData\IDEViewer\config.json` | `/Library/Application Support/IDEViewer/config.json` | `/etc/ideviewer/config.json` |
+| 2 (user) | `%LOCALAPPDATA%\IDEViewer\config.json` | `~/.ideviewer/config.json` | `~/.ideviewer/config.json` |
+| 3 (legacy) | `%USERPROFILE%\.ideviewer\config.json` | *(same as 2)* | *(same as 2)* |
+
+{: .warning }
+Because `register` writes the user path, a leftover file at a higher-priority
+path silently wins and the daemon keeps using the older portal URL, customer
+key and host token. `register` warns when this happens; `ideviewer status`
+marks the losers `[shadowed, ignored]`; `ideviewer reset --config` removes them
+all. See [Troubleshooting](troubleshooting.md#reinstalling-didnt-give-me-a-clean-slate).
+
+Run `ideviewer status` at any time to see which file is in force.
 
 The daemon reads this configuration on startup. You can override values with CLI flags:
 
