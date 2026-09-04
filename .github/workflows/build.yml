@@ -634,85 +634,106 @@ jobs:
             ```bash
             docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
             ```
-
             ## What's New
 
-            **Field-report release.** Everything here came out of a round of
-            Windows testing against v0.6.0. Several of these are defects that
-            have been present in every release.
+            **Realtime monitoring covered extensions only, and did not
+            actually work.** Two independent problems, both fixed.
 
-            **Cancelling a scan has never worked.** `/host/<id>/cancel-scan`
-            wrote `status='cancelled'`, but `cancelled` was missing from the
-            `ck_scan_requests_status` CHECK constraint, so every Stop click
-            raised a constraint violation and the request stayed `pending`.
-            Because a new scan is refused while one is active, the Trigger
-            Scan button then wedged permanently. Cancel now works, cancels
-            every active request for the host rather than an arbitrary one,
-            and a request nobody claims ages out on its own — 10 minutes
-            unclaimed, 30 minutes without progress once started.
+            The portal rejected every realtime event the daemon sent.
+            `/api/realtime-event` created a scan report and then read
+            `report.id` for the package foreign keys without flushing first, so
+            the id was still `None` and the insert died on `null value in
+            column scan_report_id violates not-null constraint`. Since the
+            daemon always attaches dependency data, *every* realtime event came
+            back `500`. The filesystem watcher was detecting extension changes
+            within its 30s debounce and the portal was discarding all of them,
+            so realtime detection did not exist in practice. The endpoint had
+            no test coverage at all, which is how it shipped this way.
 
-            **The Windows daemon could not be relied on to be running.** Four
-            separate causes, all now fixed:
+            The watcher also only watched IDE extension directories. A
+            malicious npm package, a new MCP server or a committed credential
+            was invisible until the next periodic scan — up to a full scan
+            interval. It now watches the rest of the workstation:
 
-            | Symptom | Cause |
+            | Category | What it covers |
             |---|---|
-            | Daemon died when the terminal closed | It inherited the launching console and took `CTRL_CLOSE_EVENT`; it is now fully detached |
-            | `ideviewer stop` did nothing | It sent `SIGTERM`, unsupported on Windows — it printed "already stopped", deleted the PID file, and left the daemon running |
-            | Several daemons at once | The liveness probe used signal 0, which Windows always rejects, so the duplicate guard never fired |
-            | Gone after a reboot | There was no autostart on Windows; `register` now installs a logon task |
+            | `extensions` | IDE extension and JetBrains plugin directories |
+            | `aitools` | `~/.claude`, `~/.cursor`, `~/.kiro/settings`, openclaw/clawdbot, and the editor `User` settings dirs that hold MCP servers |
+            | `projects` | directories containing a dependency manifest — which is also where `.env` files live |
 
-            **"Customer key 500 HTTP Server error"** had two causes. The API
-            blueprint's catch-all error handler also swallowed `HTTPException`,
-            so every 404, 400 and 405 under `/api/*` reached the daemon as a
-            500 — a daemon holding a config from a rebuilt database hits this
-            constantly. And `validate-key` required the command-signing key, so
-            a production portal without `COMMAND_SIGNING_PRIVATE_KEY` failed
-            the very first call a new daemon makes. Enrolment no longer depends
-            on signing; only enforcement commands are withheld, with a clear
-            `503`.
+            Events carry the category they came from, so a change triggers only
+            the rescan it invalidates: a new extension does not re-walk every
+            project, and an edited lockfile does not re-enumerate MCP servers.
+            Only manifest-bearing directories are watched, not every directory
+            walked — on a developer laptop the walk sees thousands of
+            directories but a couple of hundred are projects. `node_modules`
+            is excluded: it would cost tens of thousands of watches and buys
+            nothing, since an install rewrites the manifest in the project
+            directory that is already watched. Discovery stops at 2048
+            directories and logs when it does, because each watch costs a file
+            descriptor under kqueue and an inotify watch on Linux.
 
-            **Reinstalling did not give you a clean slate.** `register` writes
-            the user config while the daemon prefers the system one, and the
-            Windows uninstaller cleaned only `%LOCALAPPDATA%` — so the next
-            install silently inherited the previous portal URL, customer key
-            and host token. Both installers now clear all three config
-            directories, `register` warns when a stale config will shadow it,
-            and `ideviewer update` stops the daemon before installing (the
-            installer cannot replace a running `ideviewer.exe`, so silent
-            upgrades were reporting success while the old daemon kept running).
+            Measured against a live portal: 333 directories watched, a
+            `package.json` edit recorded in ~47s and an AI tool config change
+            in ~31s, against up to 30 minutes before.
 
-            **New**
+            **The signed SBOM button returned a 500,** and the SBOM omitted
+            every extension.
 
-            - **`ideviewer status`** — which config is actually in force, is
-              the daemon alive, can it reach the portal. Start here when
-              something is wrong.
-            - **`ideviewer reset`** — remove the local state a reinstall would
-              otherwise inherit.
-            - **`ideviewer scan --push`** — run the scan yourself and fulfil a
-              pending portal request the daemon never collected. Reports are
-              append-only, so this cannot overwrite daemon history; pushes are
-              recorded as `source=cli` so an operator can tell them apart.
-            - **A [Troubleshooting page](https://securient.github.io/ideviewer-oss/troubleshooting.html)**
-              in the documentation.
+            Signing was unavailable in any normal local run: the signer decided
+            "am I in production?" partly from `not DEBUG`, and `flask run`
+            without `--debug` forces `DEBUG = False` even under
+            `FLASK_CONFIG=development`. So `./start.sh` was classified as
+            production and refused to generate the local key, which also made
+            `/api/signing-key` and `/api/enforcement-actions/pending` return
+            `503`. Separately, `host_sbom` called the signer unguarded, so a
+            portal with no key — a legitimate state — got a bare 500 instead of
+            an explanation. It now degrades to a message naming the remedy.
+
+            The SBOM read extensions from the `ExtensionInfo` table, but
+            nothing in the codebase has ever written a row to it: ingestion
+            populates packages, secrets, vulnerabilities and AI tools only. The
+            table is always empty, so every SBOM silently omitted every
+            extension — the one inventory this product exists to track. They
+            now come from the scan report, reusing the policy engine's own
+            flattener so risk levels match what a policy evaluates.
+
+            **Timestamps rendered as "Invalid Date".** Templates built them as
+            `isoformat() + 'Z'`, which was right when the columns were naive;
+            every `DateTime` column is `timestamptz` now, so `isoformat()`
+            already emits an offset and the appended `Z` produced `+00:00Z` —
+            two timezone designators, which `new Date()` rejects. This was
+            wrong at 7 sites across 5 templates and is now a single filter.
+
+            The host header also labelled `last_seen_at` as "Last seen" while
+            `last_heartbeat_at` — the column that actually tracks daemon
+            liveness — was never shown anywhere on the page. Heartbeats
+            deliberately leave `last_seen_at` alone, so a live daemon with
+            nothing new to report looked stale and could not be told apart from
+            a dead one. The header now shows an online/idle/offline dot from
+            the heartbeat, using the same thresholds as the dashboard, plus the
+            report's own timestamp.
 
             **Also**
 
-            - On-demand scans no longer block the daemon's event loop. A
-              multi-minute scan previously stopped heartbeats (the portal
-              marked the host silent), enforcement polling, and cancellation.
-            - A rotated host token is written back to the config file the
-              daemon actually reads, ending a re-enrolment loop.
+            - Secrets and AI tools / MCP servers are recorded from realtime
+              events, not just periodic reports. The ingestion is now shared
+              between both paths rather than duplicated.
+            - The realtime handler takes the scan reservation it always needed.
+              It shares the scanner instances with the periodic scan, which the
+              pipeline requires be used one at a time, and previously ignored
+              that.
+            - `COMMAND_SIGNING_PRIVATE_KEY` and its `_FILE` variant are
+              documented in the generated `portal/.env`. Bringing your own
+              SBOM signing key already worked but was only mentioned in the
+              troubleshooting page; left unset, the portal generates one at
+              `portal/instance/command_signing.key`.
 
-            > **BREAKING — the portal now serves on :8090 everywhere.** There
-            > were three numbers for one service: `./start.sh` bound `:5000`,
-            > Docker published `:8090`, and the banner claimed `:8080`.
-            > `PORTAL_PORT` now drives all of them and defaults to `8090`
-            > (`:5000` collides with AirPlay Receiver on macOS). Drop or update
-            > any `PORTAL_URL=http://localhost:5000` in `portal/.env`, and
-            > re-register daemons against the new URL — or set
-            > `PORTAL_PORT=5000` to keep the old behaviour.
+            > **No migration required.** This release changes no schema.
 
-            > **Database migration required.** Run `flask db upgrade` in
-            > `portal/`. Migration `0002` adds `cancelled` to the scan-request
-            > status constraint and a `source` column to scan reports; it is a
-            > normal additive migration with a working downgrade.
+            > **Known issue.** The daemon's delta check is ineffective: it
+            > hashes result structs that embed their own scan timestamp, so the
+            > digests always differ and the "skip unchanged cycles" branch is
+            > unreachable. Every host therefore re-sends its full inventory
+            > each interval. Harmless but wasteful, and it is why the host page
+            > says "Last scan" rather than "Last change".
