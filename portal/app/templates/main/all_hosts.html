@@ -89,7 +89,7 @@
                         <td style="padding: 0.75rem; color: var(--text-secondary); font-family: var(--font-mono); font-size: 0.8125rem;">{{ item.host.ip_address or 'N/A' }}</td>
                         <td style="padding: 0.75rem; color: var(--text-secondary); font-size: 0.8125rem;">{{ item.host.platform or 'Unknown' }}</td>
                         <td style="padding: 0.75rem; color: var(--text-secondary); font-size: 0.8125rem;">
-                            <span class="local-time" data-utc="{{ item.host.last_seen_at.isoformat() + 'Z' if item.host.last_seen_at else '' }}">{{ item.host.last_seen_at.strftime('%Y-%m-%d %H:%M') if item.host.last_seen_at else 'Never' }}</span>
+                            <span class="local-time" data-utc="{{ item.host.last_seen_at | utc_iso }}">{{ item.host.last_seen_at.strftime('%Y-%m-%d %H:%M') if item.host.last_seen_at else 'Never' }}</span>
                         </td>
                         <td style="padding: 0.75rem; text-align: center; color: var(--text-secondary);">{{ item.ext_count }}</td>
                         <td style="padding: 0.75rem; text-align: center; color: var(--text-secondary);">{{ item.pkg_count }}</td>

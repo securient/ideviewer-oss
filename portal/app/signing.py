@@ -154,9 +154,13 @@ def _build_local_signer(app) -> LocalEd25519Signer:
     if app.config.get("TESTING") and not key_file:
         return LocalEd25519Signer(Ed25519PrivateKey.generate())
 
-    is_production = (app.config.get("FLASK_CONFIG") == "production") or (
-        not app.config.get("DEBUG") and not app.config.get("TESTING")
-    )
+    # Key off the selected config, not DEBUG. ``flask run`` without --debug
+    # forces app.config["DEBUG"] = False even under FLASK_CONFIG=development,
+    # so the old DEBUG-based test classified every ordinary ./start.sh run as
+    # production and refused to generate the local dev key -- which surfaced
+    # as a 500 on the signed-SBOM button. create_app() decides production the
+    # same way (config_name == "production"), so the two now agree.
+    is_production = app.config.get("FLASK_CONFIG") == "production"
     if not key_file:
         if is_production:
             raise ValueError(

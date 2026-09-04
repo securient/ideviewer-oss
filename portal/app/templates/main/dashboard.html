@@ -176,7 +176,7 @@
                     <span style="width: 8px; height: 8px; border-radius: 50%; background: var(--danger); display: inline-block;" title="Offline"></span>
                     {% endif %}
                     <i class="fas fa-clock"></i>
-                    Last seen: <span class="local-time" data-utc="{{ host.last_seen_at.isoformat() + 'Z' if host.last_seen_at else '' }}">{{ host.last_seen_at.strftime('%Y-%m-%d %H:%M') if host.last_seen_at else 'Never' }}</span>
+                    Last seen: <span class="local-time" data-utc="{{ host.last_seen_at | utc_iso }}">{{ host.last_seen_at.strftime('%Y-%m-%d %H:%M') if host.last_seen_at else 'Never' }}</span>
                 </p>
                 
                 {% set latest = host.latest_report %}

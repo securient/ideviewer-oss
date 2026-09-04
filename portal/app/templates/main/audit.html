@@ -27,7 +27,7 @@
                     {% for e in entries %}
                     <tr>
                         <td style="white-space: nowrap;">
-                            <span class="local-time" data-utc="{{ e.created_at.isoformat() + 'Z' if e.created_at else '' }}">
+                            <span class="local-time" data-utc="{{ e.created_at | utc_iso }}">
                                 {{ e.created_at.strftime('%Y-%m-%d %H:%M') if e.created_at else '' }}
                             </span>
                         </td>

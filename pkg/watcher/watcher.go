@@ -16,9 +16,14 @@ type ChangeEvent struct {
 	Path      string    `json:"path"`
 	EventType string    `json:"event_type"` // "created", "modified", "deleted"
 	Timestamp time.Time `json:"timestamp"`
+	// Category says what kind of directory the change happened in, so the
+	// daemon can rescan only what the change invalidates.
+	Category Category `json:"category"`
 }
 
-// Watcher monitors IDE extension directories for changes.
+// Watcher monitors the directories that make up a developer workstation's
+// software inventory: IDE extensions, AI tool and MCP configuration, and
+// project directories holding dependency manifests and secrets.
 type Watcher struct {
 	fsWatcher    *fsnotify.Watcher
 	debounceTime time.Duration
@@ -27,6 +32,8 @@ type Watcher struct {
 	mu           sync.Mutex
 	pending      []ChangeEvent
 	timer        *time.Timer
+	// category of each watched directory, keyed by absolute path.
+	categories map[string]Category
 }
 
 // New creates a Watcher with the given debounce duration and callback.
@@ -40,25 +47,36 @@ func New(debounce time.Duration, callback func([]ChangeEvent)) (*Watcher, error)
 		debounceTime: debounce,
 		callback:     callback,
 		shutdown:     make(chan struct{}),
+		categories:   make(map[string]Category),
 	}, nil
 }
 
-// Start begins watching IDE extension directories.
+// Start begins watching every discovered directory.
 func (w *Watcher) Start() error {
-	dirs := extensionDirs()
-	watched := 0
-	for _, dir := range dirs {
-		if info, err := os.Stat(dir); err == nil && info.IsDir() {
-			if err := w.fsWatcher.Add(dir); err != nil {
-				log.Printf("Watcher: could not watch %s: %v", dir, err)
-			} else {
-				watched++
-				log.Printf("Watcher: monitoring %s", dir)
-			}
+	roots := discoverRoots()
+	counts := make(map[Category]int)
+
+	for _, root := range roots {
+		if err := w.fsWatcher.Add(root.Path); err != nil {
+			// One unwatchable directory (permissions, or a race with its
+			// removal) must not stop the rest from being watched.
+			log.Printf("Watcher: could not watch %s: %v", root.Path, err)
+			continue
 		}
+		w.categories[root.Path] = root.Category
+		counts[root.Category]++
 	}
+
+	watched := len(w.categories)
 	if watched == 0 {
-		log.Println("Watcher: no extension directories found to monitor")
+		log.Println("Watcher: no directories found to monitor")
+	} else {
+		log.Printf("Watcher: monitoring %d directories (%d extension, %d AI tool, %d project)",
+			watched, counts[CategoryExtensions], counts[CategoryAITools], counts[CategoryProjects])
+	}
+	if len(roots) >= maxWatches {
+		log.Printf("Watcher: hit the %d directory cap; some project directories are "+
+			"not watched and will only be picked up by the periodic scan", maxWatches)
 	}
 
 	go w.loop()
@@ -110,10 +128,20 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 		return // Ignore chmod-only events
 	}
 
+	// Events name the child; the watch is on its parent directory.
+	category, ok := w.categories[filepath.Dir(event.Name)]
+	if !ok {
+		// Also allow an event on a watched directory itself.
+		if category, ok = w.categories[event.Name]; !ok {
+			return
+		}
+	}
+
 	ce := ChangeEvent{
 		Path:      event.Name,
 		EventType: eventType,
 		Timestamp: time.Now().UTC(),
+		Category:  category,
 	}
 
 	w.mu.Lock()

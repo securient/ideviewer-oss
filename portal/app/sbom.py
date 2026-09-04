@@ -1,9 +1,10 @@
 """SBOM / VEX / attestation generation (Phase 1 B11).
 
-Turns the inventory IDEViewer already collects (PackageInfo + ExtensionInfo) and
-its OSV correlation (Vulnerability) into a CycloneDX 1.5 SBOM. Vulnerabilities
-carry a lightweight VEX-style ``analysis.state`` (resolved vs in_triage); the
-full VEX waiver workflow (who waived, justification) is a documented follow-up.
+Turns the inventory IDEViewer already collects (PackageInfo + the extensions
+on the latest scan report) and its OSV correlation (Vulnerability) into a
+CycloneDX 1.5 SBOM. Vulnerabilities carry a lightweight VEX-style
+``analysis.state`` (resolved vs in_triage); the full VEX waiver workflow (who
+waived, justification) is a documented follow-up.
 
 The attestation piece folds into Phase 1 B1: ``sign_attestation`` wraps the SBOM
 in the same ed25519 signed envelope used for command signing, so the SBOM's
@@ -31,7 +32,9 @@ def _purl(manager, name, version):
 
 def build_cyclonedx(host, serial=None, timestamp=None) -> dict:
     """Build a CycloneDX 1.5 SBOM document for one host."""
-    from app.models import PackageInfo, ExtensionInfo, Vulnerability, utcnow
+    from app.models import PackageInfo, Vulnerability, utcnow
+    from app.main.routes import calculate_risk_level
+    from app.policy.runner import build_extensions_from_scan
 
     timestamp = timestamp or utcnow()
     serial = serial or f"urn:uuid:{uuid.uuid4()}"
@@ -57,28 +60,36 @@ def build_cyclonedx(host, serial=None, timestamp=None) -> dict:
 
     # Extensions are first-class components too (type: application).
     #
-    # This deliberately does not GROUP BY extension_id. Grouping by one column
-    # while selecting all of them is accepted by SQLite (which picks an
-    # arbitrary row per group) and rejected outright by PostgreSQL, so the
-    # query raised GroupingError on every Postgres deployment while passing
-    # tests that ran on SQLite. The dedupe below already enforces one component
-    # per extension_id; ordering makes which row wins deterministic instead of
-    # leaving it to the planner.
-    exts = (ExtensionInfo.query.filter_by(host_id=host.id)
-            .order_by(ExtensionInfo.extension_id, ExtensionInfo.id.desc()).all())
+    # These come from the latest scan report's JSON rather than the
+    # ExtensionInfo table: report ingestion never writes ExtensionInfo rows, so
+    # that table is always empty and the SBOM silently omitted every extension
+    # -- the one inventory this product exists to track. scan_data is the same
+    # source the host/extension pages and the policy engine already read, so
+    # all three now describe the same set of extensions.
+    #
+    # build_extensions_from_scan is the policy engine's flattener; reusing it
+    # means risk_level here is computed exactly as a policy would compute it,
+    # and it tolerates both the 'id' and 'extension_id' spellings daemons send.
+    #
+    # A host reports one extension once per IDE that has it installed, so
+    # dedupe by extension_id and keep the first occurrence -- scan_data order
+    # is stable, which makes the chosen row deterministic.
+    latest = host.latest_report
+    scan_data = (latest.scan_data if latest else None) or {}
     seen_ext = set()
-    for e in exts:
-        if e.extension_id in seen_ext:
+    for e in build_extensions_from_scan(scan_data, calculate_risk_level):
+        ext_id = e.get("extension_id")
+        if not ext_id or ext_id in seen_ext:
             continue
-        seen_ext.add(e.extension_id)
+        seen_ext.add(ext_id)
         components.append({
             "type": "application",
-            "bom-ref": f"ext:{e.extension_id}",
-            "name": e.extension_id,
-            "version": e.extension_version or "",
-            "publisher": e.publisher or "",
+            "bom-ref": f"ext:{ext_id}",
+            "name": ext_id,
+            "version": e.get("version") or "",
+            "publisher": e.get("publisher") or "",
             "properties": [
-                {"name": "ideviewer:risk_level", "value": e.risk_level or "unknown"},
+                {"name": "ideviewer:risk_level", "value": e.get("risk_level") or "unknown"},
             ],
         })
 
