@@ -785,7 +785,8 @@ def host_detail(host_id):
                            total_vuln_count=total_vuln_count,
                            hook_bypasses=hook_bypasses,
                            ai_tools=ai_tools,
-                           unpublished_extensions=unpublished_extensions)
+                           unpublished_extensions=unpublished_extensions,
+                           now=utcnow())
 
 
 @main_bp.route('/keys')

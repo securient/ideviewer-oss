@@ -84,7 +84,7 @@
                             {% endif %}
                         </td>
                         <td style="padding: 0.75rem; color: var(--text-secondary); font-size: 0.8125rem;">
-                            <span class="local-time" data-utc="{{ b.detected_at.isoformat() + 'Z' if b.detected_at else '' }}">{{ b.detected_at.strftime('%Y-%m-%d %H:%M') if b.detected_at else 'Unknown' }}</span>
+                            <span class="local-time" data-utc="{{ b.detected_at | utc_iso }}">{{ b.detected_at.strftime('%Y-%m-%d %H:%M') if b.detected_at else 'Unknown' }}</span>
                         </td>
                     </tr>
                     {% endfor %}

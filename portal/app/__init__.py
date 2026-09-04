@@ -170,6 +170,26 @@ def create_app(config_name=None):
             )
         return response
 
+    @app.template_filter('utc_iso')
+    def utc_iso(value):
+        """Render a datetime as an ISO-8601 UTC string the browser can parse.
+
+        Templates used to build this as ``value.isoformat() + 'Z'``. That was
+        right when the columns were naive, but every DateTime column is
+        ``timestamptz`` now, so isoformat() already emits an offset and the
+        appended 'Z' produced ``...+00:00Z`` -- two timezone designators. The
+        browser's ``new Date()`` rejects that outright, which is why timestamps
+        rendered as "Invalid Date".
+
+        Naive values are still treated as UTC, so this stays correct for any
+        column or Python-side value that has not been made aware.
+        """
+        if value is None:
+            return ''
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z')
+
     # Context processor to make config available in templates
     @app.context_processor
     def inject_config():

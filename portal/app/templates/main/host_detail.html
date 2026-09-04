@@ -295,9 +295,47 @@
                 </h1>
                 <p style="color: var(--text-secondary);">
                     {{ host.ip_address or 'Unknown IP' }} • {{ host.platform or 'Unknown Platform' }}
-                    • Last seen: <span class="local-time" data-utc="{{ host.last_seen_at.isoformat() + 'Z' if host.last_seen_at else '' }}">{{ host.last_seen_at.strftime('%Y-%m-%d %H:%M') if host.last_seen_at else 'Never' }}</span>
+                </p>
+                {#
+                  Liveness and last-scan are two different facts and used to be
+                  conflated here under one "Last seen" label reading
+                  last_seen_at. Heartbeats deliberately do not touch
+                  last_seen_at -- they write last_heartbeat_at -- so a live
+                  daemon that simply had nothing new to report looked stale,
+                  and there was no way to tell it from a dead one.
+
+                  Dot: last_heartbeat_at (falling back to last_seen_at for
+                  hosts enrolled before heartbeats existed), same thresholds as
+                  the dashboard so the two pages never disagree.
+
+                  "Last scan" is accurate today: the daemon reports on every
+                  scan interval regardless of whether anything changed. It
+                  intends to skip unchanged cycles (daemon.go -- "No changes
+                  detected since last scan, skipping portal report"), but that
+                  branch is unreachable: computeHash marshals each result
+                  struct whole, and all four embed their own Timestamp set to
+                  time.Now(), so every digest differs every cycle.
+
+                  If that delta bug is ever fixed, reports will only arrive on
+                  real change and this label must become "Last change" -- the
+                  two travel together.
+                #}
+                {% set hb_time = host.last_heartbeat_at or host.last_seen_at %}
+                <p style="color: var(--text-secondary); font-size: 0.875rem; margin-top: 0.3rem; display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
+                    {% if hb_time and (now - hb_time).total_seconds() < 300 %}
+                    <span style="width: 8px; height: 8px; border-radius: 50%; background: var(--success); display: inline-block;" title="Online"></span>Online
+                    {% elif hb_time and (now - hb_time).total_seconds() < 1800 %}
+                    <span style="width: 8px; height: 8px; border-radius: 50%; background: var(--warning); display: inline-block;" title="Idle"></span>Idle
+                    {% else %}
+                    <span style="width: 8px; height: 8px; border-radius: 50%; background: var(--danger); display: inline-block;" title="Offline"></span>Offline
+                    {% endif %}
+                    • Last heartbeat:
+                    <span class="local-time" data-utc="{{ host.last_heartbeat_at | utc_iso }}">{{ host.last_heartbeat_at.strftime('%Y-%m-%d %H:%M') if host.last_heartbeat_at else 'Never' }}</span>
+                    • Last scan:
+                    <span class="local-time" data-utc="{{ latest_report.created_at | utc_iso if latest_report else '' }}">{{ latest_report.created_at.strftime('%Y-%m-%d %H:%M') if latest_report else 'Never' }}</span>
                     {% if host.last_realtime_event %}
-                    • <i class="fas fa-bolt" style="color: #22c55e; font-size: 0.75rem;"></i> Last live update: <span class="local-time" data-utc="{{ host.last_realtime_event.isoformat() + 'Z' }}">{{ host.last_realtime_event.strftime('%Y-%m-%d %H:%M') }}</span>
+                    • <i class="fas fa-bolt" style="color: #22c55e; font-size: 0.75rem;"></i> Last live update:
+                    <span class="local-time" data-utc="{{ host.last_realtime_event | utc_iso }}">{{ host.last_realtime_event.strftime('%Y-%m-%d %H:%M') }}</span>
                     {% endif %}
                 </p>
                 <p style="margin-top: 0.4rem;">
@@ -314,7 +352,7 @@
                     {% if host.token_hash and not host.token_revoked_at %}
                         <span style="color: var(--success); font-weight: 500;">Issued</span>
                         {% if host.token_issued_at %}
-                            • <span class="local-time" data-utc="{{ host.token_issued_at.isoformat() + 'Z' }}">{{ host.token_issued_at.strftime('%Y-%m-%d %H:%M') }}</span>
+                            • <span class="local-time" data-utc="{{ host.token_issued_at | utc_iso }}">{{ host.token_issued_at.strftime('%Y-%m-%d %H:%M') }}</span>
                         {% endif %}
                     {% elif host.token_revoked_at %}
                         <span style="color: var(--danger); font-weight: 500;">Revoked</span>
