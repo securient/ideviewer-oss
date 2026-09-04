@@ -614,7 +614,22 @@ def host_sbom(host_id):
 
     from app.sbom import build_cyclonedx, sign_attestation
     sbom = build_cyclonedx(host)
-    payload = sign_attestation(sbom) if request.args.get('sign') == '1' else sbom
+    payload = sbom
+    if request.args.get('sign') == '1':
+        # Signing is an optional plane. A portal with no command-signing key
+        # still exports a plain SBOM, so the signed variant must degrade to a
+        # message rather than an exception -- unguarded, it meant the button
+        # sitting next to a working export returned a bare 500. The API side
+        # already guards its own call sites (_optional_public_key_info).
+        try:
+            payload = sign_attestation(sbom)
+        except Exception as exc:
+            current_app.logger.warning('Signed SBOM unavailable: %s', exc)
+            flash('Command signing is not configured on this portal, so the '
+                  'SBOM could not be signed. Set COMMAND_SIGNING_PRIVATE_KEY '
+                  '(or COMMAND_SIGNING_PRIVATE_KEY_FILE) to enable signed '
+                  'attestations. The unsigned SBOM export still works.', 'error')
+            return redirect(url_for('main.host_detail', host_id=host.public_id))
     record_audit('sbom.export', target_type='host', target_id=host.public_id,
                  detail=f'Exported SBOM ({len(sbom.get("components", []))} components)')
     fname = f'sbom-{host.hostname}.cdx.json'
