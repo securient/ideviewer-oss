@@ -150,6 +150,16 @@ SECRET_KEY=$SECRET_KEY
 
 # Portal settings
 # PORTAL_URL=http://localhost:$PORTAL_PORT
+
+# Command / SBOM signing key (ed25519)
+# Left unset, the portal generates one at portal/instance/command_signing.key
+# (0600, gitignored) and reuses it. That is fine for local development.
+# To sign with your own key instead, set ONE of these to a base64-encoded
+# 32-byte seed, or to a file containing one. Required in production, where the
+# portal refuses to invent a key for you.
+#   openssl rand -base64 32
+# COMMAND_SIGNING_PRIVATE_KEY=
+# COMMAND_SIGNING_PRIVATE_KEY_FILE=
 EOF
         echo -e "${GREEN}Configuration saved to portal/.env${NC}"
     fi
