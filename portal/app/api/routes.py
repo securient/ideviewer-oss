@@ -1389,11 +1389,23 @@ def receive_realtime_event():
             dangerous_extensions=dangerous_count
         )
         db.session.add(report)
+        # Flush to allocate report.id before it is used as a foreign key below.
+        # Without this the id is still None when the package upsert reads it,
+        # and every realtime event carrying dependency data died on
+        # "null value in column scan_report_id violates not-null constraint" --
+        # a 500 to the daemon, so nothing about the change was ever recorded.
+        # submit_report() flushes here for exactly the same reason.
+        db.session.flush()
 
     # Process dependency data if included — upsert to preserve first_seen_at
     deps_data = data.get('dependencies', {})
-    if deps_data and deps_data.get('packages'):
-        fallback_report_id = report.id if scan_data else (host.scan_reports.first().id if host.scan_reports.first() else 1)
+    # Packages must hang off a real report. Prefer the one just created, else
+    # the host's most recent. A previous version fell back to the literal id 1,
+    # which is not a report this host owns -- and on a fresh database is not a
+    # report at all, trading the not-null violation for a foreign-key one.
+    _existing = host.scan_reports.first()
+    fallback_report_id = report.id if scan_data else (_existing.id if _existing else None)
+    if deps_data and deps_data.get('packages') and fallback_report_id is not None:
         current_pkg_keys = set()
 
         for pkg in deps_data['packages']:
