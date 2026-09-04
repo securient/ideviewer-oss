@@ -147,6 +147,127 @@ def _optional_public_key_info():
         return None
 
 
+def _ingest_secrets(host, report, secrets_data):
+    """Upsert this host's secret findings and resolve the ones that are gone.
+
+    Shared by the periodic report and the realtime path so both record secrets
+    identically. Both hand us a *full* secrets scan, which is what makes the
+    resolve step below sound: a finding absent from the payload is genuinely
+    absent from the machine, not merely outside a partial scan's scope.
+
+    Returns ``(count, critical_count, new_findings)`` where new_findings feeds
+    the alerting/webhook fan-out.
+    """
+    secrets_count = 0
+    critical_secrets = 0
+    new_secret_events = []
+    reported_secret_keys = set()
+
+    if secrets_data and secrets_data.get('findings'):
+        for finding in secrets_data['findings']:
+            file_path = finding.get('file_path', '')
+            variable_name = finding.get('variable_name')
+            reported_secret_keys.add((file_path, variable_name))
+
+            existing = SecretFinding.query.filter_by(
+                host_id=host.id,
+                file_path=file_path,
+                variable_name=variable_name,
+                is_resolved=False
+            ).first()
+
+            if existing:
+                existing.last_seen_at = utcnow()
+                existing.scan_report_id = report.id
+            else:
+                secret = SecretFinding(
+                    host_id=host.id,
+                    scan_report_id=report.id,
+                    file_path=file_path,
+                    secret_type=finding.get('secret_type', 'unknown'),
+                    variable_name=variable_name,
+                    line_number=finding.get('line_number'),
+                    severity=finding.get('severity', 'critical'),
+                    description=finding.get('description', ''),
+                    recommendation=finding.get('recommendation', ''),
+                    redacted_value=finding.get('redacted_value', ''),
+                    source=finding.get('source', 'filesystem'),
+                    commit_hash=finding.get('commit_hash'),
+                    commit_author=finding.get('commit_author'),
+                    commit_date=finding.get('commit_date'),
+                    repo_path=finding.get('repo_path'),
+                )
+                db.session.add(secret)
+                new_secret_events.append({
+                    'secret_type': finding.get('secret_type', 'unknown'),
+                    'file_path': file_path,
+                    'variable_name': variable_name,
+                    'severity': finding.get('severity', 'critical'),
+                    'source': finding.get('source', 'filesystem'),
+                })
+
+            secrets_count += 1
+            if finding.get('severity') == 'critical':
+                critical_secrets += 1
+
+    # Anything previously open and not in this scan has been remediated.
+    for secret in SecretFinding.query.filter_by(host_id=host.id, is_resolved=False).all():
+        if (secret.file_path, secret.variable_name) not in reported_secret_keys:
+            secret.is_resolved = True
+            secret.resolved_at = utcnow()
+
+    return secrets_count, critical_secrets, new_secret_events
+
+
+def _ingest_ai_tools(host, report, ai_data):
+    """Upsert this host's AI tools and MCP servers, dropping the ones that are gone.
+
+    Shared by the periodic report and the realtime path. Like the secrets
+    helper this assumes a full scan, since it deletes tools missing from the
+    payload.
+    """
+    ai_tools_count = 0
+
+    if not (ai_data and ai_data.get('ai_tools')):
+        return ai_tools_count
+
+    current_tool_names = set()
+    for tool in ai_data['ai_tools']:
+        tool_name = tool.get('name', 'Unknown')
+        current_tool_names.add(tool_name)
+
+        existing = AIToolInfo.query.filter_by(host_id=host.id, tool_name=tool_name).first()
+        if existing:
+            existing.scan_report_id = report.id
+            existing.version = tool.get('version')
+            existing.is_running = tool.get('is_running', False)
+            existing.config_path = tool.get('config_path')
+            existing.mcp_servers = tool.get('components')
+            existing.open_ports = tool.get('open_ports')
+            existing.redacted_secrets = tool.get('secrets')
+            existing.last_seen_at = utcnow()
+        else:
+            db.session.add(AIToolInfo(
+                host_id=host.id,
+                scan_report_id=report.id,
+                tool_name=tool_name,
+                version=tool.get('version'),
+                is_running=tool.get('is_running', False),
+                config_path=tool.get('config_path'),
+                mcp_servers=tool.get('components'),
+                open_ports=tool.get('open_ports'),
+                redacted_secrets=tool.get('secrets'),
+            ))
+
+        ai_tools_count += 1
+
+    for existing_tool in AIToolInfo.query.filter_by(host_id=host.id).all():
+        if existing_tool.tool_name not in current_tool_names:
+            db.session.delete(existing_tool)
+
+    return ai_tools_count
+
+
 def get_customer_key():
     """Extract and validate customer key from request."""
 
@@ -572,73 +693,9 @@ def submit_report():
     
     # Process secrets findings
     secrets_data = scan_data.get('secrets', {})
-    secrets_count = 0
-    critical_secrets = 0
+    secrets_count, critical_secrets, _sec_events = _ingest_secrets(host, report, secrets_data)
+    new_secret_events.extend(_sec_events)
 
-    # Track which secrets are still present in this scan
-    reported_secret_keys = set()
-
-    if secrets_data and secrets_data.get('findings'):
-        for finding in secrets_data['findings']:
-            file_path = finding.get('file_path', '')
-            variable_name = finding.get('variable_name')
-            reported_secret_keys.add((file_path, variable_name))
-
-            # Check if this finding already exists (by file_path and variable_name)
-            existing = SecretFinding.query.filter_by(
-                host_id=host.id,
-                file_path=file_path,
-                variable_name=variable_name,
-                is_resolved=False
-            ).first()
-
-            if existing:
-                # Update last seen time
-                existing.last_seen_at = utcnow()
-                existing.scan_report_id = report.id
-            else:
-                # Create new finding
-                secret = SecretFinding(
-                    host_id=host.id,
-                    scan_report_id=report.id,
-                    file_path=file_path,
-                    secret_type=finding.get('secret_type', 'unknown'),
-                    variable_name=variable_name,
-                    line_number=finding.get('line_number'),
-                    severity=finding.get('severity', 'critical'),
-                    description=finding.get('description', ''),
-                    recommendation=finding.get('recommendation', ''),
-                    redacted_value=finding.get('redacted_value', ''),
-                    source=finding.get('source', 'filesystem'),
-                    commit_hash=finding.get('commit_hash'),
-                    commit_author=finding.get('commit_author'),
-                    commit_date=finding.get('commit_date'),
-                    repo_path=finding.get('repo_path'),
-                )
-                db.session.add(secret)
-                new_secret_events.append({
-                    'secret_type': finding.get('secret_type', 'unknown'),
-                    'file_path': file_path,
-                    'variable_name': variable_name,
-                    'severity': finding.get('severity', 'critical'),
-                    'source': finding.get('source', 'filesystem'),
-                })
-
-            secrets_count += 1
-            if finding.get('severity') == 'critical':
-                critical_secrets += 1
-
-    # Mark secrets that were NOT in this scan as resolved
-    unresolved_secrets = SecretFinding.query.filter_by(
-        host_id=host.id,
-        is_resolved=False
-    ).all()
-
-    for secret in unresolved_secrets:
-        if (secret.file_path, secret.variable_name) not in reported_secret_keys:
-            secret.is_resolved = True
-            secret.resolved_at = utcnow()
-    
     # Process dependency data — upsert to preserve first_seen_at
     deps_data = scan_data.get('dependencies', {})
     packages_count = 0
@@ -700,49 +757,7 @@ def submit_report():
 
     # Process AI tools data — upsert to preserve first_seen_at
     ai_data = scan_data.get('ai_tools', {})
-    ai_tools_count = 0
-
-    if ai_data and ai_data.get('ai_tools'):
-        current_tool_names = set()
-
-        for tool in ai_data['ai_tools']:
-            tool_name = tool.get('name', 'Unknown')
-            current_tool_names.add(tool_name)
-
-            existing = AIToolInfo.query.filter_by(
-                host_id=host.id,
-                tool_name=tool_name,
-            ).first()
-
-            if existing:
-                existing.scan_report_id = report.id
-                existing.version = tool.get('version')
-                existing.is_running = tool.get('is_running', False)
-                existing.config_path = tool.get('config_path')
-                existing.mcp_servers = tool.get('components')
-                existing.open_ports = tool.get('open_ports')
-                existing.redacted_secrets = tool.get('secrets')
-                existing.last_seen_at = utcnow()
-            else:
-                ai_tool = AIToolInfo(
-                    host_id=host.id,
-                    scan_report_id=report.id,
-                    tool_name=tool_name,
-                    version=tool.get('version'),
-                    is_running=tool.get('is_running', False),
-                    config_path=tool.get('config_path'),
-                    mcp_servers=tool.get('components'),
-                    open_ports=tool.get('open_ports'),
-                    redacted_secrets=tool.get('secrets'),
-                )
-                db.session.add(ai_tool)
-
-            ai_tools_count += 1
-
-        # Remove tools no longer detected
-        for existing_tool in AIToolInfo.query.filter_by(host_id=host.id).all():
-            if existing_tool.tool_name not in current_tool_names:
-                db.session.delete(existing_tool)
+    ai_tools_count = _ingest_ai_tools(host, report, ai_data)
 
     # Update key last used
     key.last_used_at = utcnow()
@@ -1453,8 +1468,41 @@ def receive_realtime_event():
             if pkg_key not in current_pkg_keys:
                 db.session.delete(existing_pkg)
 
+    # Secrets and AI tools / MCP servers, using the same helpers as the
+    # periodic report so a realtime rescan records them identically.
+    #
+    # The watcher now covers project directories and AI-tool config as well as
+    # extensions, so these arrive here whenever a lockfile, .env or MCP server
+    # definition changes. Both helpers assume a full scan of their domain and
+    # retire what is missing, which holds: the daemon runs the complete
+    # secrets/aitools scanner for these, not a partial one.
+    #
+    # They need a report to hang rows off, so they are skipped when this event
+    # carried no scan_data and the host has never reported.
+    secrets_report_id = report.id if scan_data else fallback_report_id
+    new_secret_events = []
+    if secrets_report_id is not None:
+        _report = report if scan_data else ScanReport.query.get(secrets_report_id)
+
+        if 'secrets' in data:
+            _, _, new_secret_events = _ingest_secrets(host, _report, data.get('secrets') or {})
+
+        if 'ai_tools' in data:
+            _ingest_ai_tools(host, _report, data.get('ai_tools') or {})
+
     key.last_used_at = utcnow()
     db.session.commit()
+
+    for secret_event in new_secret_events:
+        emit_event(
+            'secret.detected',
+            customer_key_id=key.id,
+            data={
+                'host': {'id': host.public_id, 'hostname': host.hostname},
+                'secret': secret_event,
+                'source': 'realtime_event',
+            },
+        )
 
     for ext_data in high_risk_extensions:
         emit_event(

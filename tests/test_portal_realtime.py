@@ -98,3 +98,114 @@ class TestRealtimeEvent:
         del payload['hostname']
         resp = self._post(portal_client, test_customer_key.key, payload)
         assert resp.status_code == 400
+
+
+class TestRealtimeFullInventory:
+    """The watcher now covers projects and AI-tool config, not just extensions.
+
+    Those categories arrive on the same endpoint, so it has to persist secrets
+    and AI tools / MCP servers rather than ignore them — previously a lockfile
+    or MCP change could never be recorded in real time at all.
+    """
+
+    def _post(self, portal_client, key, payload):
+        return portal_client.post(
+            '/api/realtime-event',
+            headers={'X-Customer-Key': key},
+            json=payload,
+        )
+
+    def _base(self, hostname, category):
+        return {
+            'hostname': hostname,
+            'platform': 'darwin arm64',
+            'event_type': 'workstation_change',
+            'categories': [category],
+            'timestamp': '2026-09-04T01:21:28Z',
+            'changes': [{
+                'path': '/Users/dev/project/.env',
+                'event_type': 'created',
+                'category': category,
+                'timestamp': '2026-09-04T01:21:28Z',
+            }],
+        }
+
+    def test_secrets_are_recorded(
+        self, portal_app, portal_db, portal_client, test_customer_key, test_host, test_scan_report
+    ):
+        from app.models import SecretFinding
+        payload = self._base(test_host.hostname, 'projects')
+        payload['secrets'] = {'findings': [{
+            'file_path': '/Users/dev/project/.env',
+            'variable_name': 'AWS_SECRET_ACCESS_KEY',
+            'secret_type': 'aws_key',
+            'severity': 'critical',
+            'redacted_value': 'AKIA****',
+        }]}
+
+        resp = self._post(portal_client, test_customer_key.key, payload)
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+
+        finding = SecretFinding.query.filter_by(host_id=test_host.id).one()
+        assert finding.variable_name == 'AWS_SECRET_ACCESS_KEY'
+        assert finding.severity == 'critical'
+        assert finding.scan_report_id is not None
+
+    def test_ai_tools_and_mcp_servers_are_recorded(
+        self, portal_app, portal_db, portal_client, test_customer_key, test_host, test_scan_report
+    ):
+        from app.models import AIToolInfo
+        payload = self._base(test_host.hostname, 'aitools')
+        payload['ai_tools'] = {'ai_tools': [{
+            'name': 'Claude Code',
+            'version': '1.0.0',
+            'is_running': True,
+            'config_path': '/Users/dev/.claude/settings.json',
+            'components': [{'name': 'evil-mcp', 'command': 'node evil.js'}],
+        }]}
+
+        resp = self._post(portal_client, test_customer_key.key, payload)
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+
+        tool = AIToolInfo.query.filter_by(host_id=test_host.id).one()
+        assert tool.tool_name == 'Claude Code'
+        assert tool.mcp_servers[0]['name'] == 'evil-mcp'
+
+    def test_secrets_without_any_report_do_not_error(
+        self, portal_app, portal_db, portal_client, test_customer_key, test_host
+    ):
+        """A host that has never reported has no row for findings to hang off.
+
+        Skipping beats a 500: the next periodic scan records them anyway.
+        """
+        payload = self._base(test_host.hostname, 'projects')
+        payload['secrets'] = {'findings': [{
+            'file_path': '/x/.env', 'variable_name': 'K', 'severity': 'critical',
+        }]}
+        resp = self._post(portal_client, test_customer_key.key, payload)
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+
+    def test_absent_sections_leave_existing_inventory_alone(
+        self, portal_app, portal_db, portal_client, test_customer_key, test_host, test_scan_report
+    ):
+        """An extensions-only event must not retire secrets or AI tools.
+
+        Both helpers delete what is missing from their payload, so they may only
+        run for a category the daemon actually rescanned.
+        """
+        from app.models import SecretFinding
+        seeded = self._base(test_host.hostname, 'projects')
+        seeded['secrets'] = {'findings': [{
+            'file_path': '/Users/dev/project/.env',
+            'variable_name': 'TOKEN', 'severity': 'critical',
+        }]}
+        self._post(portal_client, test_customer_key.key, seeded)
+        assert SecretFinding.query.filter_by(host_id=test_host.id, is_resolved=False).count() == 1
+
+        # An extension-only event carries no 'secrets' key at all.
+        ext_only = self._base(test_host.hostname, 'extensions')
+        resp = self._post(portal_client, test_customer_key.key, ext_only)
+        assert resp.status_code == 200
+
+        still_open = SecretFinding.query.filter_by(host_id=test_host.id, is_resolved=False).count()
+        assert still_open == 1, 'an unrelated category must not resolve secrets'
