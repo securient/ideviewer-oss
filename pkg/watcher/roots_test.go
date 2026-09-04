@@ -23,6 +23,18 @@ func touch(t *testing.T, dir, name string) {
 	}
 }
 
+// setHome points os.UserHomeDir() at dir.
+//
+// It sets USERPROFILE as well as HOME because that is what os.UserHomeDir()
+// reads on Windows -- setting only HOME left discoverRoots scanning the real
+// home directory there, so the fixtures were invisible and the categories came
+// back empty.
+func setHome(t *testing.T, dir string) {
+	t.Helper()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+}
+
 func contains(dirs []string, want string) bool {
 	for _, d := range dirs {
 		if d == want {
@@ -116,7 +128,7 @@ func TestAIToolDirsCoversConfigAndMCPLocations(t *testing.T) {
 
 func TestDiscoverRootsTagsEachDirectory(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 
 	proj := mkdirs(t, home, "Projects", "app")
 	touch(t, proj, "go.mod")
@@ -141,15 +153,23 @@ func TestDiscoverRootsTagsEachDirectory(t *testing.T) {
 
 func TestDiscoverRootsIsDeduplicated(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setHome(t, home)
 
 	// ~/.cursor is both an AI tool config directory and the parent of an
 	// extensions directory, so the two lists can name overlapping paths.
 	mkdirs(t, home, ".cursor", "extensions")
 	mkdirs(t, home, ".claude")
 
+	roots := discoverRoots()
+	if len(roots) == 0 {
+		// Guard against passing vacuously: with no roots discovered there is
+		// nothing to duplicate, which is how this test stayed green on
+		// Windows while the home override was not taking effect.
+		t.Fatal("expected at least one discovered root")
+	}
+
 	seen := make(map[string]int)
-	for _, r := range discoverRoots() {
+	for _, r := range roots {
 		seen[r.Path]++
 	}
 	for path, n := range seen {
