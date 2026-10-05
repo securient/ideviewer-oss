@@ -26,7 +26,13 @@ def scratch_dsn(portal_schema):
 
     url = make_url(os.environ["TEST_DATABASE_URL"])
     name = f"{url.database}_bootstrap"
-    admin_dsn = url.set(database="postgres").render_as_string(hide_password=False)
+    # psycopg2 gets this DSN directly, and libpq does not accept SQLAlchemy's
+    # "+driver" suffix -- which TEST_DATABASE_URL now carries, since config
+    # names the driver explicitly. Drop it for the raw connection.
+    admin_dsn = (
+        url.set(database="postgres", drivername="postgresql")
+        .render_as_string(hide_password=False)
+    )
 
     def _run(statement):
         conn = psycopg2.connect(admin_dsn)
