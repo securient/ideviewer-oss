@@ -140,6 +140,17 @@ services:
     volumes:
       - instance_data:/app/instance
     command: ["rq", "worker", "default", "--url", "redis://redis:6379/0"]
+    # The image's HEALTHCHECK probes the portal's HTTP endpoint, which this
+    # service does not serve -- inherited unchanged it failed forever with
+    # "connection refused" and docker ps reported a working worker as
+    # unhealthy. Ask RQ instead whether a worker is registered and alive,
+    # which also catches a worker that is up but wedged.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,sys;from redis import Redis;from rq import Worker;c=Redis.from_url(os.environ['REDIS_URL']);sys.exit(0 if any(w.get_state()!='dead' for w in Worker.all(connection=c)) else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
 
   # RQ scheduler (ticks the daily extension-metadata refresh)
   scheduler:
@@ -165,6 +176,15 @@ services:
     volumes:
       - instance_data:/app/instance
     command: ["python", "run_scheduler.py"]
+    # Same inherited-HTTP-probe problem as the worker. rq-scheduler registers
+    # an instance key in Redis and refreshes it as a heartbeat, so its presence
+    # is a real liveness signal rather than just "the process exists".
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,sys;from redis import Redis;c=Redis.from_url(os.environ['REDIS_URL']);sys.exit(0 if c.keys('rq:scheduler_instance:*') else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
 
 volumes:
   postgres_data:
