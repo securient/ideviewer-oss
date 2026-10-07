@@ -6,43 +6,81 @@ parent: Features
 
 # Real-Time Monitoring
 
-IDEViewer uses filesystem watchers to detect extension changes in real time, triggering targeted rescans within 30 seconds of an install, update, or removal.
+IDEViewer watches the parts of a developer workstation where software arrives, and reacts within seconds rather than waiting for the next scheduled scan.
 
-## How It Works
+A periodic full scan still runs on the configured interval (30 minutes by default). Real-time monitoring sits alongside it and closes the window between "something was installed" and "the portal knows".
 
-The daemon uses [fsnotify](https://github.com/fsnotify/fsnotify) to watch IDE extension directories for file system events. When a change is detected:
+## What is watched
 
-1. A 30-second debounce timer starts (to batch rapid changes like multi-file extension installs)
-2. After the debounce period, a targeted rescan runs for the affected IDE only
-3. Results are submitted to the portal immediately
-4. The portal's live update indicator reflects the change
+The daemon uses [fsnotify](https://github.com/fsnotify/fsnotify) and groups watched directories into three categories. Each category triggers only the rescan it invalidates — installing an extension does not re-walk every project on the machine.
 
-## Watched Directories
+| Category | Directories | Triggers a rescan of |
+|----------|-------------|----------------------|
+| `extensions` | `~/.vscode/extensions`, `~/.cursor/extensions`, `~/.vscode-oss/extensions`, `~/.kiro/extensions`, and JetBrains `*/plugins` | IDE extensions and plugins |
+| `aitools` | `~/.claude`, `~/.cursor`, `~/.kiro/settings`, `~/.openclaw`, `~/.clawdbot`, `~/.config/openclaw`, `~/.config/clawdbot`, and the editor `User` settings directories | AI assistant config and MCP servers |
+| `projects` | Any directory containing a dependency manifest | Packages **and** secrets |
 
-| IDE | Watched Path |
-|-----|-------------|
-| VS Code | `~/.vscode/extensions` |
-| Cursor | `~/.cursor/extensions` |
-| VSCodium | `~/.vscode-oss/extensions` |
-| Kiro | `~/.kiro/extensions` |
-| JetBrains | `~/.config/JetBrains/*/plugins` |
+The `projects` category covers both package manifests and secrets because `.env` files live in the same directories a lockfile does.
 
-## 30-Second Debounce
+A directory counts as a project when it contains any of:
 
-When an extension is installed, the package manager often creates, modifies, and renames multiple files in rapid succession. The debounce timer ensures IDEViewer waits for the install to complete before scanning, avoiding partial reads and unnecessary API calls.
+`package.json`, `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `requirements.txt`, `Pipfile`, `Pipfile.lock`, `poetry.lock`, `pyproject.toml`, `go.mod`, `go.sum`, `Cargo.toml`, `Cargo.lock`, `Gemfile`, `Gemfile.lock`, `composer.json`, `composer.lock`
 
-## Targeted Rescan
+Project discovery walks the same roots as the dependency scanner (`~`, `~/Documents`, `~/Projects`, `~/dev`, `~/code`, `~/src`, `~/work`, `~/go/src` and similar), to a depth of 4.
 
-Rather than running a full scan of all IDEs when one extension changes, the daemon performs a targeted rescan of only the affected IDE. This is faster and reduces load on both the machine and the portal.
+## What is not watched, and why
 
-## Real-Time Event API
+**`node_modules` is excluded.** Watching it would cost tens of thousands of directory watches and buy nothing: installing a package rewrites the manifest and lockfile in the project directory, which *is* watched, so the change is caught there.
 
-The portal exposes an API endpoint that the daemon uses to report real-time events. The portal UI displays a live update indicator showing when the last real-time event was received.
+**Only manifest-bearing directories are watched, not every directory walked.** On a typical developer laptop the walk sees several thousand directories but only a couple of hundred are projects.
 
-## Portal Integration
+**Watch count is capped at 2048.** Each watch costs a file descriptor under kqueue on macOS and an inotify watch on Linux, where `max_user_watches` still defaults to 8192 on some distributions. If the cap is reached the daemon logs it, and the remaining projects are still covered by the periodic scan:
 
-In the portal, the host detail page shows:
+```
+Watcher: monitoring 113 directories (1 extension, 2 AI tool, 110 project)
+```
 
-- A **live update indicator** (green dot) when the daemon is actively monitoring
-- Timestamps showing when the last real-time change was detected
-- The specific extension that was added, updated, or removed
+## Timing
+
+A 30-second debounce batches rapid changes. Installing an extension or running `npm install` touches many files in quick succession; the debounce waits for the operation to finish rather than scanning a half-written tree.
+
+In practice, from filesystem change to the portal having the data:
+
+| Change | Typical end-to-end |
+|--------|--------------------|
+| Extension installed | ~30–40 seconds |
+| AI tool or MCP config edited | ~30 seconds |
+| Dependency manifest changed | ~35–50 seconds (varies with project count) |
+
+## How a change is processed
+
+1. fsnotify reports a change in a watched directory
+2. The 30-second debounce timer starts, batching further events
+3. The daemon runs a **targeted** rescan for the affected categories only
+4. Results are posted to `POST /api/realtime-event`
+5. The portal updates its inventory and emits any matching events (see [Integrations](../portal/integrations.html))
+
+Several categories changing within one debounce window are handled in a single batch.
+
+## Relationship to the periodic scan
+
+The periodic scan is the safety net: it covers anything outside the watched set, re-establishes state after the daemon restarts, and re-checks categories a realtime event does not touch.
+
+The daemon compares each scan's results against the previous cycle and **only reports when something differs**. On a stable machine it scans quietly and sends nothing. This is why the host page shows **Last change** rather than "last scan" — the portal is told when the inventory changed, not every time a scan ran. Daemon liveness is shown separately by the heartbeat indicator beside it.
+
+## Verifying it works
+
+```bash
+ideviewer status
+```
+
+shows whether the daemon is running and reaching the portal. The daemon log records each watcher decision:
+
+```
+Realtime: 1 change(s) detected in [projects], rescanning
+Realtime rescan: 7662 packages
+Realtime rescan: 2 secret finding(s)
+Realtime event submitted: map[changes_processed:1 received:true ...]
+```
+
+On the host detail page, a recent change appears as **Last live update**.
