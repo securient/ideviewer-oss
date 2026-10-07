@@ -101,6 +101,48 @@ func LogDir() string {
 	}
 }
 
+// DaemonLogFile returns the file the daemon's own output is written to.
+//
+// One function so the spawner, `status` and `reset` cannot disagree. They used
+// to hardcode a path each, and on macOS two of them did not match: `register`
+// started the detached fallback writing to /var/log/ideviewer/daemon.log --
+// which an unprivileged user cannot create, so the output was discarded
+// silently -- while `status` reported /tmp/ideviewer-daemon.log and found
+// nothing there. "Last written: never" was the only clue, on a file nothing
+// had ever been pointed at.
+func DaemonLogFile() string {
+	// macOS: the LaunchAgent the .pkg installs redirects stdout/stderr here
+	// (see build_scripts/build_macos.sh). The fallback process must use the
+	// same file, or the log moves depending on how the daemon happened to be
+	// started.
+	if runtime.GOOS == "darwin" {
+		return "/tmp/ideviewer-daemon.log"
+	}
+
+	dir := LogDir()
+	if err := os.MkdirAll(dir, 0o755); err == nil && isWritableDir(dir) {
+		return filepath.Join(dir, "daemon.log")
+	}
+
+	// An unprivileged run cannot create /var/log/ideviewer. A log in the temp
+	// directory beats no log at all, which is what happened before.
+	return filepath.Join(os.TempDir(), "ideviewer-daemon.log")
+}
+
+// isWritableDir reports whether dir can be written to, by trying rather than by
+// inspecting permission bits -- which say nothing about ACLs, read-only mounts
+// or container user mappings.
+func isWritableDir(dir string) bool {
+	f, err := os.CreateTemp(dir, ".ideviewer-write-probe-*")
+	if err != nil {
+		return false
+	}
+	name := f.Name()
+	f.Close()
+	os.Remove(name)
+	return true
+}
+
 // DefaultPIDFile returns the default PID file path.
 func DefaultPIDFile() string {
 	if runtime.GOOS == "windows" {

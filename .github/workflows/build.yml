@@ -633,107 +633,51 @@ jobs:
 
             ```bash
             docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
-            ```
-            ## What's New
+            ```            ## What's New
 
-            **Realtime monitoring covered extensions only, and did not
-            actually work.** Two independent problems, both fixed.
+            A patch release: three defects found by running the stack in
+            Docker and driving it end to end with a real daemon. No schema
+            changes, no behaviour changes to scanning or reporting.
 
-            The portal rejected every realtime event the daemon sent.
-            `/api/realtime-event` created a scan report and then read
-            `report.id` for the package foreign keys without flushing first, so
-            the id was still `None` and the insert died on `null value in
-            column scan_report_id violates not-null constraint`. Since the
-            daemon always attaches dependency data, *every* realtime event came
-            back `500`. The filesystem watcher was detecting extension changes
-            within its 30s debounce and the portal was discarding all of them,
-            so realtime detection did not exist in practice. The endpoint had
-            no test coverage at all, which is how it shipped this way.
+            **A working worker and scheduler were reported as unhealthy.**
+            Both build from the portal's Dockerfile and inherited its
+            HEALTHCHECK, which probes `http://localhost:8080/api/health`.
+            Neither serves HTTP, so the probe failed with "connection refused"
+            as soon as the start period elapsed and never recovered: `docker
+            ps` showed a worker that was processing jobs, and a scheduler that
+            was ticking, as unhealthy. Anything keyed on container health --
+            an orchestrator, a restart policy, a deploy gate -- would have
+            acted on that signal.
 
-            The watcher also only watched IDE extension directories. A
-            malicious npm package, a new MCP server or a committed credential
-            was invisible until the next periodic scan — up to a full scan
-            interval. It now watches the rest of the workstation:
+            Each now has a check that reflects what it does. The worker asks
+            RQ whether a live worker is registered, which also catches one
+            that is up but wedged; the scheduler looks for the instance key
+            rq-scheduler registers and refreshes as a heartbeat.
 
-            | Category | What it covers |
-            |---|---|
-            | `extensions` | IDE extension and JetBrains plugin directories |
-            | `aitools` | `~/.claude`, `~/.cursor`, `~/.kiro/settings`, openclaw/clawdbot, and the editor `User` settings dirs that hold MCP servers |
-            | `projects` | directories containing a dependency manifest — which is also where `.env` files live |
+            **The daemon log was written nowhere.** On macOS the detached
+            fallback spawn wrote to `/var/log/ideviewer/daemon.log`, which an
+            unprivileged user cannot create. Both `MkdirAll` and `OpenFile`
+            failed, the error was discarded, and the daemon ran with a nil log
+            handle -- every line it produced was lost. `register` and `status`
+            meanwhile reported `/tmp/ideviewer-daemon.log`, the path the
+            `.pkg`'s LaunchAgent redirects to, and found nothing there. The
+            only symptom was `status` printing "Last written: never" about a
+            file nothing had ever been pointed at.
 
-            Events carry the category they came from, so a change triggers only
-            the rescan it invalidates: a new extension does not re-walk every
-            project, and an edited lockfile does not re-enumerate MCP servers.
-            Only manifest-bearing directories are watched, not every directory
-            walked — on a developer laptop the walk sees thousands of
-            directories but a couple of hundred are projects. `node_modules`
-            is excluded: it would cost tens of thousands of watches and buys
-            nothing, since an install rewrites the manifest in the project
-            directory that is already watched. Discovery stops at 2048
-            directories and logs when it does, because each watch costs a file
-            descriptor under kqueue and an inotify watch on Linux.
+            There is now one function deciding that path, so the spawner,
+            `status` and `reset` cannot disagree. It returns the LaunchAgent's
+            path on macOS so both ways of starting the daemon land in the same
+            file, and elsewhere prefers the system log directory but falls
+            back to the temp directory when that is not writable. A log that
+            still cannot be opened is now reported instead of swallowed.
 
-            Measured against a live portal: 333 directories watched, a
-            `package.json` edit recorded in ~47s and an AI tool config change
-            in ~31s, against up to 30 minutes before.
-
-            **The signed SBOM button returned a 500,** and the SBOM omitted
-            every extension.
-
-            Signing was unavailable in any normal local run: the signer decided
-            "am I in production?" partly from `not DEBUG`, and `flask run`
-            without `--debug` forces `DEBUG = False` even under
-            `FLASK_CONFIG=development`. So `./start.sh` was classified as
-            production and refused to generate the local key, which also made
-            `/api/signing-key` and `/api/enforcement-actions/pending` return
-            `503`. Separately, `host_sbom` called the signer unguarded, so a
-            portal with no key — a legitimate state — got a bare 500 instead of
-            an explanation. It now degrades to a message naming the remedy.
-
-            The SBOM read extensions from the `ExtensionInfo` table, but
-            nothing in the codebase has ever written a row to it: ingestion
-            populates packages, secrets, vulnerabilities and AI tools only. The
-            table is always empty, so every SBOM silently omitted every
-            extension — the one inventory this product exists to track. They
-            now come from the scan report, reusing the policy engine's own
-            flattener so risk levels match what a policy evaluates.
-
-            **Timestamps rendered as "Invalid Date".** Templates built them as
-            `isoformat() + 'Z'`, which was right when the columns were naive;
-            every `DateTime` column is `timestamptz` now, so `isoformat()`
-            already emits an offset and the appended `Z` produced `+00:00Z` —
-            two timezone designators, which `new Date()` rejects. This was
-            wrong at 7 sites across 5 templates and is now a single filter.
-
-            The host header also labelled `last_seen_at` as "Last seen" while
-            `last_heartbeat_at` — the column that actually tracks daemon
-            liveness — was never shown anywhere on the page. Heartbeats
-            deliberately leave `last_seen_at` alone, so a live daemon with
-            nothing new to report looked stale and could not be told apart from
-            a dead one. The header now shows an online/idle/offline dot from
-            the heartbeat, using the same thresholds as the dashboard, plus the
-            report's own timestamp.
-
-            **Also**
-
-            - Secrets and AI tools / MCP servers are recorded from realtime
-              events, not just periodic reports. The ingestion is now shared
-              between both paths rather than duplicated.
-            - The realtime handler takes the scan reservation it always needed.
-              It shares the scanner instances with the periodic scan, which the
-              pipeline requires be used one at a time, and previously ignored
-              that.
-            - `COMMAND_SIGNING_PRIVATE_KEY` and its `_FILE` variant are
-              documented in the generated `portal/.env`. Bringing your own
-              SBOM signing key already worked but was only mentioned in the
-              troubleshooting page; left unset, the portal generates one at
-              `portal/instance/command_signing.key`.
+            **`register` reported "PID -1".** `os.Process.Release()`
+            invalidates the handle and sets `Pid` to -1, and the success
+            message read the pid after calling it. Every successful
+            registration announced `(PID -1)`, which reads like a failure on a
+            daemon that had started correctly.
 
             > **No migration required.** This release changes no schema.
 
-            > **Known issue.** The daemon's delta check is ineffective: it
-            > hashes result structs that embed their own scan timestamp, so the
-            > digests always differ and the "skip unchanged cycles" branch is
-            > unreachable. Every host therefore re-sends its full inventory
-            > each interval. Harmless but wasteful, and it is why the host page
-            > says "Last scan" rather than "Last change".
+            > The `.pkg` is unsigned and un-notarized unless the macOS signing
+            > secrets are configured, so Gatekeeper will warn on install.

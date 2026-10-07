@@ -45,11 +45,38 @@ class TestDevelopmentConfig:
             importlib.reload(config_module)
 
     def test_postgres_scheme_is_normalized(self):
+        """The heroku-style scheme is rewritten and the driver named explicitly.
+
+        The driver half matters as much as the scheme half: SQLAlchemy 2.1
+        resolves a bare ``postgresql://`` to psycopg (v3), which this project
+        does not depend on, so leaving it bare broke every connection with
+        "No module named 'psycopg'".
+        """
         from config import normalize_database_url
 
-        assert normalize_database_url("postgres://u:p@h:5432/d") == "postgresql://u:p@h:5432/d"
-        assert normalize_database_url("postgresql://u:p@h:5432/d") == "postgresql://u:p@h:5432/d"
+        assert normalize_database_url("postgres://u:p@h:5432/d") == "postgresql+psycopg2://u:p@h:5432/d"
+        assert normalize_database_url("postgresql://u:p@h:5432/d") == "postgresql+psycopg2://u:p@h:5432/d"
         assert normalize_database_url("") == ""
+
+    def test_explicit_driver_is_preserved(self):
+        """Naming a driver is a deliberate choice; do not overwrite it."""
+        from config import normalize_database_url
+
+        assert normalize_database_url("postgresql+psycopg2://u:p@h/d") == "postgresql+psycopg2://u:p@h/d"
+        assert normalize_database_url("postgresql+psycopg://u:p@h/d") == "postgresql+psycopg://u:p@h/d"
+
+    def test_normalized_url_resolves_to_an_installed_driver(self):
+        """The resolved DBAPI must actually be importable.
+
+        Guards the real failure: the URL parsed fine and only blew up at
+        connect time, once per test, 248 times.
+        """
+        from sqlalchemy.engine.url import make_url
+        from config import normalize_database_url
+
+        url = make_url(normalize_database_url("postgresql://u:p@h:5432/d"))
+        assert url.get_driver_name() == "psycopg2"
+        url.get_dialect().import_dbapi()
 
     def test_google_oauth_disabled_by_default(self, monkeypatch):
         # Ensure env vars are unset so we test true defaults
@@ -105,7 +132,9 @@ class TestTestingConfig:
         importlib.reload(config_module)
         cfg = config_module.TestingConfig()
         assert cfg.TESTING is True
-        assert cfg.SQLALCHEMY_DATABASE_URI.startswith("postgresql://")
+        # Explicitly psycopg2: a bare postgresql:// resolves to psycopg (v3)
+        # on SQLAlchemy 2.1, which is not a dependency.
+        assert cfg.SQLALCHEMY_DATABASE_URI.startswith("postgresql+psycopg2://")
 
     def test_testing_never_falls_back_to_database_url(self):
         # DATABASE_URL points at the real portal database. TestingConfig must

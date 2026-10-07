@@ -154,7 +154,7 @@ func runReset(cmd *cobra.Command, args []string) error {
 func logPaths() []string {
 	paths := []string{filepath.Join(platform.LogDir(), "daemon.log")}
 	if runtime.GOOS == "darwin" {
-		paths = append(paths, "/tmp/ideviewer-daemon.log")
+		paths = append(paths, platform.DaemonLogFile())
 	}
 	return paths
 }
