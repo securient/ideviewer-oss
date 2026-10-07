@@ -155,13 +155,17 @@ class TestHostDetailLiveness:
         assert 'Online' in html
         assert 'Offline' not in html
 
-    def test_last_scan_comes_from_the_report_not_last_seen(
+    def test_last_change_comes_from_the_report_not_last_seen(
         self, portal_app, portal_db, logged_in_client, test_host
     ):
-        """"Last scan" must be the report's own timestamp.
+        """"Last change" must be the report's own timestamp.
 
         ``last_seen_at`` is bumped by registration and realtime events too, so
-        it is not a truthful stand-in for when the scan actually landed.
+        it is not a truthful stand-in for when the report actually landed.
+
+        The label is "Last change" rather than "Last scan" on purpose: the
+        daemon only POSTs when its result hashes differ from the previous
+        cycle, so a report row marks a change, not a scan.
         """
         from app.models import ScanReport
         host = self._host(portal_db, test_host.hostname)
@@ -179,14 +183,15 @@ class TestHostDetailLiveness:
         host.last_seen_at = datetime(2026, 9, 3, 23, 59, 59, tzinfo=timezone.utc)
         html = self._render(portal_db, logged_in_client, host)
 
-        assert 'Last scan' in html
-        assert '2026-09-03T22:12:48Z' in html, 'Last scan should be the report timestamp'
-        assert '2026-09-03T23:59:59Z' not in html, 'last_seen_at must not be shown as the scan time'
+        assert 'Last change' in html, 'must not claim to show a scan time'
+        assert 'Last scan' not in html, 'the portal is never told a scan merely ran'
+        assert '2026-09-03T22:12:48Z' in html, 'Last change should be the report timestamp'
+        assert '2026-09-03T23:59:59Z' not in html, 'last_seen_at must not be shown as the change time'
 
     def test_host_with_no_report_renders_never(
         self, portal_app, portal_db, logged_in_client, test_host
     ):
         host = self._host(portal_db, test_host.hostname)
         html = self._render(portal_db, logged_in_client, host)
-        assert 'Last scan:' in html
+        assert 'Last change:' in html
         assert 'Never' in html
