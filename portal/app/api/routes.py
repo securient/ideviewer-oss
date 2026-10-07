@@ -147,6 +147,82 @@ def _optional_public_key_info():
         return None
 
 
+def _dispatch_vulnerability_scan(host_id):
+    """Correlate this host's packages against OSV, off the request path.
+
+    Shared by the periodic report and the realtime path. Realtime used to skip
+    this entirely, so a developer installing a vulnerable dependency had the
+    package recorded within ~40s but no vulnerability attached to it until the
+    next full scan -- up to a whole interval later. Verified: adding
+    minimist@1.2.0 through the realtime path recorded the package and zero
+    advisories; the same package through a periodic report recorded two.
+
+      * Async (Redis present): enqueue an RQ job.
+      * No queue: run in a background thread bound to the current app, so the
+        OSV.dev round-trip cannot stall or time out ingestion. Set
+        INLINE_VULN_SCAN=0 to skip it.
+
+    Returns the RQ job id when one was enqueued, else None.
+    """
+    if is_async():
+        job = enqueue(scan_host_vulnerabilities, host_id)
+        return job.id if job is not None else None
+
+    if os.environ.get('INLINE_VULN_SCAN', '1').lower() not in ('1', 'true', 'yes'):
+        return None
+
+    if current_app.config.get('TESTING'):
+        # Under tests run synchronously: the suite truncates every table as
+        # soon as the test returns, so a background thread would race that
+        # teardown and write rows into the next test's database.
+        try:
+            scan_host_vulnerabilities(host_id)
+        except Exception as e:
+            vuln_logger.error("inline vuln scan failed: %s", e)
+        return None
+
+    app_obj = current_app._get_current_object()
+
+    def _bg_vuln_scan(hid, app_ref):
+        with app_ref.app_context():
+            try:
+                scan_host_vulnerabilities(hid)
+            except Exception as e:
+                vuln_logger.error("background vuln scan failed: %s", e)
+
+    threading.Thread(target=_bg_vuln_scan, args=(host_id, app_obj), daemon=True).start()
+    return None
+
+
+def _evaluate_threat_intel(scan_data):
+    """Match a scan's extensions against the known-bad feed.
+
+    Shared by the periodic report and the realtime path. Realtime used to skip
+    it, so the highest-confidence signal the product has -- "we know this
+    publisher ships malware" -- waited for the next full scan even though the
+    extension had already been recorded seconds earlier.
+    """
+    matched = []
+    for ide in (scan_data or {}).get('ides', []) or []:
+        for ext in (ide.get('extensions') or []):
+            ext_id = ext.get('id') or ext.get('extension_id')
+            if not ext_id:
+                continue
+            for m in threat_intel.evaluate_extension(ext_id, ext.get('publisher'), ext.get('name')):
+                matched.append({
+                    'extension_id': ext_id,
+                    'name': ext.get('name'),
+                    'version': ext.get('version'),
+                    'publisher': ext.get('publisher'),
+                    'ide': ide.get('name'),
+                    'indicator_type': m['indicator_type'],
+                    'indicator': m['indicator'],
+                    'detail': m['detail'],
+                    'severity': m['severity'],
+                })
+    return matched
+
+
 def _ingest_secrets(host, report, secrets_data):
     """Upsert this host's secret findings and resolve the ones that are gone.
 
@@ -167,24 +243,54 @@ def _ingest_secrets(host, report, secrets_data):
         for finding in secrets_data['findings']:
             file_path = finding.get('file_path', '')
             variable_name = finding.get('variable_name')
+            secret_type = finding.get('secret_type', 'unknown')
+            commit_hash = finding.get('commit_hash')
             reported_secret_keys.add((file_path, variable_name))
 
+            # Look the finding up by the columns the unique constraint is on
+            # -- (host_id, file_path, secret_type, variable_name, commit_hash)
+            # -- and deliberately not by is_resolved.
+            #
+            # Filtering on is_resolved=False made an already-resolved row
+            # invisible here, so a secret that was resolved and then came back
+            # took the INSERT path and hit the constraint. The IntegrityError
+            # failed the whole request, so the daemon's entire report was
+            # rejected: extensions, packages and AI tools lost along with the
+            # secret. And it never recovered on its own, because the next scan
+            # found the same resolved row and did the same thing.
+            #
+            # A .env deleted and recreated, a branch switch, or a file moved
+            # back is enough to trigger it.
             existing = SecretFinding.query.filter_by(
                 host_id=host.id,
                 file_path=file_path,
+                secret_type=secret_type,
                 variable_name=variable_name,
-                is_resolved=False
+                commit_hash=commit_hash,
             ).first()
 
             if existing:
                 existing.last_seen_at = utcnow()
                 existing.scan_report_id = report.id
+                if existing.is_resolved:
+                    # The credential is on disk again. Revive the row rather
+                    # than inserting a second one, and treat it as newly
+                    # detected: a secret coming back is worth alerting on.
+                    existing.is_resolved = False
+                    existing.resolved_at = None
+                    new_secret_events.append({
+                        'secret_type': secret_type,
+                        'file_path': file_path,
+                        'variable_name': variable_name,
+                        'severity': finding.get('severity', 'critical'),
+                        'source': finding.get('source', 'filesystem'),
+                    })
             else:
                 secret = SecretFinding(
                     host_id=host.id,
                     scan_report_id=report.id,
                     file_path=file_path,
-                    secret_type=finding.get('secret_type', 'unknown'),
+                    secret_type=secret_type,
                     variable_name=variable_name,
                     line_number=finding.get('line_number'),
                     severity=finding.get('severity', 'critical'),
@@ -192,14 +298,14 @@ def _ingest_secrets(host, report, secrets_data):
                     recommendation=finding.get('recommendation', ''),
                     redacted_value=finding.get('redacted_value', ''),
                     source=finding.get('source', 'filesystem'),
-                    commit_hash=finding.get('commit_hash'),
+                    commit_hash=commit_hash,
                     commit_author=finding.get('commit_author'),
                     commit_date=finding.get('commit_date'),
                     repo_path=finding.get('repo_path'),
                 )
                 db.session.add(secret)
                 new_secret_events.append({
-                    'secret_type': finding.get('secret_type', 'unknown'),
+                    'secret_type': secret_type,
                     'file_path': file_path,
                     'variable_name': variable_name,
                     'severity': finding.get('severity', 'critical'),
@@ -765,41 +871,7 @@ def submit_report():
     # Commit everything first so the daemon gets a fast response
     db.session.commit()
 
-    # Run vulnerability enrichment without blocking the daemon's response.
-    #   * Async path (Redis present): enqueue an RQ job.
-    #   * No queue: run in a background thread bound to the current app so
-    #     the OSV.dev network round-trip can't stall (or time out) report
-    #     ingestion. Set INLINE_VULN_SCAN=0 to skip it entirely.
-    host_id_for_vuln = host.id
-    job_id = None
-    if is_async():
-        job = enqueue(scan_host_vulnerabilities, host_id_for_vuln)
-        if job is not None:
-            job_id = job.id
-    elif os.environ.get('INLINE_VULN_SCAN', '1').lower() in ('1', 'true', 'yes'):
-        if current_app.config.get('TESTING'):
-            # Under tests run synchronously: the suite truncates every table
-            # as soon as the test returns, so a background thread would race
-            # that teardown and write rows into the next test's database.
-            try:
-                scan_host_vulnerabilities(host_id_for_vuln)
-            except Exception as e:
-                vuln_logger.error("inline vuln scan failed: %s", e)
-        else:
-            app_obj = current_app._get_current_object()
-
-            def _bg_vuln_scan(hid, app_ref):
-                with app_ref.app_context():
-                    try:
-                        scan_host_vulnerabilities(hid)
-                    except Exception as e:
-                        vuln_logger.error("background vuln scan failed: %s", e)
-
-            threading.Thread(
-                target=_bg_vuln_scan,
-                args=(host_id_for_vuln, app_obj),
-                daemon=True,
-            ).start()
+    job_id = _dispatch_vulnerability_scan(host.id)
 
     for ext_data in high_risk_extensions:
         emit_event(
@@ -1522,6 +1594,30 @@ def receive_realtime_event():
             extensions=build_extensions_from_scan(scan_data, calculate_risk_level),
         )
         enqueue_pending_enrichments(scan_data)
+
+        # Known-bad matching, same as the periodic path. Without it an
+        # extension from a malicious publisher was recorded within seconds but
+        # raised nothing until the next full scan.
+        from app.soar import run_playbooks_for_event
+        for tm in _evaluate_threat_intel(scan_data):
+            emit_event(
+                'extension.threat_matched',
+                customer_key_id=key.id,
+                data={
+                    'host': {'id': host.public_id, 'hostname': host.hostname},
+                    'extension': tm,
+                    'source': 'realtime_event',
+                },
+            )
+            run_playbooks_for_event('extension.threat_matched', key.id, host, tm,
+                                    tm.get('severity', 'high'))
+
+    # Correlate against OSV whenever this event carried dependency data.
+    # Recording a vulnerable package without its advisories is the gap this
+    # closes: realtime detected the install in ~40s, but the vulnerability
+    # only appeared at the next full scan.
+    if deps_data and deps_data.get('packages'):
+        _dispatch_vulnerability_scan(host.id)
 
     # Log the event
     changes = data.get('changes', [])

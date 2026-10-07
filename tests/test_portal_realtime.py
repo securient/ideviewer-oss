@@ -209,3 +209,104 @@ class TestRealtimeFullInventory:
 
         still_open = SecretFinding.query.filter_by(host_id=test_host.id, is_resolved=False).count()
         assert still_open == 1, 'an unrelated category must not resolve secrets'
+
+
+class TestRealtimeParityWithPeriodic:
+    """A realtime event must enrich the same way a periodic report does.
+
+    Realtime recorded packages and extensions but skipped OSV correlation and
+    threat-intel matching, so the two highest-value signals waited for the next
+    full scan -- up to a whole interval after the change was already known.
+    """
+
+    def _event(self, hostname, packages=None, extensions=None):
+        payload = {
+            'hostname': hostname,
+            'platform': 'darwin arm64',
+            'event_type': 'workstation_change',
+            'timestamp': '2026-10-07T15:00:00Z',
+            'changes': [{'path': '/x', 'event_type': 'modified',
+                         'timestamp': '2026-10-07T15:00:00Z'}],
+        }
+        if extensions is not None:
+            payload['scan_data'] = {
+                'timestamp': '2026-10-07T15:00:00Z',
+                'platform': 'darwin',
+                'ides': [{'name': 'VS Code', 'version': '1.99',
+                          'extensions': extensions}],
+                'total_ides': 1,
+                'total_extensions': len(extensions),
+            }
+        if packages is not None:
+            payload['dependencies'] = {
+                'timestamp': '2026-10-07T15:00:00Z',
+                'packages': packages,
+                'package_managers_found': ['npm'],
+            }
+        return payload
+
+    def test_dependency_data_triggers_vulnerability_correlation(
+        self, portal_app, portal_db, portal_client, test_customer_key, test_host, monkeypatch
+    ):
+        called = {}
+
+        def fake_scan(host_id):
+            called['host_id'] = host_id
+
+        monkeypatch.setattr('app.api.routes.scan_host_vulnerabilities', fake_scan)
+
+        resp = portal_client.post(
+            '/api/realtime-event',
+            headers={'X-Customer-Key': test_customer_key.key},
+            json=self._event(test_host.hostname, packages=[
+                {'name': 'minimist', 'version': '1.2.0',
+                 'package_manager': 'npm', 'source_type': 'project'},
+            ]),
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        assert called.get('host_id') == test_host.id, \
+            'a realtime event carrying packages must correlate them against OSV'
+
+    def test_no_dependency_data_does_not_trigger_a_scan(
+        self, portal_app, portal_db, portal_client, test_customer_key, test_host, monkeypatch
+    ):
+        """An extensions-only event has no new packages to correlate."""
+        called = {}
+        monkeypatch.setattr('app.api.routes.scan_host_vulnerabilities',
+                            lambda host_id: called.setdefault('host_id', host_id))
+
+        resp = portal_client.post(
+            '/api/realtime-event',
+            headers={'X-Customer-Key': test_customer_key.key},
+            json=self._event(test_host.hostname, extensions=[
+                {'id': 'ms-python.python', 'name': 'Python', 'version': '1.0',
+                 'publisher': 'ms-python', 'permissions': []},
+            ]),
+        )
+        assert resp.status_code == 200
+        assert 'host_id' not in called
+
+    def test_threat_intel_runs_on_realtime_extensions(
+        self, portal_app, portal_db, portal_client, test_customer_key, test_host, monkeypatch
+    ):
+        seen = []
+        monkeypatch.setattr(
+            'app.threat_intel.evaluate_extension',
+            lambda ext_id, publisher, name: (
+                seen.append(ext_id) or
+                [{'indicator_type': 'banned_extension_ids', 'indicator': ext_id,
+                  'detail': 'known bad', 'severity': 'critical'}]
+            ),
+        )
+
+        resp = portal_client.post(
+            '/api/realtime-event',
+            headers={'X-Customer-Key': test_customer_key.key},
+            json=self._event(test_host.hostname, extensions=[
+                {'id': 'evil.miner', 'name': 'Miner', 'version': '0.0.1',
+                 'publisher': 'evil', 'permissions': ['shellExecution']},
+            ]),
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        assert 'evil.miner' in seen, \
+            'a realtime extension must be matched against the threat-intel feed'
