@@ -15,9 +15,22 @@ def normalize_database_url(url: str) -> str:
     SQLAlchemy dialect name; rewrite it to ``postgresql://``. Empty values
     pass through untouched so the missing-config error is raised by
     ``create_app`` with a useful message rather than here at import time.
+
+    The driver is then named explicitly. SQLAlchemy 2.1 changed which DBAPI a
+    bare ``postgresql://`` URL resolves to -- psycopg (v3) instead of psycopg2
+    -- and only ``psycopg2-binary`` is declared in requirements.txt. Because
+    the requirement is unpinned, installs silently moved to 2.1 and every
+    connection began failing with "No module named 'psycopg'": the test suite
+    in CI, and any image rebuilt without a warm layer cache. Depending on a
+    default that moves under us is the bug; say which driver we ship with.
+
+    A URL that already names a driver is left alone, so anyone who prefers
+    psycopg3 can ask for it with ``postgresql+psycopg://``.
     """
     if url.startswith('postgres://'):
-        return url.replace('postgres://', 'postgresql://', 1)
+        url = url.replace('postgres://', 'postgresql://', 1)
+    if url.startswith('postgresql://'):
+        url = url.replace('postgresql://', 'postgresql+psycopg2://', 1)
     return url
 
 

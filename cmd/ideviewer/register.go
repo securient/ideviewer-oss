@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -189,11 +188,7 @@ func runRegister(cmd *cobra.Command, args []string) error {
 	colorGreen.Println("Registration complete!")
 	if daemonStarted {
 		fmt.Println("\nDaemon is running in the background.")
-		if runtime.GOOS == "darwin" {
-			colorDim.Println("Logs: /tmp/ideviewer-daemon.log")
-		} else {
-			colorDim.Printf("Logs: %s/daemon.log\n", platform.LogDir())
-		}
+		colorDim.Printf("Logs: %s\n", platform.DaemonLogFile())
 	} else {
 		fmt.Println("\nTo start the daemon manually:")
 		colorCyan.Println("  ideviewer daemon --foreground")
@@ -271,11 +266,12 @@ func startDaemonService() bool {
 	if err != nil {
 		binary = "ideviewer"
 	}
-	logDir := platform.LogDir()
-	_ = os.MkdirAll(logDir, 0755)
-
-	logFile, err := os.OpenFile(filepath.Join(logDir, "daemon.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	logPath := platform.DaemonLogFile()
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
+		// Say so rather than discarding the daemon's output in silence, which
+		// left operators with no log and no indication why.
+		colorYellow.Printf("  Could not open %s for logging (%v) — the daemon will run without a log\n", logPath, err)
 		logFile = nil
 	}
 
@@ -292,12 +288,21 @@ func startDaemonService() bool {
 		}
 		return false
 	}
+
+	// Read the pid before Release(): Release marks the handle as no longer
+	// usable and sets Pid to -1, so reporting it afterwards printed
+	// "(PID -1)" and looked like a failure on an otherwise healthy start.
+	pid := proc.Process.Pid
+
 	// Release the child so it continues running after we exit
 	_ = proc.Process.Release()
 	if logFile != nil {
 		logFile.Close()
 	}
-	colorGreen.Printf("  Daemon started as background process (PID %d)\n", proc.Process.Pid)
+	colorGreen.Printf("  Daemon started as background process (PID %d)\n", pid)
+	if logFile != nil {
+		colorDim.Printf("  Logging to %s\n", logPath)
+	}
 	return true
 }
 

@@ -62,7 +62,14 @@ def _ensure_database(url):
     import psycopg2
     from psycopg2 import sql
 
-    admin_dsn = url.set(database="postgres").render_as_string(hide_password=False)
+    # Strip the SQLAlchemy driver suffix: this DSN goes to psycopg2 directly,
+    # and libpq rejects "postgresql+psycopg2://" with `invalid dsn: missing
+    # "=" after ...`. SQLAlchemy understands the +driver form; psycopg2 does
+    # not, and only SQLAlchemy ever sees the URL this was derived from.
+    admin_dsn = (
+        url.set(database="postgres", drivername="postgresql")
+        .render_as_string(hide_password=False)
+    )
     try:
         conn = psycopg2.connect(admin_dsn)
     except psycopg2.OperationalError as exc:
