@@ -140,6 +140,17 @@ services:
     volumes:
       - instance_data:/app/instance
     command: ["rq", "worker", "default", "--url", "redis://redis:6379/0"]
+    # The image's HEALTHCHECK probes the portal's HTTP endpoint, which this
+    # service does not serve -- inherited unchanged it failed forever with
+    # "connection refused" and docker ps reported a working worker as
+    # unhealthy. Ask RQ instead whether a worker is registered and alive,
+    # which also catches a worker that is up but wedged.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,sys;from redis import Redis;from rq import Worker;c=Redis.from_url(os.environ['REDIS_URL']);sys.exit(0 if any(w.get_state()!='dead' for w in Worker.all(connection=c)) else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
 
   # RQ scheduler (ticks the daily extension-metadata refresh)
   scheduler:
@@ -165,6 +176,23 @@ services:
     volumes:
       - instance_data:/app/instance
     command: ["python", "run_scheduler.py"]
+    # Same inherited-HTTP-probe problem as the worker, but the liveness signal
+    # has to be chosen more carefully. rq-scheduler's own keys are no good: its
+    # run loop does acquire_lock() -> enqueue_jobs() -> remove_lock(), so
+    # "rq:scheduler" exists only for the milliseconds it is enqueueing, and the
+    # birth key set at startup expires one poll interval later. Probing for
+    # either reports a perfectly healthy scheduler as dead within a minute.
+    #
+    # What a dead loop actually looks like is scheduled jobs falling behind:
+    # the next-run times in the zset stop advancing and recede into the past.
+    # Allow 300s of lag -- comfortably more than the poll interval plus a slow
+    # sweep, far less than the hours a stopped scheduler would accumulate.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,sys,time;from redis import Redis;c=Redis.from_url(os.environ['REDIS_URL']);j=c.zrange('rq:scheduler:scheduled_jobs',0,0,withscores=True);sys.exit(0 if j and j[0][1] > time.time()-300 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
 
 volumes:
   postgres_data:

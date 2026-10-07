@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -129,11 +128,7 @@ func reportDaemon(pidFile string) {
 		colorDim.Println("  Clear it with: ideviewer stop")
 	}
 
-	logPath := filepath.Join(platform.LogDir(), "daemon.log")
-	if runtime.GOOS == "darwin" {
-		// The LaunchAgent redirects here; see register.go.
-		logPath = "/tmp/ideviewer-daemon.log"
-	}
+	logPath := platform.DaemonLogFile()
 	fmt.Printf("  Log file: %s\n", logPath)
 	if info, err := os.Stat(logPath); err == nil {
 		colorDim.Printf("  Last written: %s (%d bytes)\n",
