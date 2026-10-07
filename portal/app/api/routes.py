@@ -167,24 +167,54 @@ def _ingest_secrets(host, report, secrets_data):
         for finding in secrets_data['findings']:
             file_path = finding.get('file_path', '')
             variable_name = finding.get('variable_name')
+            secret_type = finding.get('secret_type', 'unknown')
+            commit_hash = finding.get('commit_hash')
             reported_secret_keys.add((file_path, variable_name))
 
+            # Look the finding up by the columns the unique constraint is on
+            # -- (host_id, file_path, secret_type, variable_name, commit_hash)
+            # -- and deliberately not by is_resolved.
+            #
+            # Filtering on is_resolved=False made an already-resolved row
+            # invisible here, so a secret that was resolved and then came back
+            # took the INSERT path and hit the constraint. The IntegrityError
+            # failed the whole request, so the daemon's entire report was
+            # rejected: extensions, packages and AI tools lost along with the
+            # secret. And it never recovered on its own, because the next scan
+            # found the same resolved row and did the same thing.
+            #
+            # A .env deleted and recreated, a branch switch, or a file moved
+            # back is enough to trigger it.
             existing = SecretFinding.query.filter_by(
                 host_id=host.id,
                 file_path=file_path,
+                secret_type=secret_type,
                 variable_name=variable_name,
-                is_resolved=False
+                commit_hash=commit_hash,
             ).first()
 
             if existing:
                 existing.last_seen_at = utcnow()
                 existing.scan_report_id = report.id
+                if existing.is_resolved:
+                    # The credential is on disk again. Revive the row rather
+                    # than inserting a second one, and treat it as newly
+                    # detected: a secret coming back is worth alerting on.
+                    existing.is_resolved = False
+                    existing.resolved_at = None
+                    new_secret_events.append({
+                        'secret_type': secret_type,
+                        'file_path': file_path,
+                        'variable_name': variable_name,
+                        'severity': finding.get('severity', 'critical'),
+                        'source': finding.get('source', 'filesystem'),
+                    })
             else:
                 secret = SecretFinding(
                     host_id=host.id,
                     scan_report_id=report.id,
                     file_path=file_path,
-                    secret_type=finding.get('secret_type', 'unknown'),
+                    secret_type=secret_type,
                     variable_name=variable_name,
                     line_number=finding.get('line_number'),
                     severity=finding.get('severity', 'critical'),
@@ -192,14 +222,14 @@ def _ingest_secrets(host, report, secrets_data):
                     recommendation=finding.get('recommendation', ''),
                     redacted_value=finding.get('redacted_value', ''),
                     source=finding.get('source', 'filesystem'),
-                    commit_hash=finding.get('commit_hash'),
+                    commit_hash=commit_hash,
                     commit_author=finding.get('commit_author'),
                     commit_date=finding.get('commit_date'),
                     repo_path=finding.get('repo_path'),
                 )
                 db.session.add(secret)
                 new_secret_events.append({
-                    'secret_type': finding.get('secret_type', 'unknown'),
+                    'secret_type': secret_type,
                     'file_path': file_path,
                     'variable_name': variable_name,
                     'severity': finding.get('severity', 'critical'),

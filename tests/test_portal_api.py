@@ -351,3 +351,111 @@ class TestTamperAlert:
             },
         )
         assert resp.status_code == 404
+
+class TestSecretReappearance:
+    """A secret that is resolved and then comes back must not 500 the report.
+
+    The lookup used to filter on is_resolved=False, which hid an already
+    resolved row, so the reappearing secret took the INSERT path and violated
+    uq_secret_per_host_location. The IntegrityError failed the whole request,
+    so the daemon's entire report was rejected -- extensions, packages and AI
+    tools lost along with the secret -- and every later scan repeated it.
+    """
+
+    def _report(self, portal_client, key, hostname, findings):
+        return portal_client.post(
+            '/api/report',
+            headers={'X-Customer-Key': key},
+            json={
+                'hostname': hostname,
+                'platform': 'darwin arm64',
+                'scan_data': {
+                    'timestamp': '2026-10-07T14:00:00Z',
+                    'platform': 'darwin',
+                    'ides': [],
+                    'total_ides': 0,
+                    'total_extensions': 0,
+                    'secrets': {'findings': findings},
+                },
+            },
+        )
+
+    FINDING = {
+        'file_path': '/Users/dev/project/.env',
+        'secret_type': 'api_credential',
+        'variable_name': 'SECRET_KEY',
+        'severity': 'high',
+        'redacted_value': '[redacted]',
+        'source': 'filesystem',
+    }
+
+    def test_secret_can_disappear_and_come_back(
+        self, portal_app, portal_db, portal_client, test_customer_key, test_host
+    ):
+        from app.models import SecretFinding
+        key, host = test_customer_key.key, test_host.hostname
+
+        # Present.
+        assert self._report(portal_client, key, host, [self.FINDING]).status_code == 200
+        assert SecretFinding.query.filter_by(is_resolved=False).count() == 1
+
+        # Gone -- the scan reports no findings, so it is marked resolved.
+        assert self._report(portal_client, key, host, []).status_code == 200
+        assert SecretFinding.query.filter_by(is_resolved=True).count() == 1
+
+        # Back again. This is the request that used to 500.
+        resp = self._report(portal_client, key, host, [self.FINDING])
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+
+        # Revived in place, not duplicated -- the constraint allows only one.
+        assert SecretFinding.query.count() == 1
+        row = SecretFinding.query.one()
+        assert row.is_resolved is False
+        assert row.resolved_at is None
+
+    def test_rest_of_the_report_survives_a_returning_secret(
+        self, portal_app, portal_db, portal_client, test_customer_key, test_host
+    ):
+        """The real damage was collateral: one secret failed the whole report."""
+        from app.models import PackageInfo
+        key, host = test_customer_key.key, test_host.hostname
+
+        self._report(portal_client, key, host, [self.FINDING])
+        self._report(portal_client, key, host, [])
+
+        resp = portal_client.post(
+            '/api/report',
+            headers={'X-Customer-Key': key},
+            json={
+                'hostname': host,
+                'platform': 'darwin arm64',
+                'scan_data': {
+                    'timestamp': '2026-10-07T14:05:00Z',
+                    'platform': 'darwin',
+                    'ides': [],
+                    'total_ides': 0,
+                    'total_extensions': 0,
+                    'secrets': {'findings': [self.FINDING]},
+                    'dependencies': {'packages': [
+                        {'name': 'lodash', 'version': '4.17.20',
+                         'package_manager': 'npm', 'source_type': 'project'},
+                    ]},
+                },
+            },
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        assert PackageInfo.query.filter_by(name='lodash').count() == 1, \
+            'the package must survive a report that also carries a returning secret'
+
+    def test_same_variable_different_secret_type_is_a_separate_finding(
+        self, portal_app, portal_db, portal_client, test_customer_key, test_host
+    ):
+        """secret_type is part of the unique key, so it must be part of the lookup."""
+        from app.models import SecretFinding
+        other = dict(self.FINDING, secret_type='aws_key')
+
+        resp = self._report(portal_client, test_customer_key.key, test_host.hostname,
+                            [self.FINDING, other])
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        assert SecretFinding.query.count() == 2, \
+            'two findings differing only by secret_type are distinct rows'
