@@ -308,17 +308,13 @@
                   hosts enrolled before heartbeats existed), same thresholds as
                   the dashboard so the two pages never disagree.
 
-                  "Last scan" is accurate today: the daemon reports on every
-                  scan interval regardless of whether anything changed. It
-                  intends to skip unchanged cycles (daemon.go -- "No changes
-                  detected since last scan, skipping portal report"), but that
-                  branch is unreachable: computeHash marshals each result
-                  struct whole, and all four embed their own Timestamp set to
-                  time.Now(), so every digest differs every cycle.
-
-                  If that delta bug is ever fixed, reports will only arrive on
-                  real change and this label must become "Last change" -- the
-                  two travel together.
+                  "Last change", not "last scan": the daemon scans on its
+                  interval but only POSTs when the SHA-256 of its results
+                  differs from the previous cycle. A report row therefore marks
+                  a change, and on a stable host this timestamp stays put while
+                  scans keep running -- which is what the heartbeat dot beside
+                  it is for. The portal is never told that a scan ran and found
+                  nothing, so it cannot honestly claim to show one.
                 #}
                 {% set hb_time = host.last_heartbeat_at or host.last_seen_at %}
                 <p style="color: var(--text-secondary); font-size: 0.875rem; margin-top: 0.3rem; display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
@@ -331,7 +327,7 @@
                     {% endif %}
                     • Last heartbeat:
                     <span class="local-time" data-utc="{{ host.last_heartbeat_at | utc_iso }}">{{ host.last_heartbeat_at.strftime('%Y-%m-%d %H:%M') if host.last_heartbeat_at else 'Never' }}</span>
-                    • Last scan:
+                    • Last change:
                     <span class="local-time" data-utc="{{ latest_report.created_at | utc_iso if latest_report else '' }}">{{ latest_report.created_at.strftime('%Y-%m-%d %H:%M') if latest_report else 'Never' }}</span>
                     {% if host.last_realtime_event %}
                     • <i class="fas fa-bolt" style="color: #22c55e; font-size: 0.75rem;"></i> Last live update:
