@@ -76,27 +76,47 @@ func (s *Scanner) Scan(additionalPaths ...string) (*DependencyResult, error) {
 		scanGoGlobal(s.HomeDir, &packages, seen, addManager)
 		scanCargoGlobal(&packages, seen, &errors, addManager)
 		scanGemGlobal(&packages, seen, &errors, addManager)
+		scanComposerGlobal(s.HomeDir, &packages, seen, addManager)
 		scanBrewGlobal(&packages, seen, &errors, addManager)
 	}
 
 	// Build scan directories.
+	//
+	// Roots are deduplicated by filesystem identity rather than by path
+	// string. searchDirs lists spellings that differ only in case ("Projects"
+	// and "projects", "dev" and "Development"), and on a case-insensitive
+	// filesystem -- APFS by default on macOS, NTFS on Windows -- several of
+	// them stat successfully and resolve to one directory. Each spelling then
+	// walked the same tree and produced a different dedup key for every
+	// package found, so a machine with ~/Projects reported its whole project
+	// inventory twice.
 	var scanDirsSlice []string
+	var seenRoots []os.FileInfo
+
+	addRoot := func(dir string) {
+		info, err := os.Stat(dir)
+		if err != nil || !info.IsDir() {
+			return
+		}
+		for _, prior := range seenRoots {
+			if os.SameFile(prior, info) {
+				return
+			}
+		}
+		seenRoots = append(seenRoots, info)
+		scanDirsSlice = append(scanDirsSlice, dir)
+	}
+
 	for _, subdir := range searchDirs {
-		var dir string
 		if subdir == "" {
-			dir = s.HomeDir
-		} else {
-			dir = filepath.Join(s.HomeDir, subdir)
+			addRoot(s.HomeDir)
+			continue
 		}
-		if info, err := os.Stat(dir); err == nil && info.IsDir() {
-			scanDirsSlice = append(scanDirsSlice, dir)
-		}
+		addRoot(filepath.Join(s.HomeDir, subdir))
 	}
 
 	for _, p := range additionalPaths {
-		if info, err := os.Stat(p); err == nil && info.IsDir() {
-			scanDirsSlice = append(scanDirsSlice, p)
-		}
+		addRoot(p)
 	}
 
 	// Scan project directories.
@@ -159,9 +179,13 @@ func (s *Scanner) scanDirectory(directory string, packages *[]Package, scannedPr
 		parseGemfileLock(filepath.Join(directory, "Gemfile.lock"), packages, scannedProjects, seen, addManager)
 	}
 
-	// PHP projects.
+	// PHP projects. The lockfile carries resolved versions, so it wins; the
+	// manifest is only read when there is no lockfile, which is how a project
+	// that gitignores composer.lock still appears in the inventory.
 	if nameSet["composer.lock"] {
 		parseComposerLock(filepath.Join(directory, "composer.lock"), packages, scannedProjects, seen, addManager)
+	} else if nameSet["composer.json"] {
+		parseComposerJSON(filepath.Join(directory, "composer.json"), packages, scannedProjects, seen, addManager)
 	}
 
 	// Recurse into subdirectories.

@@ -16,14 +16,14 @@ type Package struct {
 
 // DependencyResult holds the complete result of a dependency scan.
 type DependencyResult struct {
-	Timestamp            string              `json:"timestamp"`
-	Packages             []Package           `json:"packages"`
+	Timestamp            string               `json:"timestamp"`
+	Packages             []Package            `json:"packages"`
 	PackagesByManager    map[string][]Package `json:"packages_by_manager"`
-	TotalPackages        int                 `json:"total_packages"`
-	PackageManagersFound []string            `json:"package_managers_found"`
-	ScannedProjects      []string            `json:"scanned_projects"`
-	Summary              map[string]int      `json:"summary"`
-	Errors               []string            `json:"errors"`
+	TotalPackages        int                  `json:"total_packages"`
+	PackageManagersFound []string             `json:"package_managers_found"`
+	ScannedProjects      []string             `json:"scanned_projects"`
+	Summary              map[string]int       `json:"summary"`
+	Errors               []string             `json:"errors"`
 }
 
 // NewDependencyResult creates a DependencyResult with computed totals.
@@ -53,8 +53,30 @@ func NewDependencyResult(packages []Package, scannedProjects []string, errors []
 		PackagesByManager:    byManager,
 		TotalPackages:        len(packages),
 		PackageManagersFound: managers,
-		ScannedProjects:      scannedProjects,
+		ScannedProjects:      dedupeProjects(scannedProjects),
 		Summary:              summary,
 		Errors:               errors,
 	}
+}
+
+// dedupeProjects removes repeated directories while preserving scan order.
+//
+// Every parser appends the directory it ran in, so a project holding both a
+// package.json and a composer.lock was listed once per manifest, and a project
+// reachable from two scan roots was listed again for each. The field is meant
+// to answer "which projects were scanned", so repeats are noise.
+func dedupeProjects(dirs []string) []string {
+	if len(dirs) == 0 {
+		return dirs
+	}
+	seen := make(map[string]bool, len(dirs))
+	out := make([]string, 0, len(dirs))
+	for _, d := range dirs {
+		if seen[d] {
+			continue
+		}
+		seen[d] = true
+		out = append(out, d)
+	}
+	return out
 }

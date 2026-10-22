@@ -17,7 +17,7 @@ IDEViewer inventories packages from all major package managers, including packag
 | Go | go | `~/go/bin` + `go.mod` |
 | Rust | cargo | Global + `Cargo.lock` |
 | Ruby | gem | Global + `Gemfile.lock` |
-| PHP | composer | `composer.lock` |
+| PHP | composer | Global + `composer.lock` (falls back to `composer.json`) |
 | Java | maven | JetBrains plugin JARs |
 | macOS | Homebrew | Formula + casks |
 
